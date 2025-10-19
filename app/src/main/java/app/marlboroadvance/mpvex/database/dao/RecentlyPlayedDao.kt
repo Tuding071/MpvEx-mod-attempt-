@@ -1,0 +1,26 @@
+package app.marlboroadvance.mpvex.database.dao
+
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.Query
+import app.marlboroadvance.mpvex.database.entities.RecentlyPlayedEntity
+
+@Dao
+interface RecentlyPlayedDao {
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun insert(recentlyPlayed: RecentlyPlayedEntity)
+
+  @Query("SELECT * FROM RecentlyPlayedEntity ORDER BY timestamp DESC LIMIT 1")
+  suspend fun getLastPlayed(): RecentlyPlayedEntity?
+
+  @Query("SELECT * FROM RecentlyPlayedEntity ORDER BY timestamp DESC LIMIT :limit")
+  suspend fun getRecentlyPlayed(limit: Int = 10): List<RecentlyPlayedEntity>
+
+  @Query("DELETE FROM RecentlyPlayedEntity")
+  suspend fun clearAll()
+
+  @Query("DELETE FROM RecentlyPlayedEntity WHERE timestamp < :cutoffTime")
+  suspend fun deleteOlderThan(cutoffTime: Long)
+}
