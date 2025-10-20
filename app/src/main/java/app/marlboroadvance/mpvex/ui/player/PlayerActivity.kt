@@ -11,11 +11,14 @@ import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
@@ -47,7 +50,6 @@ import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 import java.io.File
 import android.graphics.Color
-import android.view.GestureDetector
 import android.view.Gravity
 
 /**
@@ -113,6 +115,21 @@ class PlayerActivity : AppCompatActivity() {
   private lateinit var pauseText: TextView
   private lateinit var gestureLayer: View
   private val hideRunnable = Runnable { pauseText.visibility = View.GONE }
+  private val handler = Handler(Looper.getMainLooper())
+  private var downX = 0f
+  private var downY = 0f
+  private var downTime = 0L
+  private var isLongPress = false
+  private var isForwarding = false
+  private var originalSpeed = 1.0
+  private val touchSlop = ViewConfiguration.get(this).scaledTouchSlop
+  private val longPressRunnable = Runnable {
+    isLongPress = true
+    originalSpeed = MPVLib.getPropertyDouble("speed") ?: 1.0
+    MPVLib.setPropertyDouble("speed", 2.0)
+    pauseText.text = "2x"
+    pauseText.visibility = View.VISIBLE
+  }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
@@ -135,26 +152,85 @@ class PlayerActivity : AppCompatActivity() {
       layoutParams = FrameLayout.LayoutParams(
         FrameLayout.LayoutParams.WRAP_CONTENT,
         FrameLayout.LayoutParams.WRAP_CONTENT,
-        Gravity.TOP or Gravity.CENTER_HORIZONTAL
-      ).apply {
-        topMargin = (50 * resources.displayMetrics.density).toInt()
-      }
+        Gravity.CENTER
+      )
       setTextColor(Color.WHITE)
       textSize = 24f
       visibility = View.GONE
     }
     binding.root.addView(pauseText)
 
-    // Setup gesture detector for tap to pause/resume
-    val gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-      override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-        viewModel.pauseUnpause()
-        return true // Consume the event
+    // Setup touch listener for tap and hold
+    gestureLayer.setOnTouchListener { _, event ->
+      when (event.action) {
+        MotionEvent.ACTION_DOWN -> {
+          downX = event.x
+          downY = event.y
+          downTime = System.currentTimeMillis()
+          isForwarding = false
+          isLongPress = false
+          handler.removeCallbacks(longPressRunnable)
+          handler.postDelayed(longPressRunnable, 300)
+          true
+        }
+        MotionEvent.ACTION_MOVE -> {
+          if (isForwarding) {
+            player.onTouchEvent(event)
+          } else if (isLongPress) {
+            true
+          } else {
+            val dx = Math.abs(event.x - downX)
+            val dy = Math.abs(event.y - downY)
+            if (dx > touchSlop || dy > touchSlop) {
+              handler.removeCallbacks(longPressRunnable)
+              isForwarding = true
+              val downEvent = MotionEvent.obtain(event.downTime, event.downTime, MotionEvent.ACTION_DOWN, downX, downY, 0)
+              player.onTouchEvent(downEvent)
+              downEvent.recycle()
+              player.onTouchEvent(event)
+            } else {
+              true
+            }
+          }
+        }
+        MotionEvent.ACTION_UP -> {
+          if (isForwarding) {
+            player.onTouchEvent(event)
+          } else {
+            handler.removeCallbacks(longPressRunnable)
+            if (isLongPress) {
+              MPVLib.setPropertyDouble("speed", originalSpeed)
+              pauseText.visibility = View.GONE
+              isLongPress = false
+              true
+            } else {
+              val duration = System.currentTimeMillis() - downTime
+              if (duration < 200) {
+                viewModel.pauseUnpause()
+                true
+              } else {
+                val downEvent = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, downX, downY, 0)
+                player.onTouchEvent(downEvent)
+                downEvent.recycle()
+                player.onTouchEvent(event)
+              }
+            }
+          }
+        }
+        MotionEvent.ACTION_CANCEL -> {
+          handler.removeCallbacks(longPressRunnable)
+          if (isLongPress) {
+            MPVLib.setPropertyDouble("speed", originalSpeed)
+            pauseText.visibility = View.GONE
+            isLongPress = false
+          }
+          if (isForwarding) {
+            player.onTouchEvent(event)
+          }
+          true
+        }
+        else -> false
       }
-    })
-
-    gestureLayer.setOnTouchListener { v, event ->
-      gestureDetector.onTouchEvent(event)
     }
 
     setupMPV()
