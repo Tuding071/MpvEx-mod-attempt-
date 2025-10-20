@@ -118,7 +118,10 @@ class PlayerActivity : AppCompatActivity() {
     setupAudioFocus()
     
     // Setup gesture manager
-    gestureManager = GestureOverlayManager(this, binding.root, viewModel)
+    // In PlayerActivity.kt, change this line:
+    // gestureManager = GestureOverlayManager(this, binding.root, viewModel)
+    // To this (cast to ViewGroup):
+    gestureManager = GestureOverlayManager(this, binding.root as ViewGroup, viewModel)
     gestureManager.setup()
     lifecycle.addObserver(gestureManager)
 
