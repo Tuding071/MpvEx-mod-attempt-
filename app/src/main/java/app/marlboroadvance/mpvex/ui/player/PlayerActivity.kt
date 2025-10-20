@@ -93,7 +93,7 @@ class PlayerActivity : AppCompatActivity() {
   // Gesture detection variables
   private lateinit var gestureOverlay: View
   private var tapStartTime: Long = 0
-  private val TAP_THRESHOLD_MS = 200L
+  private val TAP_THRESHOLD_MS = 200L  // This is correct as Long
   private var lastPauseState: Boolean? = null
   
   // UI feedback
@@ -1076,7 +1076,7 @@ class PlayerActivity : AppCompatActivity() {
       PlayerOrientation.ReversePortrait -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
       PlayerOrientation.SensorPortrait -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
       PlayerOrientation.Landscape -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-      PlayerOrientation.ReverseLandscape -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
+      PlayerOrientation.ReverseLandscape -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDscape
       PlayerOrientation.SensorLandscape -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
     }
   }
