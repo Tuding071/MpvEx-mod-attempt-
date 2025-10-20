@@ -14,8 +14,11 @@ import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Log
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
+import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -32,6 +35,8 @@ import app.marlboroadvance.mpvex.preferences.AdvancedPreferences
 import app.marlboroadvance.mpvex.preferences.AudioPreferences
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
+import app.marlboroadvance.mpvex.ui.player.controls.PlayerControls
+import app.marlboroadvance.mpvex.ui.theme.MpvexTheme
 import com.github.k1rakishou.fsaf.FileManager
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.MPVNode
@@ -41,6 +46,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 import java.io.File
+import android.graphics.Color
+import android.view.GestureDetector
+import android.view.Gravity
 
 /**
  * Main player activity that handles video playback using MPV library.
@@ -81,9 +89,6 @@ class PlayerActivity : AppCompatActivity() {
   private var noisyReceiverRegistered = false
   private var audioFocusRequested = false
 
-  // Gesture Manager
-  private lateinit var gestureManager: GestureOverlayManager
-
   // Receivers and Listeners
   private val noisyReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
@@ -105,10 +110,52 @@ class PlayerActivity : AppCompatActivity() {
     }
   }
 
+  private lateinit var pauseText: TextView
+  private lateinit var gestureLayer: View
+  private val hideRunnable = Runnable { pauseText.visibility = View.GONE }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     setContentView(binding.root)
+
+    // Add gesture layer
+    gestureLayer = View(this).apply {
+      layoutParams = FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams.MATCH_PARENT,
+        FrameLayout.LayoutParams.MATCH_PARENT
+      )
+      setBackgroundColor(Color.TRANSPARENT)
+      isClickable = true
+    }
+    binding.root.addView(gestureLayer)
+
+    // Add pause text
+    pauseText = TextView(this).apply {
+      layoutParams = FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams.WRAP_CONTENT,
+        FrameLayout.LayoutParams.WRAP_CONTENT,
+        Gravity.TOP or Gravity.CENTER_HORIZONTAL
+      ).apply {
+        topMargin = (50 * resources.displayMetrics.density).toInt()
+      }
+      setTextColor(Color.WHITE)
+      textSize = 24f
+      visibility = View.GONE
+    }
+    binding.root.addView(pauseText)
+
+    // Setup gesture detector for tap to pause/resume
+    val gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+      override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+        viewModel.pauseUnpause()
+        return true // Consume the event
+      }
+    })
+
+    gestureLayer.setOnTouchListener { v, event ->
+      gestureDetector.onTouchEvent(event)
+    }
 
     setupMPV()
     setupAudio()
@@ -116,14 +163,6 @@ class PlayerActivity : AppCompatActivity() {
     setupPlayerControls()
     setupPipHelper()
     setupAudioFocus()
-    
-    // Setup gesture manager
-    // In PlayerActivity.kt, change this line:
-    // gestureManager = GestureOverlayManager(this, binding.root, viewModel)
-    // To this (cast to ViewGroup):
-    gestureManager = GestureOverlayManager(this, binding.root as ViewGroup, viewModel)
-    gestureManager.setup()
-    lifecycle.addObserver(gestureManager)
 
     // Start playback
     getPlayableUri(intent)?.let(player::playFile)
@@ -700,11 +739,7 @@ class PlayerActivity : AppCompatActivity() {
     if (player.isExiting) return
 
     when (property) {
-      "pause" -> {
-        handlePauseStateChange(value)
-        // Notify gesture manager about pause state change
-        gestureManager.onPauseStateChanged(value)
-      }
+      "pause" -> handlePauseStateChange(value)
       "eof-reached" -> handleEndOfFile(value)
     }
   }
@@ -712,8 +747,15 @@ class PlayerActivity : AppCompatActivity() {
   private fun handlePauseStateChange(isPaused: Boolean) {
     if (isPaused) {
       window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+      pauseText.removeCallbacks(hideRunnable)
+      pauseText.text = "Paused"
+      pauseText.visibility = View.VISIBLE
     } else {
       window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+      pauseText.removeCallbacks(hideRunnable)
+      pauseText.text = "Resumed"
+      pauseText.visibility = View.VISIBLE
+      pauseText.postDelayed(hideRunnable, 1000)
     }
   }
 
