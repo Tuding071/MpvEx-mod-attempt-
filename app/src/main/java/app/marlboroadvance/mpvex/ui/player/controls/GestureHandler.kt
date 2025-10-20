@@ -1,73 +1,81 @@
 package app.marlboroadvance.mpvex.ui.player.controls
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.marlboroadvance.mpvex.ui.player.PlayerViewModel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import `is`.xyz.mpv.MPVLib
 
-/**
- * GestureHandler overlay:
- *  - Single tap (≤200 ms) toggles pause/resume.
- *  - Displays overlay text (“Paused” / “Playing”) at top center.
- */
 @Composable
 fun GestureHandler(
-    modifier: Modifier = Modifier,
-    onTogglePlayPause: () -> Boolean // returns true if now playing
+    viewModel: PlayerViewModel,
+    modifier: Modifier = Modifier
 ) {
-    var overlayText by remember { mutableStateOf("") }
-    val coroutineScope = rememberCoroutineScope()
+    // Current paused state
+    val paused by MPVLib.propBoolean["pause"].collectAsState()
+
+    // Text state
+    var gestureText by remember { mutableStateOf<String?>(null) }
+
+    // Control timing of tap detection
+    var lastTapTime by remember { mutableStateOf(0L) }
+
+    // Handle text display timing
+    LaunchedEffect(gestureText) {
+        if (gestureText == "Resumed") {
+            delay(1000)
+            gestureText = null
+        }
+    }
 
     Box(
         modifier = modifier
             .fillMaxSize()
+            // exclude 5% edges → effective gesture zone center
+            .padding(horizontal = 0.05.dp * 100, vertical = 0.05.dp * 100)
             .pointerInput(Unit) {
                 detectTapGestures(
-                    onPress = {
-                        val pressTime = System.currentTimeMillis()
-                        val released = tryAwaitRelease()
-                        val duration = System.currentTimeMillis() - pressTime
-                        if (released && duration < 200) {
-                            val isPlaying = onTogglePlayPause()
-                            overlayText = if (isPlaying) "Playing" else "Paused"
-                            coroutineScope.launch {
-                                delay(800)
-                                overlayText = ""
-                            }
+                    onTap = {
+                        val now = System.currentTimeMillis()
+                        val duration = now - lastTapTime
+                        lastTapTime = now
+
+                        if (duration < 200) return@detectTapGestures // ignore accidental double tap
+
+                        val isPaused = MPVLib.getPropertyBoolean("pause") ?: false
+                        if (isPaused) {
+                            MPVLib.setPropertyBoolean("pause", false)
+                            gestureText = "Resumed"
+                        } else {
+                            MPVLib.setPropertyBoolean("pause", true)
+                            gestureText = "Paused"
                         }
                     }
                 )
-            },
-        contentAlignment = Alignment.TopCenter
+            }
     ) {
-        if (overlayText.isNotEmpty()) {
+        // Show pause/resume text at top center
+        if (gestureText != null) {
             Text(
-                text = overlayText,
+                text = gestureText!!,
                 color = Color.White,
                 fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                style = TextStyle(
-                    shadow = Shadow(
-                        color = Color.Black.copy(alpha = 0.8f),
-                        offset = Offset(2f, 2f),
-                        blurRadius = 4f
-                    )
-                ),
+                textAlign = TextAlign.Center,
                 modifier = Modifier
-                    .padding(top = 40.dp)
                     .align(Alignment.TopCenter)
+                    .padding(top = 32.dp)
             )
         }
     }
