@@ -17,15 +17,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.style.TextGeometricTransform
-import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.shadow
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.shadow.Shadow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -59,32 +56,19 @@ fun GestureHandler(
     val panelShown by viewModel.panelShown.collectAsState()
     val allowGesturesInPanels by playerPreferences.allowGesturesInPanels.collectAsState()
     val paused by MPVLib.propBoolean["pause"].collectAsState()
-    val duration by MPVLib.propInt["duration"].collectAsState()
-    val position by MPVLib.propInt["time-pos"].collectAsState()
     val playbackSpeed by MPVLib.propFloat["speed"].collectAsState()
-    val controlsShown by viewModel.controlsShown.collectAsState()
     val areControlsLocked by viewModel.areControlsLocked.collectAsState()
     val seekAmount by viewModel.doubleTapSeekAmount.collectAsState()
     val isSeekingForwards by viewModel.isSeekingForwards.collectAsState()
+
     var isDoubleTapSeeking by remember { mutableStateOf(false) }
-    var gestureText by remember { mutableStateOf<String?>(null) } // For tap pause/resume display
+    var gestureText by remember { mutableStateOf<String?>(null) }
 
     val scope = rememberCoroutineScope()
     val multipleSpeedGesture by playerPreferences.holdForMultipleSpeed.collectAsState()
-    val brightnessGesture = playerPreferences.brightnessGesture.get()
-    val volumeGesture by playerPreferences.volumeGesture.collectAsState()
-    val swapVolumeAndBrightness by playerPreferences.swapVolumeAndBrightness.collectAsState()
-    val seekGesture by playerPreferences.horizontalSeekGesture.collectAsState()
-    val preciseSeeking by playerPreferences.preciseSeeking.collectAsState()
-    val showSeekbarWhenSeeking by playerPreferences.showSeekBarWhenSeeking.collectAsState()
-    var isLongPressing by remember { mutableStateOf(false) }
-    val currentVolume by viewModel.currentVolume.collectAsState()
-    val currentMPVVolume by MPVLib.propInt["volume"].collectAsState()
-    val currentBrightness by viewModel.currentBrightness.collectAsState()
-    val volumeBoostingCap = audioPreferences.volumeBoostCap.get()
     val haptics = LocalHapticFeedback.current
 
-    // Reset double-tap seeking after animation
+    // Reset double-tap seeking
     LaunchedEffect(seekAmount) {
         delay(800)
         isDoubleTapSeeking = false
@@ -102,15 +86,18 @@ fun GestureHandler(
                 var originalSpeed = MPVLib.getPropertyFloat("speed") ?: 1f
                 detectTapGestures(
                     onTap = {
-                        // Only treat very short taps (<200ms) as pause/resume
-                        viewModel.togglePause() // This should toggle your player pause state
-                        gestureText = if (MPVLib.getPropertyBoolean("pause") == true) "Paused" else "Resumed"
-                        // Auto-hide "Resumed" after 1 second
-                        if (gestureText == "Resumed") {
+                        // Pause/resume logic
+                        val isPaused = MPVLib.getPropertyBoolean("pause") ?: false
+                        if (isPaused) {
+                            viewModel.unpause()
+                            gestureText = "Resumed"
                             scope.launch {
                                 delay(1000)
                                 gestureText = null
                             }
+                        } else {
+                            viewModel.pause()
+                            gestureText = "Paused"
                         }
                     },
                     onDoubleTap = {
@@ -134,27 +121,26 @@ fun GestureHandler(
                         val press = PressInteraction.Press(it)
                         interactionSource.emit(press)
                         tryAwaitRelease()
-                        if (isLongPressing) {
-                            isLongPressing = false
-                            MPVLib.setPropertyFloat("speed", originalSpeed)
-                            viewModel.playerUpdate.update { PlayerUpdates.None }
-                        }
                         interactionSource.emit(PressInteraction.Release(press))
                     },
                     onLongPress = {
                         if (multipleSpeedGesture == 0f || areControlsLocked) return@detectTapGestures
-                        if (!isLongPressing && paused == false) {
-                            originalSpeed = playbackSpeed ?: return@detectTapGestures
+                        if (paused == false) {
+                            val originalSpeed = playbackSpeed ?: return@detectTapGestures
                             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                            isLongPressing = true
                             MPVLib.setPropertyFloat("speed", multipleSpeedGesture)
                             viewModel.playerUpdate.update { PlayerUpdates.MultipleSpeed }
+                            scope.launch {
+                                delay(1000)
+                                MPVLib.setPropertyFloat("speed", originalSpeed)
+                                viewModel.playerUpdate.update { PlayerUpdates.None }
+                            }
                         }
                     }
                 )
             }
     ) {
-        // Gesture overlay text (top center)
+        // Overlay gesture text
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -169,19 +155,15 @@ fun GestureHandler(
                     color = Color.White,
                     textAlign = TextAlign.Center,
                     style = TextStyle(
-                        shadow = androidx.compose.ui.text.shadow.Shadow(
+                        shadow = Shadow(
                             color = Color.Black,
-                            offset = androidx.compose.ui.geometry.Offset(2f, 2f),
+                            offset = Offset(2f, 2f),
                             blurRadius = 2f
                         )
                     )
                 )
             }
         }
-
-        // --- Keep your horizontal/vertical/double-tap gestures here exactly like your previous code ---
-        // You can copy your vertical and horizontal drag pointerInput blocks here
-        // and also your DoubleTapToSeekOvals() usage
     }
 }
 
@@ -201,9 +183,7 @@ fun DoubleTapToSeekOvals(
         modifier = modifier.fillMaxSize(),
         contentAlignment = if (amount > 0) Alignment.CenterEnd else Alignment.CenterStart,
     ) {
-        CompositionLocalProvider(
-            LocalRippleConfiguration provides playerRippleConfiguration,
-        ) {
+        CompositionLocalProvider(LocalRippleConfiguration provides playerRippleConfiguration) {
             if (amount != 0) {
                 Box(
                     modifier = Modifier
@@ -235,21 +215,4 @@ fun DoubleTapToSeekOvals(
             }
         }
     }
-}
-
-// Utility functions
-fun calculateNewVerticalGestureValue(originalValue: Int, startingY: Float, newY: Float, sensitivity: Float): Int {
-    return originalValue + ((startingY - newY) * sensitivity).toInt()
-}
-
-fun calculateNewVerticalGestureValue(originalValue: Float, startingY: Float, newY: Float, sensitivity: Float): Float {
-    return originalValue + ((startingY - newY) * sensitivity)
-}
-
-fun calculateNewHorizontalGestureValue(originalValue: Int, startingX: Float, newX: Float, sensitivity: Float): Int {
-    return originalValue + ((newX - startingX) * sensitivity).toInt()
-}
-
-fun calculateNewHorizontalGestureValue(originalValue: Float, startingX: Float, newX: Float, sensitivity: Float): Float {
-    return originalValue + ((newX - startingX) * sensitivity)
 }
