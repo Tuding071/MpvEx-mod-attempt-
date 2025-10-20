@@ -7,26 +7,19 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
-import android.graphics.Color
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.provider.MediaStore
 import android.util.Log
 import android.view.KeyEvent
-import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import android.widget.FrameLayout
-import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
-import androidx.compose.ui.Modifier
 import androidx.core.net.toUri
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -39,8 +32,6 @@ import app.marlboroadvance.mpvex.preferences.AdvancedPreferences
 import app.marlboroadvance.mpvex.preferences.AudioPreferences
 import app.marlboroadvance.mpvex.preferences.PlayerPreferences
 import app.marlboroadvance.mpvex.preferences.SubtitlesPreferences
-import app.marlboroadvance.mpvex.ui.player.controls.PlayerControls
-import app.marlboroadvance.mpvex.ui.theme.MpvexTheme
 import com.github.k1rakishou.fsaf.FileManager
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.MPVNode
@@ -89,17 +80,9 @@ class PlayerActivity : AppCompatActivity() {
   private var systemUIRestored = false
   private var noisyReceiverRegistered = false
   private var audioFocusRequested = false
-  
-  // Gesture detection variables
-  private lateinit var gestureOverlay: View
-  private var tapStartTime: Long = 0
-  private val TAP_THRESHOLD_MS = 200L  // This is correct as Long
-  private var lastPauseState: Boolean? = null
-  
-  // UI feedback
-  private lateinit var feedbackTextView: TextView
-  private val handler = Handler(Looper.getMainLooper())
-  private val hideFeedbackRunnable = Runnable { hideFeedbackText() }
+
+  // Gesture Manager
+  private lateinit var gestureManager: GestureOverlayManager
 
   // Receivers and Listeners
   private val noisyReceiver = object : BroadcastReceiver() {
@@ -133,132 +116,15 @@ class PlayerActivity : AppCompatActivity() {
     setupPlayerControls()
     setupPipHelper()
     setupAudioFocus()
-    setupGestureOverlay()
-    setupFeedbackText()  // Add feedback text view
+    
+    // Setup gesture manager
+    gestureManager = GestureOverlayManager(this, binding.root, viewModel)
+    gestureManager.setup()
+    lifecycle.addObserver(gestureManager)
 
     // Start playback
     getPlayableUri(intent)?.let(player::playFile)
     setOrientation()
-  }
-
-  private fun setupGestureOverlay() {
-    // Create invisible overlay for gesture detection
-    gestureOverlay = View(this).apply {
-      setBackgroundColor(Color.TRANSPARENT)  // Completely invisible
-      layoutParams = FrameLayout.LayoutParams(
-        FrameLayout.LayoutParams.MATCH_PARENT,
-        FrameLayout.LayoutParams.MATCH_PARENT
-      )
-    }
-    
-    // Add overlay on top of everything
-    binding.root.addView(gestureOverlay)
-    
-    // Setup touch listener for tap detection
-    gestureOverlay.setOnTouchListener { _, event ->
-      handleGesture(event)
-      true  // Consume all touch events
-    }
-  }
-
-  private fun setupFeedbackText() {
-    feedbackTextView = TextView(this).apply {
-      setTextColor(Color.WHITE)
-      setBackgroundColor(0x80000000)  // Semi-transparent black
-      textSize = 16f
-      gravity = android.view.Gravity.CENTER
-      visibility = View.GONE
-      setPadding(32, 16, 32, 16)
-    }
-    
-    val layoutParams = FrameLayout.LayoutParams(
-      FrameLayout.LayoutParams.WRAP_CONTENT,
-      FrameLayout.LayoutParams.WRAP_CONTENT
-    ).apply {
-      gravity = android.view.Gravity.CENTER_HORIZONTAL
-      topMargin = 150  // Position from top
-    }
-    
-    binding.root.addView(feedbackTextView, layoutParams)
-  }
-
-  private fun showFeedbackText(message: String) {
-    handler.removeCallbacks(hideFeedbackRunnable)
-    feedbackTextView.text = message
-    feedbackTextView.visibility = View.VISIBLE
-    // Auto-hide after 1 second
-    handler.postDelayed(hideFeedbackRunnable, 1000L)
-  }
-
-  private fun hideFeedbackText() {
-    feedbackTextView.visibility = View.GONE
-  }
-
-  private fun handleGesture(event: MotionEvent) {
-    when (event.action) {
-      MotionEvent.ACTION_DOWN -> {
-        // Record when tap started
-        tapStartTime = System.currentTimeMillis()
-      }
-      MotionEvent.ACTION_UP -> {
-        // Check if it was a short tap (200ms or less)
-        val tapDuration = System.currentTimeMillis() - tapStartTime
-        if (tapDuration <= TAP_THRESHOLD_MS) {
-          handleScreenTap()
-        }
-      }
-    }
-  }
-
-  private fun handleScreenTap() {
-    // Use the EXACT same method as PlayerControls
-    val wasPaused = viewModel.paused == true
-    
-    // Call the existing function from PlayerControls
-    viewModel.pauseUnpause()
-    
-    // Show appropriate feedback
-    if (wasPaused) {
-      showFeedbackText("Resume")
-    } else {
-      showFeedbackText("Pause")
-      // Don't hide pause text - let it stay until resume or auto-hide
-      lastPauseState = false
-    }
-    
-    Log.d(TAG, "Screen tapped - Toggled play/pause using pauseUnpause")
-  }
-
-  // Listen to pause state changes to show resume text
-  internal fun onObserverEvent(property: String, value: Boolean) {
-    if (player.isExiting) return
-
-    when (property) {
-      "pause" -> {
-        handlePauseStateChange(value)
-        
-        // Show resume text when transitioning from pause to play
-        if (lastPauseState == false && !value) {
-          showFeedbackText("Resume")
-          lastPauseState = true
-        }
-      }
-      "eof-reached" -> handleEndOfFileReached(value)
-    }
-  }
-
-  private fun handlePauseStateChange(isPaused: Boolean) {
-    if (isPaused) {
-      window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-    } else {
-      window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-    }
-  }
-
-  private fun handleEndOfFileReached(isEof: Boolean) {
-    if (isEof && playerPreferences.closeAfterReachingEndOfVideo.get()) {
-      finishAndRemoveTask()
-    }
   }
 
   private fun setupBackPressHandler() {
@@ -312,7 +178,6 @@ class PlayerActivity : AppCompatActivity() {
     viewModel.isVolumeSliderShown.update { false }
     viewModel.sheetShown.update { Sheets.None }
     viewModel.panelShown.update { Panels.None }
-    hideFeedbackText()
   }
 
   private fun setupAudioFocus() {
@@ -347,8 +212,6 @@ class PlayerActivity : AppCompatActivity() {
       cleanupMPV()
       cleanupAudio()
       cleanupReceivers()
-      // Clean up handler
-      handler.removeCallbacks(hideFeedbackRunnable)
     } catch (e: Exception) {
       Log.e(TAG, "Error during onDestroy", e)
     } finally {
@@ -830,6 +693,33 @@ class PlayerActivity : AppCompatActivity() {
     if (player.isExiting) return
   }
 
+  internal fun onObserverEvent(property: String, value: Boolean) {
+    if (player.isExiting) return
+
+    when (property) {
+      "pause" -> {
+        handlePauseStateChange(value)
+        // Notify gesture manager about pause state change
+        gestureManager.onPauseStateChanged(value)
+      }
+      "eof-reached" -> handleEndOfFile(value)
+    }
+  }
+
+  private fun handlePauseStateChange(isPaused: Boolean) {
+    if (isPaused) {
+      window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    } else {
+      window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+  }
+
+  private fun handleEndOfFile(isEof: Boolean) {
+    if (isEof && playerPreferences.closeAfterReachingEndOfVideo.get()) {
+      finishAndRemoveTask()
+    }
+  }
+
   internal fun onObserverEvent(property: String, value: String) {
     if (player.isExiting) return
 
@@ -1076,7 +966,7 @@ class PlayerActivity : AppCompatActivity() {
       PlayerOrientation.ReversePortrait -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
       PlayerOrientation.SensorPortrait -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
       PlayerOrientation.Landscape -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-      PlayerOrientation.ReverseLandscape -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDscape
+      PlayerOrientation.ReverseLandscape -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
       PlayerOrientation.SensorLandscape -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
     }
   }
