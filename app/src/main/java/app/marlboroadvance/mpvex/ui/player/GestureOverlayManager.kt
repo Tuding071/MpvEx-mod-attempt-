@@ -7,6 +7,7 @@ import android.os.Looper
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.lifecycle.Lifecycle
@@ -18,7 +19,7 @@ import androidx.lifecycle.OnLifecycleEvent
  */
 class GestureOverlayManager(
     private val context: Context,
-    private val rootView: View,
+    private val rootView: ViewGroup, // Changed from View to ViewGroup
     private val viewModel: PlayerViewModel
 ) : LifecycleObserver {
 
@@ -27,7 +28,7 @@ class GestureOverlayManager(
     private val handler = Handler(Looper.getMainLooper())
     
     private var tapStartTime: Long = 0
-    private val tapThresholdMs = 200L
+    private val tapThresholdMs = 200 // Changed to Int
     private var lastPauseState: Boolean? = null
     
     private val hideFeedbackRunnable = Runnable { hideFeedbackText() }
