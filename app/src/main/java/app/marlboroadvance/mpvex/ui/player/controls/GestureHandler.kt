@@ -5,15 +5,17 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material3.Text
 import app.marlboroadvance.mpvex.ui.player.PlayerViewModel
 import kotlinx.coroutines.delay
 import `is`.xyz.mpv.MPVLib
@@ -23,59 +25,56 @@ fun GestureHandler(
     viewModel: PlayerViewModel,
     modifier: Modifier = Modifier
 ) {
-    // Current paused state
-    val paused by MPVLib.propBoolean["pause"].collectAsState()
-
-    // Text state
-    var gestureText by remember { mutableStateOf<String?>(null) }
-
-    // Control timing of tap detection
     var lastTapTime by remember { mutableStateOf(0L) }
+    var showText by remember { mutableStateOf(false) }
+    var textContent by remember { mutableStateOf("") }
 
-    // Handle text display timing
-    LaunchedEffect(gestureText) {
-        if (gestureText == "Resumed") {
-            delay(1000)
-            gestureText = null
-        }
-    }
+    // observe paused state
+    val paused by MPVLib.propBoolean["pause"].collectAsState()
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            // exclude 5% edges → effective gesture zone center
-            .padding(horizontal = 0.05.dp * 100, vertical = 0.05.dp * 100)
             .pointerInput(Unit) {
                 detectTapGestures(
                     onTap = {
                         val now = System.currentTimeMillis()
-                        val duration = now - lastTapTime
+                        val delta = now - lastTapTime
                         lastTapTime = now
+                        if (delta < 200) return@detectTapGestures // ignore double tap
 
-                        if (duration < 200) return@detectTapGestures // ignore accidental double tap
-
-                        val isPaused = MPVLib.getPropertyBoolean("pause") ?: false
-                        if (isPaused) {
+                        if (paused == true) {
                             MPVLib.setPropertyBoolean("pause", false)
-                            gestureText = "Resumed"
+                            textContent = "Resume"
+                            showText = true
+                            // Hide text after 1s
+                            viewModel.viewModelScope.launch {
+                                delay(1000)
+                                showText = false
+                            }
                         } else {
                             MPVLib.setPropertyBoolean("pause", true)
-                            gestureText = "Paused"
+                            textContent = "Pause"
+                            showText = true
                         }
                     }
                 )
             }
+            // exclude 5% from each side — center active area
+            .padding(horizontal = 0.05.dp, vertical = 0.05.dp),
+        contentAlignment = Alignment.TopCenter
     ) {
-        // Show pause/resume text at top center
-        if (gestureText != null) {
+        if (showText) {
             Text(
-                text = gestureText!!,
+                text = textContent,
                 color = Color.White,
-                fontSize = 20.sp,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center,
+                style = TextStyle.Default,
                 modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 32.dp)
+                    .padding(top = 30.dp)
+                    .background(Color.Transparent)
             )
         }
     }
