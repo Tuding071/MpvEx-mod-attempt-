@@ -150,15 +150,7 @@ class PlayerActivity : AppCompatActivity() {
   }
 
   private fun setupPlayerControls() {
-    binding.controls.setContent {
-      MpvexTheme {
-        PlayerControls(
-          viewModel = viewModel,
-          onBackPress = ::finish,
-          modifier = Modifier,
-        )
-      }
-    }
+    binding.controls.setContent { /* no UI */ }
   }
 
   private fun setupPipHelper() {
