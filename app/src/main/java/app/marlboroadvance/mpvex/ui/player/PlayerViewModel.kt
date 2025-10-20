@@ -70,9 +70,10 @@ class PlayerViewModel(
   val chapters = MPVLib.propNode["chapter-list"]
     .map { (it?.toObject<List<ChapterNode>>(json) ?: persistentListOf()).map { it.toSegment() }.toImmutableList() }
 
-  private val _controlsShown = MutableStateFlow(true)
+  // --- Disabled UI overlays ---
+  private val _controlsShown = MutableStateFlow(false)
   val controlsShown = _controlsShown.asStateFlow()
-  private val _seekBarShown = MutableStateFlow(true)
+  private val _seekBarShown = MutableStateFlow(false)
   val seekBarShown = _seekBarShown.asStateFlow()
   private val _areControlsLocked = MutableStateFlow(false)
   val areControlsLocked = _areControlsLocked.asStateFlow()
@@ -90,9 +91,7 @@ class PlayerViewModel(
   val sheetShown = MutableStateFlow(Sheets.None)
   val panelShown = MutableStateFlow(Panels.None)
 
-  // Pair(startingPosition, seekAmount)
   val gestureSeekAmount = MutableStateFlow<Pair<Int, Int>?>(null)
-
   private val _seekText = MutableStateFlow<String?>(null)
   val seekText = _seekText.asStateFlow()
   private val _doubleTapSeekAmount = MutableStateFlow(0)
@@ -102,10 +101,8 @@ class PlayerViewModel(
 
   private val _currentFrame = MutableStateFlow(0)
   val currentFrame = _currentFrame.asStateFlow()
-
   private val _totalFrames = MutableStateFlow(0)
   val totalFrames = _totalFrames.asStateFlow()
-
   private val _videoZoom = MutableStateFlow(0f)
   val videoZoom = _videoZoom.asStateFlow()
 
@@ -168,34 +165,15 @@ class PlayerViewModel(
   fun pause() = MPVLib.setPropertyBoolean("pause", true)
   fun unpause() = MPVLib.setPropertyBoolean("pause", false)
 
-  private val showStatusBar = playerPreferences.showSystemStatusBar.get()
-  fun showControls() {
-    if (sheetShown.value != Sheets.None || panelShown.value != Panels.None) return
-    if (showStatusBar) activity.windowInsetsController.show(WindowInsetsCompat.Type.statusBars())
-    _controlsShown.update { true }
-  }
-
-  fun hideControls() {
-    activity.windowInsetsController.hide(WindowInsetsCompat.Type.statusBars())
-    _controlsShown.update { false }
-  }
-
-  fun hideSeekBar() {
-    _seekBarShown.update { false }
-  }
-
-  fun showSeekBar() {
-    if (sheetShown.value != Sheets.None) return
-    _seekBarShown.update { true }
-  }
-
-  fun lockControls() {
-    _areControlsLocked.update { true }
-  }
-
-  fun unlockControls() {
-    _areControlsLocked.update { false }
-  }
+  // --- Disabled overlay functions ---
+  fun showControls() {} 
+  fun hideControls() {} 
+  fun showSeekBar() {} 
+  fun hideSeekBar() {}
+  fun lockControls() {}
+  fun unlockControls() {}
+  fun displayBrightnessSlider() {}
+  fun displayVolumeSlider() {}
 
   fun seekBy(offset: Int, precise: Boolean = false) {
     MPVLib.command("seek", offset.toString(), if (precise) "relative+exact" else "relative")
@@ -210,18 +188,11 @@ class PlayerViewModel(
     changeBrightnessTo(currentBrightness.value + change)
   }
 
-  fun changeBrightnessTo(
-    brightness: Float,
-  ) {
+  fun changeBrightnessTo(brightness: Float) {
     activity.window.attributes = activity.window.attributes.apply {
-      screenBrightness = brightness.coerceIn(0f, 1f).also {
-        currentBrightness.update { _ -> it }
-      }
+      screenBrightness = brightness.coerceIn(0f, 1f)
+      currentBrightness.update { _ -> screenBrightness }
     }
-  }
-
-  fun displayBrightnessSlider() {
-    isBrightnessSliderShown.update { true }
   }
 
   val maxVolume = activity.audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
@@ -240,11 +211,7 @@ class PlayerViewModel(
 
   fun changeVolumeTo(volume: Int) {
     val newVolume = volume.coerceIn(0..maxVolume)
-    activity.audioManager.setStreamVolume(
-      AudioManager.STREAM_MUSIC,
-      newVolume,
-      0,
-    )
+    activity.audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, newVolume, 0)
     currentVolume.update { newVolume }
   }
 
@@ -252,27 +219,14 @@ class PlayerViewModel(
     MPVLib.setPropertyInt("volume", volume)
   }
 
-  fun setMPVVolume(volume: Int) {
-    if (volume != currentMPVVolume) displayVolumeSlider()
-  }
-
-  fun displayVolumeSlider() {
-    isVolumeSliderShown.update { true }
-  }
+  fun setMPVVolume(volume: Int) {} // Disabled overlay
 
   fun changeVideoAspect(aspect: VideoAspect) {
     var ratio = -1.0
     var pan = 1.0
     when (aspect) {
-      VideoAspect.Crop -> {
-        pan = 1.0
-      }
-
-      VideoAspect.Fit -> {
-        pan = 0.0
-        MPVLib.setPropertyDouble("panscan", 0.0)
-      }
-
+      VideoAspect.Crop -> pan = 1.0
+      VideoAspect.Fit -> { pan = 0.0; MPVLib.setPropertyDouble("panscan", 0.0) }
       VideoAspect.Stretch -> {
         val dm = DisplayMetrics()
         activity.windowManager.defaultDisplay.getRealMetrics(dm)
@@ -290,12 +244,10 @@ class PlayerViewModel(
     activity.requestedOrientation = when (activity.requestedOrientation) {
       ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE,
       ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE,
-      ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE,
-      -> {
+      ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE -> {
         playerPreferences.orientation.set(PlayerOrientation.SensorPortrait)
         ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
       }
-
       else -> {
         playerPreferences.orientation.set(PlayerOrientation.SensorLandscape)
         ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -305,48 +257,19 @@ class PlayerViewModel(
 
   @Suppress("CyclomaticComplexMethod", "LongMethod")
   fun handleLuaInvocation(property: String, value: String) {
-    val data = value
-      .removePrefix("\"")
-      .removeSuffix("\"")
-      .ifEmpty { return }
+    val data = value.removePrefix("\"").removeSuffix("\"").ifEmpty { return }
 
     when (property.substringAfterLast("/")) {
       "show_text" -> playerUpdate.update { PlayerUpdates.ShowText(data) }
-      "toggle_ui" -> {
-        when (data) {
-          "show" -> showControls()
-          "toggle" -> {
-            if (controlsShown.value) hideControls() else showControls()
-          }
-
-          "hide" -> {
-            sheetShown.update { Sheets.None }
-            panelShown.update { Panels.None }
-            hideControls()
-          }
-        }
-      }
-
-      "show_panel" -> {
-        when (data) {
-          "subtitle_settings" -> panelShown.update { Panels.SubtitleSettings }
-          "subtitle_delay" -> panelShown.update { Panels.SubtitleDelay }
-          "audio_delay" -> panelShown.update { Panels.AudioDelay }
-          "video_filters" -> panelShown.update { Panels.VideoFilters }
-          "frame_navigation" -> panelShown.update { Panels.FrameNavigation }
-        }
-      }
-
+      "toggle_ui", "show_panel" -> {} // Disabled UI triggers
       "seek_to_with_text" -> {
         val (seekValue, text) = data.split("|", limit = 2)
         seekToWithText(seekValue.toInt(), text)
       }
-
       "seek_by_with_text" -> {
         val (seekValue, text) = data.split("|", limit = 2)
         seekByWithText(seekValue.toInt(), text)
       }
-
       "seek_by" -> seekByWithText(data.toInt(), null)
       "seek_to" -> seekToWithText(data.toInt(), null)
       "software_keyboard" -> when (data) {
@@ -361,134 +284,79 @@ class PlayerViewModel(
   }
 
   private val inputMethodManager = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-  private fun forceShowSoftwareKeyboard() {
-    inputMethodManager.toggleSoftInput(InputMethodManager.SHOW_FORCED, 0)
-  }
-
-  private fun forceHideSoftwareKeyboard() {
-    inputMethodManager.toggleSoftInput(InputMethodManager.SHOW_IMPLICIT, 0)
-  }
+  private fun forceShowSoftwareKeyboard() { inputMethodManager.toggleSoftInput(InputMethodManager.SHOW_FORCED, 0) }
+  private fun forceHideSoftwareKeyboard() { inputMethodManager.toggleSoftInput(InputMethodManager.SHOW_IMPLICIT, 0) }
 
   private fun seekToWithText(seekValue: Int, text: String?) {
     _isSeekingForwards.value = seekValue > 0
     _doubleTapSeekAmount.value = seekValue - (pos ?: return)
     _seekText.update { text }
     seekTo(seekValue, playerPreferences.preciseSeeking.get())
-    if (playerPreferences.showSeekBarWhenSeeking.get()) showSeekBar()
   }
 
   private fun seekByWithText(value: Int, text: String?) {
-    _doubleTapSeekAmount.update {
-      if (value < 0 && it < 0 || (pos ?: return) + value > (duration ?: return)) 0 else it + value
-    }
+    _doubleTapSeekAmount.update { it + value }
     _seekText.update { text }
     _isSeekingForwards.value = value > 0
     seekBy(value, playerPreferences.preciseSeeking.get())
-    if (playerPreferences.showSeekBarWhenSeeking.get()) showSeekBar()
   }
 
   private val doubleTapToSeekDuration = gesturePreferences.doubleTapToSeekDuration.get()
-
-  fun updateSeekAmount(amount: Int) {
-    _doubleTapSeekAmount.update { amount }
-  }
-
-  fun updateSeekText(text: String?) {
-    _seekText.update { text }
-  }
 
   fun leftSeek() {
     if ((pos ?: return) > 0) _doubleTapSeekAmount.value -= doubleTapToSeekDuration
     _isSeekingForwards.value = false
     seekBy(-doubleTapToSeekDuration, playerPreferences.preciseSeeking.get())
-    if (playerPreferences.showSeekBarWhenSeeking.get()) showSeekBar()
   }
 
   fun rightSeek() {
-    if ((pos ?: return) < (duration ?: return)) {
-      _doubleTapSeekAmount.value += doubleTapToSeekDuration
-    }
+    if ((pos ?: return) < (duration ?: return)) _doubleTapSeekAmount.value += doubleTapToSeekDuration
     _isSeekingForwards.value = true
     seekBy(doubleTapToSeekDuration, playerPreferences.preciseSeeking.get())
-    if (playerPreferences.showSeekBarWhenSeeking.get()) showSeekBar()
   }
 
   fun handleLeftDoubleTap() {
     when (gesturePreferences.leftSingleActionGesture.get()) {
-      SingleActionGesture.Seek -> {
-        leftSeek()
-      }
-
-      SingleActionGesture.PlayPause -> {
-        pauseUnpause()
-      }
-
-      SingleActionGesture.Custom -> {
-        MPVLib.command("keypress", CustomKeyCodes.DoubleTapLeft.keyCode)
-      }
-
+      SingleActionGesture.Seek -> leftSeek()
+      SingleActionGesture.PlayPause -> pauseUnpause()
+      SingleActionGesture.Custom -> MPVLib.command("keypress", CustomKeyCodes.DoubleTapLeft.keyCode)
       SingleActionGesture.None -> {}
     }
   }
 
   fun handleCenterDoubleTap() {
     when (gesturePreferences.centerSingleActionGesture.get()) {
-      SingleActionGesture.PlayPause -> {
-        pauseUnpause()
-      }
-
-      SingleActionGesture.Custom -> {
-        MPVLib.command("keypress", CustomKeyCodes.DoubleTapCenter.keyCode)
-      }
-
-      SingleActionGesture.Seek -> {}
-      SingleActionGesture.None -> {}
+      SingleActionGesture.PlayPause -> pauseUnpause()
+      SingleActionGesture.Custom -> MPVLib.command("keypress", CustomKeyCodes.DoubleTapCenter.keyCode)
+      SingleActionGesture.Seek, SingleActionGesture.None -> {}
     }
   }
 
   fun handleRightDoubleTap() {
     when (gesturePreferences.rightSingleActionGesture.get()) {
-      SingleActionGesture.Seek -> {
-        rightSeek()
-      }
-
-      SingleActionGesture.PlayPause -> {
-        pauseUnpause()
-      }
-
-      SingleActionGesture.Custom -> {
-        MPVLib.command("keypress", CustomKeyCodes.DoubleTapRight.keyCode)
-      }
-
+      SingleActionGesture.Seek -> rightSeek()
+      SingleActionGesture.PlayPause -> pauseUnpause()
+      SingleActionGesture.Custom -> MPVLib.command("keypress", CustomKeyCodes.DoubleTapRight.keyCode)
       SingleActionGesture.None -> {}
     }
   }
 
-  fun setVideoZoom(zoom: Float) {
-    _videoZoom.update { zoom }
-  }
+  fun setVideoZoom(zoom: Float) { _videoZoom.update { zoom } }
 
   fun updateFrameInfo() {
-    // Get current frame from estimated-frame-number property
     val currentFrameValue = MPVLib.getPropertyInt("estimated-frame-number") ?: 0
     _currentFrame.update { currentFrameValue }
 
-    // Calculate total frames from duration and fps
     val durationValue = MPVLib.getPropertyDouble("duration") ?: 0.0
     val fps = MPVLib.getPropertyDouble("container-fps") ?: MPVLib.getPropertyDouble("estimated-vf-fps") ?: 0.0
 
-    if (durationValue > 0 && fps > 0) {
-      val totalFramesValue = (durationValue * fps).toInt()
-      _totalFrames.update { totalFramesValue }
-    } else {
-      _totalFrames.update { 0 }
-    }
+    if (durationValue > 0 && fps > 0) _totalFrames.update { (durationValue * fps).toInt() }
+    else _totalFrames.update { 0 }
   }
 }
 
-fun Float.normalize(inMin: Float, inMax: Float, outMin: Float, outMax: Float): Float {
-  return (this - inMin) * (outMax - outMin) / (inMax - inMin) + outMin
-}
+fun Float.normalize(inMin: Float, inMax: Float, outMin: Float, outMax: Float): Float =
+  (this - inMin) * (outMax - outMin) / (inMax - inMin) + outMin
 
 fun <T> Flow<T>.collectAsState(scope: CoroutineScope, initialValue: T? = null) =
   object : ReadOnlyProperty<Any?, T?> {
