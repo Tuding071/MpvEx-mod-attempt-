@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.graphics.Color
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
@@ -14,8 +15,10 @@ import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Log
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -83,6 +86,11 @@ class PlayerActivity : AppCompatActivity() {
   private var systemUIRestored = false
   private var noisyReceiverRegistered = false
   private var audioFocusRequested = false
+  
+  // Gesture detection variables
+  private lateinit var gestureOverlay: View
+  private var tapStartTime: Long = 0
+  private val TAP_THRESHOLD_MS = 200L
 
   // Receivers and Listeners
   private val noisyReceiver = object : BroadcastReceiver() {
@@ -116,10 +124,53 @@ class PlayerActivity : AppCompatActivity() {
     setupPlayerControls()
     setupPipHelper()
     setupAudioFocus()
+    setupGestureOverlay()  // Add this line
 
     // Start playback
     getPlayableUri(intent)?.let(player::playFile)
     setOrientation()
+  }
+
+  private fun setupGestureOverlay() {
+    // Create invisible overlay for gesture detection
+    gestureOverlay = View(this).apply {
+      setBackgroundColor(Color.TRANSPARENT)  // Completely invisible
+      layoutParams = FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams.MATCH_PARENT,
+        FrameLayout.LayoutParams.MATCH_PARENT
+      )
+    }
+    
+    // Add overlay on top of everything
+    binding.root.addView(gestureOverlay)
+    
+    // Setup touch listener for tap detection
+    gestureOverlay.setOnTouchListener { _, event ->
+      handleGesture(event)
+      true  // Consume all touch events
+    }
+  }
+
+  private fun handleGesture(event: MotionEvent) {
+    when (event.action) {
+      MotionEvent.ACTION_DOWN -> {
+        // Record when tap started
+        tapStartTime = System.currentTimeMillis()
+      }
+      MotionEvent.ACTION_UP -> {
+        // Check if it was a short tap (200ms or less)
+        val tapDuration = System.currentTimeMillis() - tapStartTime
+        if (tapDuration <= TAP_THRESHOLD_MS) {
+          handleScreenTap()
+        }
+      }
+    }
+  }
+
+  private fun handleScreenTap() {
+    // Toggle play/pause on screen tap
+    viewModel.pauseUnpause()
+    Log.d(TAG, "Screen tapped - Toggled play/pause")
   }
 
   private fun setupBackPressHandler() {
