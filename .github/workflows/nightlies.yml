@@ -31,6 +31,11 @@ jobs:
       - name: Build arm64-v8a APK
         run: ./gradlew assemblePreview -PabiFilters=arm64-v8a
 
+      - name: Install apksigner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apksigner
+
       - name: Create dummy keystore
         run: |
           keytool -genkeypair -v \
@@ -43,22 +48,18 @@ jobs:
             -keysize 2048 \
             -validity 10000
 
-      - name: Sign APK with dummy keystore
+      - name: Sign APK with apksigner (v2/v3)
         run: |
-          jarsigner -verbose -sigalg SHA1withRSA -digestalg SHA1 \
-            -keystore dummy.keystore \
-            -storepass test1234 \
-            -keypass test1234 \
-            app/build/outputs/apk/preview/app-arm64-v8a-preview.apk \
-            dummykey
+          apksigner sign \
+            --ks dummy.keystore \
+            --ks-key-alias dummykey \
+            --ks-pass pass:test1234 \
+            --key-pass pass:test1234 \
+            --out mpvEx-arm64-v8a.apk \
+            app/build/outputs/apk/preview/app-arm64-v8a-preview.apk
 
-      - name: Align APK (optional but recommended)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y zipalign
-          zipalign -v 4 \
-            app/build/outputs/apk/preview/app-arm64-v8a-preview.apk \
-            mpvEx-arm64-v8a.apk
+      - name: Verify APK signature
+        run: apksigner verify mpvEx-arm64-v8a.apk
 
       - name: Upload arm64-v8a artifact
         uses: actions/upload-artifact@v4
