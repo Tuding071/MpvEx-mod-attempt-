@@ -37,330 +37,216 @@ import kotlin.properties.ReadOnlyProperty
 import kotlin.reflect.KProperty
 
 class PlayerViewModelProviderFactory(
-  private val activity: PlayerActivity,
+    private val activity: PlayerActivity,
 ) : ViewModelProvider.Factory {
-  override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T {
-    return PlayerViewModel(activity) as T
-  }
+    override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T {
+        return PlayerViewModel(activity) as T
+    }
 }
 
 @Suppress("TooManyFunctions")
 class PlayerViewModel(
-  private val activity: PlayerActivity,
+    private val activity: PlayerActivity,
 ) : ViewModel(), KoinComponent {
-  private val playerPreferences: PlayerPreferences by inject()
-  private val gesturePreferences: GesturePreferences by inject()
-  private val audioPreferences: AudioPreferences by inject()
-  private val json: Json by inject()
+    private val playerPreferences: PlayerPreferences by inject()
+    private val gesturePreferences: GesturePreferences by inject()
+    private val audioPreferences: AudioPreferences by inject()
+    private val json: Json by inject()
 
-  val paused by MPVLib.propBoolean["pause"].collectAsState(viewModelScope)
-  val pos by MPVLib.propInt["time-pos"].collectAsState(viewModelScope)
-  val duration by MPVLib.propInt["duration"].collectAsState(viewModelScope)
-  private val currentMPVVolume by MPVLib.propInt["volume"].collectAsState(viewModelScope)
+    val paused by MPVLib.propBoolean["pause"].collectAsState(viewModelScope)
+    val pos by MPVLib.propInt["time-pos"].collectAsState(viewModelScope)
+    val duration by MPVLib.propInt["duration"].collectAsState(viewModelScope)
+    private val currentMPVVolume by MPVLib.propInt["volume"].collectAsState(viewModelScope)
 
-  val currentVolume = MutableStateFlow(activity.audioManager.getStreamVolume(AudioManager.STREAM_MUSIC))
-  private val volumeBoostCap by MPVLib.propInt["volume-max"].collectAsState(viewModelScope)
+    val currentVolume = MutableStateFlow(activity.audioManager.getStreamVolume(AudioManager.STREAM_MUSIC))
+    private val volumeBoostCap by MPVLib.propInt["volume-max"].collectAsState(viewModelScope)
 
-  val subtitleTracks = MPVLib.propNode["track-list"]
-    .map { (it?.toObject<List<TrackNode>>(json)?.filter { it.isSubtitle } ?: persistentListOf()).toImmutableList() }
+    val subtitleTracks = MPVLib.propNode["track-list"]
+        .map { (it?.toObject<List<TrackNode>>(json)?.filter { it.isSubtitle } ?: persistentListOf()).toImmutableList() }
 
-  val audioTracks = MPVLib.propNode["track-list"]
-    .map { (it?.toObject<List<TrackNode>>(json)?.filter { it.isAudio } ?: persistentListOf()).toImmutableList() }
+    val audioTracks = MPVLib.propNode["track-list"]
+        .map { (it?.toObject<List<TrackNode>>(json)?.filter { it.isAudio } ?: persistentListOf()).toImmutableList() }
 
-  val chapters = MPVLib.propNode["chapter-list"]
-    .map { (it?.toObject<List<ChapterNode>>(json) ?: persistentListOf()).map { it.toSegment() }.toImmutableList() }
+    val chapters = MPVLib.propNode["chapter-list"]
+        .map { (it?.toObject<List<ChapterNode>>(json) ?: persistentListOf()).map { it.toSegment() }.toImmutableList() }
 
-  // --- Disabled UI overlays ---
-  private val _controlsShown = MutableStateFlow(false)
-  val controlsShown = _controlsShown.asStateFlow()
-  private val _seekBarShown = MutableStateFlow(false)
-  val seekBarShown = _seekBarShown.asStateFlow()
-  private val _areControlsLocked = MutableStateFlow(false)
-  val areControlsLocked = _areControlsLocked.asStateFlow()
+    private val _controlsShown = MutableStateFlow(true)
+    val controlsShown = _controlsShown.asStateFlow()
+    private val _seekBarShown = MutableStateFlow(true)
+    val seekBarShown = _seekBarShown.asStateFlow()
+    private val _areControlsLocked = MutableStateFlow(false)
+    val areControlsLocked = _areControlsLocked.asStateFlow()
 
-  val playerUpdate = MutableStateFlow<PlayerUpdates>(PlayerUpdates.None)
-  val isBrightnessSliderShown = MutableStateFlow(false)
-  val isVolumeSliderShown = MutableStateFlow(false)
-  val currentBrightness = MutableStateFlow(
-    runCatching {
-      Settings.System.getFloat(activity.contentResolver, Settings.System.SCREEN_BRIGHTNESS)
-        .normalize(0f, 255f, 0f, 1f)
-    }.getOrElse { 0f },
-  )
-
-  val sheetShown = MutableStateFlow(Sheets.None)
-  val panelShown = MutableStateFlow(Panels.None)
-
-  val gestureSeekAmount = MutableStateFlow<Pair<Int, Int>?>(null)
-  private val _seekText = MutableStateFlow<String?>(null)
-  val seekText = _seekText.asStateFlow()
-  private val _doubleTapSeekAmount = MutableStateFlow(0)
-  val doubleTapSeekAmount = _doubleTapSeekAmount.asStateFlow()
-  private val _isSeekingForwards = MutableStateFlow(false)
-  val isSeekingForwards = _isSeekingForwards.asStateFlow()
-
-  private val _currentFrame = MutableStateFlow(0)
-  val currentFrame = _currentFrame.asStateFlow()
-  private val _totalFrames = MutableStateFlow(0)
-  val totalFrames = _totalFrames.asStateFlow()
-  private val _videoZoom = MutableStateFlow(0f)
-  val videoZoom = _videoZoom.asStateFlow()
-
-  private var timerJob: Job? = null
-  private val _remainingTime = MutableStateFlow(0)
-  val remainingTime = _remainingTime.asStateFlow()
-
-  fun startTimer(seconds: Int) {
-    timerJob?.cancel()
-    _remainingTime.value = seconds
-    if (seconds < 1) return
-    timerJob = viewModelScope.launch {
-      for (time in seconds downTo 0) {
-        _remainingTime.value = time
-        delay(1000)
-      }
-      MPVLib.setPropertyBoolean("pause", true)
-      Toast.makeText(activity, activity.getString(R.string.toast_sleep_timer_ended), Toast.LENGTH_SHORT).show()
-    }
-  }
-
-  fun cycleDecoders() {
-    MPVLib.setPropertyString(
-      "hwdec",
-      when (Decoder.getDecoderFromValue(MPVLib.getPropertyString("hwdec-current") ?: return)) {
-        Decoder.HWPlus -> Decoder.HW.value
-        Decoder.HW -> Decoder.SW.value
-        Decoder.SW -> Decoder.HWPlus.value
-        Decoder.AutoCopy -> Decoder.SW.value
-        Decoder.Auto -> Decoder.SW.value
-      },
+    val playerUpdate = MutableStateFlow<PlayerUpdates>(PlayerUpdates.None)
+    val isBrightnessSliderShown = MutableStateFlow(false)
+    val isVolumeSliderShown = MutableStateFlow(false)
+    val currentBrightness = MutableStateFlow(
+        runCatching {
+            Settings.System.getFloat(activity.contentResolver, Settings.System.SCREEN_BRIGHTNESS)
+                .normalize(0f, 255f, 0f, 1f)
+        }.getOrElse { 0f },
     )
-  }
 
-  fun addAudio(uri: Uri) {
-    val url = uri.toString()
-    val path = if (url.startsWith("content://")) url.toUri().openContentFd(activity) else url
-    MPVLib.command("audio-add", path ?: return, "cached")
-  }
+    val sheetShown = MutableStateFlow(Sheets.None)
+    val panelShown = MutableStateFlow(Panels.None)
 
-  fun addSubtitle(uri: Uri) {
-    val url = uri.toString()
-    val path = if (url.startsWith("content://")) url.toUri().openContentFd(activity) else url
-    MPVLib.command("sub-add", path ?: return, "cached")
-  }
+    val gestureSeekAmount = MutableStateFlow<Pair<Int, Int>?>(null)
 
-  fun selectSub(id: Int) {
-    val selectedSubs = Pair(MPVLib.getPropertyInt("sid"), MPVLib.getPropertyInt("secondary-sid"))
-    when (id) {
-      selectedSubs.first -> Pair(selectedSubs.second, null)
-      selectedSubs.second -> Pair(selectedSubs.first, null)
-      else -> if (selectedSubs.first != null) Pair(selectedSubs.first, id) else Pair(id, null)
-    }.let {
-      it.second?.let { MPVLib.setPropertyInt("secondary-sid", it) } ?: MPVLib.setPropertyBoolean("secondary-sid", false)
-      it.first?.let { MPVLib.setPropertyInt("sid", it) } ?: MPVLib.setPropertyBoolean("sid", false)
-    }
-  }
+    private val _seekText = MutableStateFlow<String?>(null)
+    val seekText = _seekText.asStateFlow()
+    private val _doubleTapSeekAmount = MutableStateFlow(0)
+    val doubleTapSeekAmount = _doubleTapSeekAmount.asStateFlow()
+    private val _isSeekingForwards = MutableStateFlow(false)
+    val isSeekingForwards = _isSeekingForwards.asStateFlow()
 
-  fun pauseUnpause() = MPVLib.command("cycle", "pause")
-  fun pause() = MPVLib.setPropertyBoolean("pause", true)
-  fun unpause() = MPVLib.setPropertyBoolean("pause", false)
+    private val _currentFrame = MutableStateFlow(0)
+    val currentFrame = _currentFrame.asStateFlow()
 
-  // --- Disabled overlay functions ---
-  fun showControls() {} 
-  fun hideControls() {} 
-  fun showSeekBar() {} 
-  fun hideSeekBar() {}
-  fun lockControls() {}
-  fun unlockControls() {}
-  fun displayBrightnessSlider() {}
-  fun displayVolumeSlider() {}
+    private val _totalFrames = MutableStateFlow(0)
+    val totalFrames = _totalFrames.asStateFlow()
 
-  fun seekBy(offset: Int, precise: Boolean = false) {
-    MPVLib.command("seek", offset.toString(), if (precise) "relative+exact" else "relative")
-  }
+    private val _videoZoom = MutableStateFlow(0f)
+    val videoZoom = _videoZoom.asStateFlow()
 
-  fun seekTo(position: Int, precise: Boolean = true) {
-    if (position !in 0..(MPVLib.getPropertyInt("duration") ?: 0)) return
-    MPVLib.command("seek", position.toString(), if (precise) "absolute" else "absolute+keyframes")
-  }
+    private var timerJob: Job? = null
+    private val _remainingTime = MutableStateFlow(0)
+    val remainingTime = _remainingTime.asStateFlow()
 
-  fun changeBrightnessBy(change: Float) {
-    changeBrightnessTo(currentBrightness.value + change)
-  }
-
-  fun changeBrightnessTo(brightness: Float) {
-    activity.window.attributes = activity.window.attributes.apply {
-      screenBrightness = brightness.coerceIn(0f, 1f)
-      currentBrightness.update { _ -> screenBrightness }
-    }
-  }
-
-  val maxVolume = activity.audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-  fun changeVolumeBy(change: Int) {
-    val mpvVolume = MPVLib.getPropertyInt("volume")
-    if ((volumeBoostCap ?: audioPreferences.volumeBoostCap.get()) > 0 && currentVolume.value == maxVolume) {
-      if (mpvVolume == 100 && change < 0) changeVolumeTo(currentVolume.value + change)
-      val finalMPVVolume = (mpvVolume?.plus(change))?.coerceAtLeast(100) ?: 100
-      if (finalMPVVolume in 100..(volumeBoostCap ?: audioPreferences.volumeBoostCap.get()) + 100) {
-        changeMPVVolumeTo(finalMPVVolume)
-        return
-      }
-    }
-    changeVolumeTo(currentVolume.value + change)
-  }
-
-  fun changeVolumeTo(volume: Int) {
-    val newVolume = volume.coerceIn(0..maxVolume)
-    activity.audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, newVolume, 0)
-    currentVolume.update { newVolume }
-  }
-
-  fun changeMPVVolumeTo(volume: Int) {
-    MPVLib.setPropertyInt("volume", volume)
-  }
-
-  fun setMPVVolume(volume: Int) {} // Disabled overlay
-
-  fun changeVideoAspect(aspect: VideoAspect) {
-    var ratio = -1.0
-    var pan = 1.0
-    when (aspect) {
-      VideoAspect.Crop -> pan = 1.0
-      VideoAspect.Fit -> { pan = 0.0; MPVLib.setPropertyDouble("panscan", 0.0) }
-      VideoAspect.Stretch -> {
-        val dm = DisplayMetrics()
-        activity.windowManager.defaultDisplay.getRealMetrics(dm)
-        ratio = dm.widthPixels / dm.heightPixels.toDouble()
-        pan = 0.0
-      }
-    }
-    MPVLib.setPropertyDouble("panscan", pan)
-    MPVLib.setPropertyDouble("video-aspect-override", ratio)
-    playerPreferences.videoAspect.set(aspect)
-    playerUpdate.update { PlayerUpdates.AspectRatio }
-  }
-
-  fun cycleScreenRotations() {
-    activity.requestedOrientation = when (activity.requestedOrientation) {
-      ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE,
-      ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE,
-      ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE -> {
-        playerPreferences.orientation.set(PlayerOrientation.SensorPortrait)
-        ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
-      }
-      else -> {
-        playerPreferences.orientation.set(PlayerOrientation.SensorLandscape)
-        ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-      }
-    }
-  }
-
-  @Suppress("CyclomaticComplexMethod", "LongMethod")
-  fun handleLuaInvocation(property: String, value: String) {
-    val data = value.removePrefix("\"").removeSuffix("\"").ifEmpty { return }
-
-    when (property.substringAfterLast("/")) {
-      "show_text" -> playerUpdate.update { PlayerUpdates.ShowText(data) }
-      "toggle_ui", "show_panel" -> {} // Disabled UI triggers
-      "seek_to_with_text" -> {
-        val (seekValue, text) = data.split("|", limit = 2)
-        seekToWithText(seekValue.toInt(), text)
-      }
-      "seek_by_with_text" -> {
-        val (seekValue, text) = data.split("|", limit = 2)
-        seekByWithText(seekValue.toInt(), text)
-      }
-      "seek_by" -> seekByWithText(data.toInt(), null)
-      "seek_to" -> seekToWithText(data.toInt(), null)
-      "software_keyboard" -> when (data) {
-        "show" -> forceShowSoftwareKeyboard()
-        "hide" -> forceHideSoftwareKeyboard()
-        "toggle" if !inputMethodManager.isActive -> forceShowSoftwareKeyboard()
-        else -> forceHideSoftwareKeyboard()
-      }
+    fun startTimer(seconds: Int) {
+        timerJob?.cancel()
+        _remainingTime.value = seconds
+        if (seconds < 1) return
+        timerJob = viewModelScope.launch {
+            for (time in seconds downTo 0) {
+                _remainingTime.value = time
+                delay(1000)
+            }
+            MPVLib.setPropertyBoolean("pause", true)
+            Toast.makeText(activity, activity.getString(R.string.toast_sleep_timer_ended), Toast.LENGTH_SHORT).show()
+        }
     }
 
-    MPVLib.setPropertyString(property, "")
-  }
-
-  private val inputMethodManager = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-  private fun forceShowSoftwareKeyboard() { inputMethodManager.toggleSoftInput(InputMethodManager.SHOW_FORCED, 0) }
-  private fun forceHideSoftwareKeyboard() { inputMethodManager.toggleSoftInput(InputMethodManager.SHOW_IMPLICIT, 0) }
-
-  private fun seekToWithText(seekValue: Int, text: String?) {
-    _isSeekingForwards.value = seekValue > 0
-    _doubleTapSeekAmount.value = seekValue - (pos ?: return)
-    _seekText.update { text }
-    seekTo(seekValue, playerPreferences.preciseSeeking.get())
-  }
-
-  private fun seekByWithText(value: Int, text: String?) {
-    _doubleTapSeekAmount.update { it + value }
-    _seekText.update { text }
-    _isSeekingForwards.value = value > 0
-    seekBy(value, playerPreferences.preciseSeeking.get())
-  }
-
-  private val doubleTapToSeekDuration = gesturePreferences.doubleTapToSeekDuration.get()
-
-  fun leftSeek() {
-    if ((pos ?: return) > 0) _doubleTapSeekAmount.value -= doubleTapToSeekDuration
-    _isSeekingForwards.value = false
-    seekBy(-doubleTapToSeekDuration, playerPreferences.preciseSeeking.get())
-  }
-
-  fun rightSeek() {
-    if ((pos ?: return) < (duration ?: return)) _doubleTapSeekAmount.value += doubleTapToSeekDuration
-    _isSeekingForwards.value = true
-    seekBy(doubleTapToSeekDuration, playerPreferences.preciseSeeking.get())
-  }
-
-  fun handleLeftDoubleTap() {
-    when (gesturePreferences.leftSingleActionGesture.get()) {
-      SingleActionGesture.Seek -> leftSeek()
-      SingleActionGesture.PlayPause -> pauseUnpause()
-      SingleActionGesture.Custom -> MPVLib.command("keypress", CustomKeyCodes.DoubleTapLeft.keyCode)
-      SingleActionGesture.None -> {}
+    fun cycleDecoders() {
+        MPVLib.setPropertyString(
+            "hwdec",
+            when (Decoder.getDecoderFromValue(MPVLib.getPropertyString("hwdec-current") ?: return)) {
+                Decoder.HWPlus -> Decoder.HW.value
+                Decoder.HW -> Decoder.SW.value
+                Decoder.SW -> Decoder.HWPlus.value
+                Decoder.AutoCopy -> Decoder.SW.value
+                Decoder.Auto -> Decoder.SW.value
+            },
+        )
     }
-  }
 
-  fun handleCenterDoubleTap() {
-    when (gesturePreferences.centerSingleActionGesture.get()) {
-      SingleActionGesture.PlayPause -> pauseUnpause()
-      SingleActionGesture.Custom -> MPVLib.command("keypress", CustomKeyCodes.DoubleTapCenter.keyCode)
-      SingleActionGesture.Seek, SingleActionGesture.None -> {}
+    fun addAudio(uri: Uri) {
+        val url = uri.toString()
+        val path = if (url.startsWith("content://")) url.toUri().openContentFd(activity) else url
+        MPVLib.command("audio-add", path ?: return, "cached")
     }
-  }
 
-  fun handleRightDoubleTap() {
-    when (gesturePreferences.rightSingleActionGesture.get()) {
-      SingleActionGesture.Seek -> rightSeek()
-      SingleActionGesture.PlayPause -> pauseUnpause()
-      SingleActionGesture.Custom -> MPVLib.command("keypress", CustomKeyCodes.DoubleTapRight.keyCode)
-      SingleActionGesture.None -> {}
+    fun addSubtitle(uri: Uri) {
+        val url = uri.toString()
+        val path = if (url.startsWith("content://")) url.toUri().openContentFd(activity) else url
+        MPVLib.command("sub-add", path ?: return, "cached")
     }
-  }
 
-  fun setVideoZoom(zoom: Float) { _videoZoom.update { zoom } }
+    fun selectSub(id: Int) {
+        val selectedSubs = Pair(MPVLib.getPropertyInt("sid"), MPVLib.getPropertyInt("secondary-sid"))
+        when (id) {
+            selectedSubs.first -> Pair(selectedSubs.second, null)
+            selectedSubs.second -> Pair(selectedSubs.first, null)
+            else -> if (selectedSubs.first != null) Pair(selectedSubs.first, id) else Pair(id, null)
+        }.let {
+            it.second?.let { MPVLib.setPropertyInt("secondary-sid", it) } ?: MPVLib.setPropertyBoolean("secondary-sid", false)
+            it.first?.let { MPVLib.setPropertyInt("sid", it) } ?: MPVLib.setPropertyBoolean("sid", false)
+        }
+    }
 
-  fun updateFrameInfo() {
-    val currentFrameValue = MPVLib.getPropertyInt("estimated-frame-number") ?: 0
-    _currentFrame.update { currentFrameValue }
+    fun pauseUnpause() = MPVLib.command("cycle", "pause")
+    fun pause() = MPVLib.setPropertyBoolean("pause", true)
+    fun unpause() = MPVLib.setPropertyBoolean("pause", false)
 
-    val durationValue = MPVLib.getPropertyDouble("duration") ?: 0.0
-    val fps = MPVLib.getPropertyDouble("container-fps") ?: MPVLib.getPropertyDouble("estimated-vf-fps") ?: 0.0
+    private val showStatusBar = playerPreferences.showSystemStatusBar.get()
+    fun showControls() { /* UI Disabled */ }
+    fun hideControls() { /* UI Disabled */ }
+    fun hideSeekBar() { /* UI Disabled */ }
+    fun showSeekBar() { /* UI Disabled */ }
+    fun lockControls() { /* UI Disabled */ }
+    fun unlockControls() { /* UI Disabled */ }
 
-    if (durationValue > 0 && fps > 0) _totalFrames.update { (durationValue * fps).toInt() }
-    else _totalFrames.update { 0 }
-  }
+    fun seekBy(offset: Int, precise: Boolean = false) {
+        MPVLib.command("seek", offset.toString(), if (precise) "relative+exact" else "relative")
+    }
+
+    fun seekTo(position: Int, precise: Boolean = true) {
+        if (position !in 0..(MPVLib.getPropertyInt("duration") ?: 0)) return
+        MPVLib.command("seek", position.toString(), if (precise) "absolute" else "absolute+keyframes")
+    }
+
+    fun changeBrightnessBy(change: Float) { /* UI Disabled */ }
+    fun changeBrightnessTo(brightness: Float) { /* UI Disabled */ }
+    fun displayBrightnessSlider() { /* UI Disabled */ }
+
+    val maxVolume = activity.audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+    fun changeVolumeBy(change: Int) {
+        val mpvVolume = MPVLib.getPropertyInt("volume")
+        if ((volumeBoostCap ?: audioPreferences.volumeBoostCap.get()) > 0 && currentVolume.value == maxVolume) {
+            if (mpvVolume == 100 && change < 0) changeVolumeTo(currentVolume.value + change)
+            val finalMPVVolume = (mpvVolume?.plus(change))?.coerceAtLeast(100) ?: 100
+            if (finalMPVVolume in 100..(volumeBoostCap ?: audioPreferences.volumeBoostCap.get()) + 100) {
+                changeMPVVolumeTo(finalMPVVolume)
+                return
+            }
+        }
+        changeVolumeTo(currentVolume.value + change)
+    }
+
+    fun changeVolumeTo(volume: Int) {
+        val newVolume = volume.coerceIn(0..maxVolume)
+        activity.audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, newVolume, 0)
+        currentVolume.update { newVolume }
+    }
+
+    fun changeMPVVolumeTo(volume: Int) = MPVLib.setPropertyInt("volume", volume)
+    fun setMPVVolume(volume: Int) { /* UI Disabled */ }
+    fun displayVolumeSlider() { /* UI Disabled */ }
+
+    fun changeVideoAspect(aspect: VideoAspect) { /* UI Disabled */ }
+    fun cycleScreenRotations() { /* UI Disabled */ }
+
+    @Suppress("CyclomaticComplexMethod", "LongMethod")
+    fun handleLuaInvocation(property: String, value: String) { /* UI Disabled */ }
+
+    private val inputMethodManager = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+    private fun forceShowSoftwareKeyboard() { /* UI Disabled */ }
+    private fun forceHideSoftwareKeyboard() { /* UI Disabled */ }
+
+    private fun seekToWithText(seekValue: Int, text: String?) { /* UI Disabled */ }
+    private fun seekByWithText(value: Int, text: String?) { /* UI Disabled */ }
+
+    private val doubleTapToSeekDuration = gesturePreferences.doubleTapToSeekDuration.get()
+
+    // <<< STUBS ADDED TO FIX GESTUREHANDLER.KT >>>
+    fun updateSeekAmount(amount: Int) { /* No-op stub */ }
+    fun updateSeekText(text: String?) { /* No-op stub */ }
+
+    fun leftSeek() { /* UI Disabled */ }
+    fun rightSeek() { /* UI Disabled */ }
+    fun handleLeftDoubleTap() { /* UI Disabled */ }
+    fun handleCenterDoubleTap() { /* UI Disabled */ }
+    fun handleRightDoubleTap() { /* UI Disabled */ }
+    fun setVideoZoom(zoom: Float) { /* UI Disabled */ }
+    fun updateFrameInfo() { /* UI Disabled */ }
 }
 
-fun Float.normalize(inMin: Float, inMax: Float, outMin: Float, outMax: Float): Float =
-  (this - inMin) * (outMax - outMin) / (inMax - inMin) + outMin
+fun Float.normalize(inMin: Float, inMax: Float, outMin: Float, outMax: Float): Float {
+    return (this - inMin) * (outMax - outMin) / (inMax - inMin) + outMin
+}
 
 fun <T> Flow<T>.collectAsState(scope: CoroutineScope, initialValue: T? = null) =
-  object : ReadOnlyProperty<Any?, T?> {
-    private var value: T? = initialValue
-    init { scope.launch { collect { value = it } } }
-    override fun getValue(thisRef: Any?, property: KProperty<*>) = value
-  }
+    object : ReadOnlyProperty<Any?, T?> {
+        private var value: T? = initialValue
+        init { scope.launch { collect { value = it } } }
+        override fun getValue(thisRef: Any?, property: KProperty<*>) = value
+    }
