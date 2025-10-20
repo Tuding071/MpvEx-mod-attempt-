@@ -219,9 +219,9 @@ class PlayerActivity : AppCompatActivity() {
     
     // Show appropriate feedback
     if (wasPaused) {
-      showFeedbackText("▶ Resume")
+      showFeedbackText("Resume")
     } else {
-      showFeedbackText("⏸ Pause")
+      showFeedbackText("Pause")
       // Don't hide pause text - let it stay until resume or auto-hide
       lastPauseState = false
     }
@@ -239,11 +239,11 @@ class PlayerActivity : AppCompatActivity() {
         
         // Show resume text when transitioning from pause to play
         if (lastPauseState == false && !value) {
-          showFeedbackText("▶ Resume")
+          showFeedbackText("Resume")
           lastPauseState = true
         }
       }
-      "eof-reached" -> handleEndOfFile(value)
+      "eof-reached" -> handleEndOfFileReached(value)
     }
   }
 
@@ -252,6 +252,12 @@ class PlayerActivity : AppCompatActivity() {
       window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     } else {
       window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+  }
+
+  private fun handleEndOfFileReached(isEof: Boolean) {
+    if (isEof && playerPreferences.closeAfterReachingEndOfVideo.get()) {
+      finishAndRemoveTask()
     }
   }
 
