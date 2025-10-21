@@ -20,6 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import `is`.xyz.mpv.MPVLib
 
 @Composable
 fun PlayerOverlay(
@@ -30,8 +31,8 @@ fun PlayerOverlay(
     var showPauseText by remember { mutableStateOf(false) }
     var showResumeText by remember { mutableStateOf(false) }
     
-    // Track pause state
-    val isPaused = viewModel.paused ?: false
+    // Track pause state directly from MPVLib
+    val isPaused = MPVLib.getPropertyBoolean("pause") ?: false
     
     // Handle pause state changes
     LaunchedEffect(isPaused) {
@@ -50,21 +51,16 @@ fun PlayerOverlay(
     }
     
     Box(
-        modifier = modifier.fillMaxSize()
+        modifier = modifier
+            .fillMaxSize()
+            .clickable(
+                onClick = {
+                    // Direct MPVLib call to toggle pause
+                    val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
+                    MPVLib.setPropertyBoolean("pause", !currentPaused)
+                }
+            )
     ) {
-        // Main clickable area with 5% margins (center 90%)
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(30.dp) // This creates ~5% margin on all sides
-                .clickable(
-                    onClick = {
-                        viewModel.pauseUnpause()
-                    }
-                )
-        )
-        
-        // Text overlay - always on top
         // Pause text - stays visible while paused
         if (showPauseText) {
             Text(
