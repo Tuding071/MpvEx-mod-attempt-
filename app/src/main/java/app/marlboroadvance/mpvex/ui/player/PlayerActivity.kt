@@ -18,12 +18,19 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
-import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -44,6 +51,7 @@ import `is`.xyz.mpv.MPVNode
 import `is`.xyz.mpv.Utils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 import java.io.File
@@ -63,6 +71,9 @@ class PlayerActivity : AppCompatActivity() {
   private val binding by lazy { PlayerLayoutBinding.inflate(layoutInflater) }
   private val playerObserver by lazy { PlayerObserver(this) }
 
+  // Repositories
+  private val playbackStateRepository: PlaybackStateRepository by inject()
+
   // Views and Controllers
   val player by lazy { binding.player }
   val windowInsetsController by lazy {
@@ -70,16 +81,13 @@ class PlayerActivity : AppCompatActivity() {
   }
   val audioManager by lazy { getSystemService(AUDIO_SERVICE) as AudioManager }
 
-  // Gesture handling
+  // Gesture detection
   private lateinit var gestureDetector: GestureDetector
-  private var tapStartTime: Long = 0
+  private var gestureLayer: View? = null
 
-  // Overlay views
-  private var statusTextView: TextView? = null
-  private var overlayLayout: View? = null
-
-  // Repositories
-  private val playbackStateRepository: PlaybackStateRepository by inject()
+  // State for overlay text
+  private var showResumeText = false
+  private var resumeTextJob: kotlinx.coroutines.Job? = null
 
   // Preferences
   private val playerPreferences: PlayerPreferences by inject()
@@ -116,18 +124,6 @@ class PlayerActivity : AppCompatActivity() {
     }
   }
 
-  // Gesture listener
-  private val gestureListener = object : GestureDetector.SimpleOnGestureListener() {
-    override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-      val tapDuration = System.currentTimeMillis() - tapStartTime
-      if (tapDuration <= 200) { // Tap less than 200ms
-        handleTapGesture()
-        return true
-      }
-      return false
-    }
-  }
-
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
@@ -139,89 +135,59 @@ class PlayerActivity : AppCompatActivity() {
     setupPlayerControls()
     setupPipHelper()
     setupAudioFocus()
-    setupGestureOverlay()
+    setupGestureLayer() // Add gesture layer
 
     // Start playback
     getPlayableUri(intent)?.let(player::playFile)
     setOrientation()
   }
 
+  private fun setupGestureLayer() {
+    // Create gesture detector
+    gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+      override fun onSingleTapUp(e: MotionEvent): Boolean {
+        // Handle tap gesture (less than 200ms)
+        handleTapGesture()
+        return true
+      }
+    })
+
+    // Setup the gesture overlay
+    setupGestureOverlay()
+  }
+
   private fun setupGestureOverlay() {
-    // Create invisible overlay for gestures
-    overlayLayout = View(this).apply {
-      layoutParams = ConstraintLayout.LayoutParams(
-        ConstraintLayout.LayoutParams.MATCH_PARENT,
-        ConstraintLayout.LayoutParams.MATCH_PARENT
-      )
-      setBackgroundColor(android.graphics.Color.TRANSPARENT)
-      setOnTouchListener { _, event ->
-        gestureDetector.onTouchEvent(event)
-        when (event.action) {
-          MotionEvent.ACTION_DOWN -> tapStartTime = System.currentTimeMillis()
-          MotionEvent.ACTION_UP -> {
-            val tapDuration = System.currentTimeMillis() - tapStartTime
-            if (tapDuration <= 200) {
-              // Prevent further touch propagation after tap
-            }
-          }
-        }
-        true // Consume all touch events
-      }
+    // We'll use the existing controls container as our gesture layer
+    gestureLayer = binding.controls
+
+    // Make it invisible but still receive touch events
+    gestureLayer?.setOnTouchListener { _, event ->
+      gestureDetector.onTouchEvent(event)
+      true // Consume the event
     }
-
-    // Add overlay to the root layout
-    val root = binding.root as? ConstraintLayout
-    root?.addView(overlayLayout)
-
-    // Create status text view
-    statusTextView = TextView(this).apply {
-      layoutParams = ConstraintLayout.LayoutParams(
-        ConstraintLayout.LayoutParams.WRAP_CONTENT,
-        ConstraintLayout.LayoutParams.WRAP_CONTENT
-      ).apply {
-        topToTop = ConstraintLayout.LayoutParams.PARENT_ID
-        startToStart = ConstraintLayout.LayoutParams.PARENT_ID
-        endToEnd = ConstraintLayout.LayoutParams.PARENT_ID
-        topMargin = resources.getDimensionPixelSize(androidx.appcompat.R.dimen.abc_action_bar_default_height_material)
-      }
-      textSize = 24f
-      setTextColor(android.graphics.Color.WHITE)
-      setBackgroundColor(android.graphics.Color.argb(180, 0, 0, 0))
-      setPadding(40, 20, 40, 20)
-      visibility = View.GONE
-    }
-
-    root?.addView(statusTextView)
-    gestureDetector = GestureDetector(this, gestureListener)
   }
 
   private fun handleTapGesture() {
-    if (viewModel.paused == true) {
-      // Resume playback
-      viewModel.unpause()
-      showStatus("Resume")
-      lifecycleScope.launch {
-        delay(1000) // Hide after 1 second
-        hideStatus()
+    viewModel.pauseUnpause()
+    
+    // Handle the text display logic here since we're only modifying PlayerActivity
+    val isPaused = viewModel.paused.value == true
+    
+    if (isPaused) {
+      // Just resumed - show resume text briefly
+      showResumeText = true
+      resumeTextJob?.cancel()
+      resumeTextJob = lifecycleScope.launch {
+        delay(1000) // Show for 1 second
+        showResumeText = false
+        // Force UI update
+        binding.controls.invalidate()
       }
-    } else {
-      // Pause playback
-      viewModel.pause()
-      showStatus("Pause")
     }
-  }
-
-  private fun showStatus(text: String) {
-    statusTextView?.apply {
-      this.text = text
-      visibility = View.VISIBLE
-    }
-  }
-
-  private fun hideStatus() {
-    statusTextView?.apply {
-      visibility = View.GONE
-    }
+    // When pausing, the "Paused" text will show automatically via the paused state
+    
+    // Force UI update
+    binding.controls.invalidate()
   }
 
   private fun setupBackPressHandler() {
@@ -252,7 +218,41 @@ class PlayerActivity : AppCompatActivity() {
   }
 
   private fun setupPlayerControls() {
-    binding.controls.setContent { /* no UI */ }
+    binding.controls.setContent {
+      MpvexTheme {
+        PlayerOverlayUI()
+      }
+    }
+  }
+
+  @Composable
+  private fun PlayerOverlayUI() {
+    val isPaused by viewModel.paused.collectAsState()
+
+    Box(
+      modifier = Modifier.fillMaxSize(),
+      contentAlignment = Alignment.Center
+    ) {
+      // Show "Paused" text when paused
+      if (isPaused == true) {
+        Text(
+          text = "Paused",
+          color = Color.White,
+          fontSize = 32.sp,
+          fontWeight = FontWeight.Bold
+        )
+      }
+      
+      // Show "Resume" text briefly when resuming
+      if (showResumeText) {
+        Text(
+          text = "Resume",
+          color = Color.White,
+          fontSize = 32.sp,
+          fontWeight = FontWeight.Bold
+        )
+      }
+    }
   }
 
   private fun setupPipHelper() {
@@ -309,6 +309,7 @@ class PlayerActivity : AppCompatActivity() {
       cleanupMPV()
       cleanupAudio()
       cleanupReceivers()
+      resumeTextJob?.cancel()
     } catch (e: Exception) {
       Log.e(TAG, "Error during onDestroy", e)
     } finally {
@@ -1181,3 +1182,5 @@ class PlayerActivity : AppCompatActivity() {
     private const val DEFAULT_SUB_SPEED = 1.0
   }
 }
+
+const val TAG = "mpvex"
