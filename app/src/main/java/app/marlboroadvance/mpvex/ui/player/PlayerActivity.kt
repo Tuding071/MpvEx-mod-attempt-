@@ -92,8 +92,10 @@ class PlayerActivity : AppCompatActivity() {
   // Gesture and UI elements
   private lateinit var pauseText: TextView
   private lateinit var gestureLayer: View
-  private val hideRunnable = Runnable { pauseText.visibility = View.GONE }
-  private var isCurrentlyPaused = false
+  private val hideRunnable = Runnable { 
+    pauseText.visibility = View.GONE 
+    pauseText.text = ""
+  }
 
   // Receivers and Listeners
   private val noisyReceiver = object : BroadcastReceiver() {
@@ -132,19 +134,25 @@ class PlayerActivity : AppCompatActivity() {
     }
     binding.root.addView(gestureLayer)
 
-    // Add pause text - smaller and at top center
+    // Add pause text - FIXED: Proper top center positioning
     pauseText = TextView(this).apply {
       layoutParams = FrameLayout.LayoutParams(
         FrameLayout.LayoutParams.WRAP_CONTENT,
-        FrameLayout.LayoutParams.WRAP_CONTENT,
-        Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        FrameLayout.LayoutParams.WRAP_CONTENT
       ).apply {
-        topMargin = (30 * resources.displayMetrics.density).toInt() // Reduced margin
+        gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        topMargin = (50 * resources.displayMetrics.density).toInt()
       }
       setTextColor(Color.WHITE)
-      textSize = 16f // Smaller text size
+      textSize = 18f // Slightly larger for better visibility
       visibility = View.GONE
-      setBackgroundColor(Color.argb(128, 0, 0, 0)) // Semi-transparent background for better visibility
+      setBackgroundColor(Color.argb(150, 0, 0, 0)) // Darker background for better contrast
+      setPadding(
+        (16 * resources.displayMetrics.density).toInt(),
+        (8 * resources.displayMetrics.density).toInt(),
+        (16 * resources.displayMetrics.density).toInt(),
+        (8 * resources.displayMetrics.density).toInt()
+      )
     }
     binding.root.addView(pauseText)
 
@@ -174,23 +182,14 @@ class PlayerActivity : AppCompatActivity() {
   }
 
   private fun handleTapGesture() {
+    // Remove any pending hide operations
+    pauseText.removeCallbacks(hideRunnable)
+    
+    // Toggle pause state via viewModel
     viewModel.pauseUnpause()
     
-    // Toggle our local pause state and update text display
-    isCurrentlyPaused = !isCurrentlyPaused
-    
-    if (isCurrentlyPaused) {
-      // Show "Paused" text and keep it visible
-      pauseText.removeCallbacks(hideRunnable)
-      pauseText.text = "Paused"
-      pauseText.visibility = View.VISIBLE
-    } else {
-      // Show "Resume" text briefly then hide
-      pauseText.removeCallbacks(hideRunnable)
-      pauseText.text = "Resume"
-      pauseText.visibility = View.VISIBLE
-      pauseText.postDelayed(hideRunnable, 1000) // Hide after 1 second
-    }
+    // We'll rely on the MPV observer to update the text state
+    // This avoids the stutter by having a single source of truth
   }
 
   private fun setupBackPressHandler() {
@@ -207,7 +206,7 @@ class PlayerActivity : AppCompatActivity() {
   private fun handleBackPress() {
     val shouldEnterPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
       pipHelper.isPipSupported &&
-      !isCurrentlyPaused &&
+      viewModel.paused != true &&
       playerPreferences.automaticallyEnterPip.get()
 
     if (shouldEnterPip &&
@@ -354,9 +353,6 @@ class PlayerActivity : AppCompatActivity() {
 
       if (!isInPip) {
         viewModel.pause()
-        // Update our local state
-        isCurrentlyPaused = true
-        updatePauseText()
       }
 
       saveVideoPlaybackState(fileName)
@@ -368,19 +364,6 @@ class PlayerActivity : AppCompatActivity() {
       Log.e(TAG, "Error during onPause", e)
     } finally {
       super.onPause()
-    }
-  }
-
-  private fun updatePauseText() {
-    if (isCurrentlyPaused) {
-      pauseText.removeCallbacks(hideRunnable)
-      pauseText.text = "Paused"
-      pauseText.visibility = View.VISIBLE
-    } else {
-      pauseText.removeCallbacks(hideRunnable)
-      pauseText.text = "Resume"
-      pauseText.visibility = View.VISIBLE
-      pauseText.postDelayed(hideRunnable, 1000)
     }
   }
 
@@ -500,8 +483,6 @@ class PlayerActivity : AppCompatActivity() {
 
   private fun pausePlayback() {
     viewModel.pause()
-    isCurrentlyPaused = true
-    updatePauseText()
     window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
   }
 
@@ -794,14 +775,17 @@ class PlayerActivity : AppCompatActivity() {
   private fun handlePauseStateChange(isPaused: Boolean) {
     if (isPaused) {
       window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-      // Update our local state and show "Paused" text
-      isCurrentlyPaused = true
-      updatePauseText()
+      // Show "Paused" text and keep it visible
+      pauseText.removeCallbacks(hideRunnable)
+      pauseText.text = "Paused"
+      pauseText.visibility = View.VISIBLE
     } else {
       window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-      // Update our local state and show "Resume" text briefly
-      isCurrentlyPaused = false
-      updatePauseText()
+      // Show "Resume" text briefly then hide
+      pauseText.removeCallbacks(hideRunnable)
+      pauseText.text = "Resume"
+      pauseText.visibility = View.VISIBLE
+      pauseText.postDelayed(hideRunnable, 1000) // Hide after 1 second
     }
   }
 
@@ -864,8 +848,6 @@ class PlayerActivity : AppCompatActivity() {
     viewModel.setVideoZoom(defaultZoom)
 
     viewModel.unpause()
-    // Update our local state
-    isCurrentlyPaused = false
   }
 
   // ==================== Playback State Management ====================
@@ -1100,9 +1082,6 @@ class PlayerActivity : AppCompatActivity() {
 
       KeyEvent.KEYCODE_SPACE -> {
         viewModel.pauseUnpause()
-        // Also update our text display for spacebar pause
-        isCurrentlyPaused = !isCurrentlyPaused
-        updatePauseText()
         return true
       }
 
@@ -1170,9 +1149,9 @@ class PlayerActivity : AppCompatActivity() {
     private const val RESULT_INTENT = "app.marlboroadvance.mpvex.ui.player.PlayerActivity.result"
 
     // Timing constants
-    private const val PAUSE_DELAY_MS = 10L
-    private const val QUIT_DELAY_MS = 15L
-    private const val OBSERVER_REMOVAL_DELAY_MS = 5L
+    private const val PAUSE_DELAY_MS = 100L
+    private const val QUIT_DELAY_MS = 150L
+    private const val OBSERVER_REMOVAL_DELAY_MS = 50L
 
     // Value constants
     private const val BRIGHTNESS_NOT_SET = -1f
