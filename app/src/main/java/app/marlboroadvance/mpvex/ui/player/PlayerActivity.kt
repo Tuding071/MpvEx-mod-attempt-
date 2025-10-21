@@ -13,24 +13,16 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Log
-import android.view.GestureDetector
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
+import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.Text
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -50,11 +42,13 @@ import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.MPVNode
 import `is`.xyz.mpv.Utils
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 import java.io.File
+import android.graphics.Color
+import android.view.GestureDetector
+import android.view.Gravity
 
 /**
  * Main player activity that handles video playback using MPV library.
@@ -81,14 +75,6 @@ class PlayerActivity : AppCompatActivity() {
   }
   val audioManager by lazy { getSystemService(AUDIO_SERVICE) as AudioManager }
 
-  // Gesture detection
-  private lateinit var gestureDetector: GestureDetector
-  private var gestureLayer: View? = null
-
-  // State for overlay text
-  private var showResumeText = false
-  private var resumeTextJob: kotlinx.coroutines.Job? = null
-
   // Preferences
   private val playerPreferences: PlayerPreferences by inject()
   private val audioPreferences: AudioPreferences by inject()
@@ -102,6 +88,11 @@ class PlayerActivity : AppCompatActivity() {
   private var systemUIRestored = false
   private var noisyReceiverRegistered = false
   private var audioFocusRequested = false
+
+  // Gesture and UI elements
+  private lateinit var pauseText: TextView
+  private lateinit var gestureLayer: View
+  private val hideRunnable = Runnable { pauseText.visibility = View.GONE }
 
   // Receivers and Listeners
   private val noisyReceiver = object : BroadcastReceiver() {
@@ -129,65 +120,76 @@ class PlayerActivity : AppCompatActivity() {
     super.onCreate(savedInstanceState)
     setContentView(binding.root)
 
+    // Add gesture layer
+    gestureLayer = View(this).apply {
+      layoutParams = FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams.MATCH_PARENT,
+        FrameLayout.LayoutParams.MATCH_PARENT
+      )
+      setBackgroundColor(Color.TRANSPARENT)
+      isClickable = true
+    }
+    binding.root.addView(gestureLayer)
+
+    // Add pause text - smaller and at top center
+    pauseText = TextView(this).apply {
+      layoutParams = FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams.WRAP_CONTENT,
+        FrameLayout.LayoutParams.WRAP_CONTENT,
+        Gravity.TOP or Gravity.CENTER_HORIZONTAL
+      ).apply {
+        topMargin = (30 * resources.displayMetrics.density).toInt() // Reduced margin
+      }
+      setTextColor(Color.WHITE)
+      textSize = 16f // Smaller text size
+      visibility = View.GONE
+      setBackgroundColor(Color.argb(128, 0, 0, 0)) // Semi-transparent background for better visibility
+    }
+    binding.root.addView(pauseText)
+
+    // Setup gesture detector for tap to pause/resume
+    val gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+      override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+        handleTapGesture()
+        return true // Consume the event
+      }
+    })
+
+    gestureLayer.setOnTouchListener { v, event ->
+      gestureDetector.onTouchEvent(event)
+      true // Return true to consume the event
+    }
+
     setupMPV()
     setupAudio()
     setupBackPressHandler()
     setupPlayerControls()
     setupPipHelper()
     setupAudioFocus()
-    setupGestureLayer() // Add gesture layer
 
     // Start playback
     getPlayableUri(intent)?.let(player::playFile)
     setOrientation()
   }
 
-  private fun setupGestureLayer() {
-    // Create gesture detector
-    gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-      override fun onSingleTapUp(e: MotionEvent): Boolean {
-        // Handle tap gesture (less than 200ms)
-        handleTapGesture()
-        return true
-      }
-    })
-
-    // Setup the gesture overlay
-    setupGestureOverlay()
-  }
-
-  private fun setupGestureOverlay() {
-    // We'll use the existing controls container as our gesture layer
-    gestureLayer = binding.controls
-
-    // Make it invisible but still receive touch events
-    gestureLayer?.setOnTouchListener { _, event ->
-      gestureDetector.onTouchEvent(event)
-      true // Consume the event
-    }
-  }
-
   private fun handleTapGesture() {
     viewModel.pauseUnpause()
     
-    // Handle the text display logic here since we're only modifying PlayerActivity
+    // Update text display based on current pause state
     val isPaused = viewModel.paused.value == true
     
     if (isPaused) {
-      // Just resumed - show resume text briefly
-      showResumeText = true
-      resumeTextJob?.cancel()
-      resumeTextJob = lifecycleScope.launch {
-        delay(1000) // Show for 1 second
-        showResumeText = false
-        // Force UI update
-        binding.controls.invalidate()
-      }
+      // Show "Paused" text and keep it visible
+      pauseText.removeCallbacks(hideRunnable)
+      pauseText.text = "Paused"
+      pauseText.visibility = View.VISIBLE
+    } else {
+      // Show "Resume" text briefly then hide
+      pauseText.removeCallbacks(hideRunnable)
+      pauseText.text = "Resume"
+      pauseText.visibility = View.VISIBLE
+      pauseText.postDelayed(hideRunnable, 1000) // Hide after 1 second
     }
-    // When pausing, the "Paused" text will show automatically via the paused state
-    
-    // Force UI update
-    binding.controls.invalidate()
   }
 
   private fun setupBackPressHandler() {
@@ -218,41 +220,7 @@ class PlayerActivity : AppCompatActivity() {
   }
 
   private fun setupPlayerControls() {
-    binding.controls.setContent {
-      MpvexTheme {
-        PlayerOverlayUI()
-      }
-    }
-  }
-
-  @Composable
-  private fun PlayerOverlayUI() {
-    val isPaused by viewModel.paused.collectAsState()
-
-    Box(
-      modifier = Modifier.fillMaxSize(),
-      contentAlignment = Alignment.Center
-    ) {
-      // Show "Paused" text when paused
-      if (isPaused == true) {
-        Text(
-          text = "Paused",
-          color = Color.White,
-          fontSize = 32.sp,
-          fontWeight = FontWeight.Bold
-        )
-      }
-      
-      // Show "Resume" text briefly when resuming
-      if (showResumeText) {
-        Text(
-          text = "Resume",
-          color = Color.White,
-          fontSize = 32.sp,
-          fontWeight = FontWeight.Bold
-        )
-      }
-    }
+    binding.controls.setContent { /* no UI */ }
   }
 
   private fun setupPipHelper() {
@@ -275,6 +243,9 @@ class PlayerActivity : AppCompatActivity() {
     viewModel.isVolumeSliderShown.update { false }
     viewModel.sheetShown.update { Sheets.None }
     viewModel.panelShown.update { Panels.None }
+    // Also hide our pause text in PiP mode
+    pauseText.visibility = View.GONE
+    pauseText.removeCallbacks(hideRunnable)
   }
 
   private fun setupAudioFocus() {
@@ -309,7 +280,8 @@ class PlayerActivity : AppCompatActivity() {
       cleanupMPV()
       cleanupAudio()
       cleanupReceivers()
-      resumeTextJob?.cancel()
+      // Clean up any pending runnables
+      pauseText.removeCallbacks(hideRunnable)
     } catch (e: Exception) {
       Log.e(TAG, "Error during onDestroy", e)
     } finally {
@@ -803,8 +775,17 @@ class PlayerActivity : AppCompatActivity() {
   private fun handlePauseStateChange(isPaused: Boolean) {
     if (isPaused) {
       window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+      // Show "Paused" text when paused via other means (not tap)
+      pauseText.removeCallbacks(hideRunnable)
+      pauseText.text = "Paused"
+      pauseText.visibility = View.VISIBLE
     } else {
       window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+      // Show "Resume" text briefly when unpaused via other means
+      pauseText.removeCallbacks(hideRunnable)
+      pauseText.text = "Resume"
+      pauseText.visibility = View.VISIBLE
+      pauseText.postDelayed(hideRunnable, 1000)
     }
   }
 
