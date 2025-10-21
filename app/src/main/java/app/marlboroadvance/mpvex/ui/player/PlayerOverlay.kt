@@ -21,7 +21,6 @@ fun PlayerOverlay(
             .fillMaxSize()
             .background(Color.Transparent)
             .clickable(
-                indication = null, // No ripple effect
                 onClick = {
                     // Handle single tap for pause/resume
                     viewModel.pauseUnpause()
