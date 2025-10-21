@@ -93,6 +93,7 @@ class PlayerActivity : AppCompatActivity() {
   private lateinit var pauseText: TextView
   private lateinit var gestureLayer: View
   private val hideRunnable = Runnable { pauseText.visibility = View.GONE }
+  private var isCurrentlyPaused = false
 
   // Receivers and Listeners
   private val noisyReceiver = object : BroadcastReceiver() {
@@ -175,10 +176,10 @@ class PlayerActivity : AppCompatActivity() {
   private fun handleTapGesture() {
     viewModel.pauseUnpause()
     
-    // Update text display based on current pause state
-    val isPaused = viewModel.paused.value == true
+    // Toggle our local pause state and update text display
+    isCurrentlyPaused = !isCurrentlyPaused
     
-    if (isPaused) {
+    if (isCurrentlyPaused) {
       // Show "Paused" text and keep it visible
       pauseText.removeCallbacks(hideRunnable)
       pauseText.text = "Paused"
@@ -206,7 +207,7 @@ class PlayerActivity : AppCompatActivity() {
   private fun handleBackPress() {
     val shouldEnterPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
       pipHelper.isPipSupported &&
-      viewModel.paused != true &&
+      !isCurrentlyPaused &&
       playerPreferences.automaticallyEnterPip.get()
 
     if (shouldEnterPip &&
@@ -353,6 +354,9 @@ class PlayerActivity : AppCompatActivity() {
 
       if (!isInPip) {
         viewModel.pause()
+        // Update our local state
+        isCurrentlyPaused = true
+        updatePauseText()
       }
 
       saveVideoPlaybackState(fileName)
@@ -364,6 +368,19 @@ class PlayerActivity : AppCompatActivity() {
       Log.e(TAG, "Error during onPause", e)
     } finally {
       super.onPause()
+    }
+  }
+
+  private fun updatePauseText() {
+    if (isCurrentlyPaused) {
+      pauseText.removeCallbacks(hideRunnable)
+      pauseText.text = "Paused"
+      pauseText.visibility = View.VISIBLE
+    } else {
+      pauseText.removeCallbacks(hideRunnable)
+      pauseText.text = "Resume"
+      pauseText.visibility = View.VISIBLE
+      pauseText.postDelayed(hideRunnable, 1000)
     }
   }
 
@@ -483,6 +500,8 @@ class PlayerActivity : AppCompatActivity() {
 
   private fun pausePlayback() {
     viewModel.pause()
+    isCurrentlyPaused = true
+    updatePauseText()
     window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
   }
 
@@ -775,17 +794,14 @@ class PlayerActivity : AppCompatActivity() {
   private fun handlePauseStateChange(isPaused: Boolean) {
     if (isPaused) {
       window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-      // Show "Paused" text when paused via other means (not tap)
-      pauseText.removeCallbacks(hideRunnable)
-      pauseText.text = "Paused"
-      pauseText.visibility = View.VISIBLE
+      // Update our local state and show "Paused" text
+      isCurrentlyPaused = true
+      updatePauseText()
     } else {
       window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-      // Show "Resume" text briefly when unpaused via other means
-      pauseText.removeCallbacks(hideRunnable)
-      pauseText.text = "Resume"
-      pauseText.visibility = View.VISIBLE
-      pauseText.postDelayed(hideRunnable, 1000)
+      // Update our local state and show "Resume" text briefly
+      isCurrentlyPaused = false
+      updatePauseText()
     }
   }
 
@@ -848,6 +864,8 @@ class PlayerActivity : AppCompatActivity() {
     viewModel.setVideoZoom(defaultZoom)
 
     viewModel.unpause()
+    // Update our local state
+    isCurrentlyPaused = false
   }
 
   // ==================== Playback State Management ====================
@@ -1082,6 +1100,9 @@ class PlayerActivity : AppCompatActivity() {
 
       KeyEvent.KEYCODE_SPACE -> {
         viewModel.pauseUnpause()
+        // Also update our text display for spacebar pause
+        isCurrentlyPaused = !isCurrentlyPaused
+        updatePauseText()
         return true
       }
 
