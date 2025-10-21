@@ -1170,9 +1170,9 @@ class PlayerActivity : AppCompatActivity() {
     private const val RESULT_INTENT = "app.marlboroadvance.mpvex.ui.player.PlayerActivity.result"
 
     // Timing constants
-    private const val PAUSE_DELAY_MS = 100L
-    private const val QUIT_DELAY_MS = 150L
-    private const val OBSERVER_REMOVAL_DELAY_MS = 50L
+    private const val PAUSE_DELAY_MS = 10L
+    private const val QUIT_DELAY_MS = 15L
+    private const val OBSERVER_REMOVAL_DELAY_MS = 5L
 
     // Value constants
     private const val BRIGHTNESS_NOT_SET = -1f
