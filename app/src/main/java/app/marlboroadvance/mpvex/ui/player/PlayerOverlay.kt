@@ -51,44 +51,54 @@ fun PlayerOverlay(
     }
     
     Box(
-        modifier = modifier
-            .fillMaxSize()
-            .clickable(
-                onClick = {
+        modifier = modifier.fillMaxSize()
+    ) {
+        // TEXT LAYER - Below the gesture layer (not clickable)
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(top = 48.dp)
+        ) {
+            // Pause text - stays visible while paused
+            if (showPauseText) {
+                Text(
+                    text = "Pause",
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium
+                    ),
+                    modifier = Modifier.align(Alignment.TopCenter)
+                )
+            }
+            
+            // Resume text - shows briefly when resuming
+            if (showResumeText) {
+                Text(
+                    text = "Resume",
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium
+                    ),
+                    modifier = Modifier.align(Alignment.TopCenter)
+                )
+            }
+        }
+        
+        // GESTURE LAYER - On top (clickable)
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    onClick = {
                     // Direct MPVLib call to toggle pause
                     val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
                     MPVLib.setPropertyBoolean("pause", !currentPaused)
                 }
-            )
-    ) {
-        // Pause text - stays visible while paused
-        if (showPauseText) {
-            Text(
-                text = "Pause",
-                style = TextStyle(
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium
-                ),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 48.dp)
-            )
-        }
-        
-        // Resume text - shows briefly when resuming
-        if (showResumeText) {
-            Text(
-                text = "Resume",
-                style = TextStyle(
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium
-                ),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 48.dp)
-            )
+                )
+        ) {
+            // This layer is just for gestures - no content
         }
     }
 }
