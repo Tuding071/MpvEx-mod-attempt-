@@ -70,9 +70,6 @@ class PlayerActivity : AppCompatActivity() {
   }
   val audioManager by lazy { getSystemService(AUDIO_SERVICE) as AudioManager }
 
-  // Custom Gesture Layer
-  private var customLayer: CustomLayer? = null
-
   // Preferences
   private val playerPreferences: PlayerPreferences by inject()
   private val audioPreferences: AudioPreferences by inject()
@@ -112,11 +109,6 @@ class PlayerActivity : AppCompatActivity() {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     setContentView(binding.root)
-
-    // ADDED: Custom gesture layer
-    customLayer = CustomLayer(this).apply {
-      binding.root.addView(this)
-    }
 
     setupMPV()
     setupAudio()
@@ -208,10 +200,6 @@ class PlayerActivity : AppCompatActivity() {
     Log.d(TAG, "Exiting PlayerActivity")
 
     try {
-      // ADDED: Clean up custom layer
-      customLayer?.cleanup()
-      customLayer = null
-      
       if (isFinishing && !systemUIRestored) {
         restoreSystemUI()
       }
