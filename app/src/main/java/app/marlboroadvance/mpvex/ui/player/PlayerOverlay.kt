@@ -1,7 +1,5 @@
 package app.marlboroadvance.mpvex.ui.player
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -51,15 +49,21 @@ fun PlayerOverlay(
     }
     
     Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(Color.Transparent)
-            .clickable(
-                onClick = {
-                    viewModel.pauseUnpause()
-                }
-            )
+        modifier = modifier.fillMaxSize()
     ) {
+        // Main clickable area with 5% margins (center 90%)
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(30.dp) // This creates ~5% margin on all sides
+                .clickable(
+                    onClick = {
+                        viewModel.pauseUnpause()
+                    }
+                )
+        )
+        
+        // Text overlay - always on top
         // Pause text - stays visible while paused
         if (showPauseText) {
             Text(
@@ -89,42 +93,5 @@ fun PlayerOverlay(
                     .padding(top = 48.dp)
             )
         }
-        
-        // 5% ignore zones - these are non-clickable areas
-        // Top 5% ignore zone
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .fillMaxSize()
-                .background(Color.Transparent)
-                .padding(top = 0.dp, bottom = 95.dp) // Top 5% is non-clickable
-        )
-        
-        // Bottom 5% ignore zone  
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .fillMaxSize()
-                .background(Color.Transparent)
-                .padding(top = 95.dp, bottom = 0.dp) // Bottom 5% is non-clickable
-        )
-        
-        // Left 5% ignore zone
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .fillMaxSize()
-                .background(Color.Transparent)
-                .padding(start = 0.dp, end = 95.dp) // Left 5% is non-clickable
-        )
-        
-        // Right 5% ignore zone
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .fillMaxSize()
-                .background(Color.Transparent)
-                .padding(start = 95.dp, end = 0.dp) // Right 5% is non-clickable
-        )
     }
 }
