@@ -134,24 +134,25 @@ class PlayerActivity : AppCompatActivity() {
     }
     binding.root.addView(gestureLayer)
 
-    // Add pause text - FIXED: Proper top center positioning
+    // FIXED: Proper top center positioning
     pauseText = TextView(this).apply {
       layoutParams = FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams.MATCH_PARENT, // Use MATCH_PARENT for full width
         FrameLayout.LayoutParams.WRAP_CONTENT,
-        FrameLayout.LayoutParams.WRAP_CONTENT
+        Gravity.TOP or Gravity.CENTER_HORIZONTAL // This ensures proper centering
       ).apply {
-        gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-        topMargin = (50 * resources.displayMetrics.density).toInt()
+        topMargin = (100 * resources.displayMetrics.density).toInt() // Increased margin for better visibility
       }
       setTextColor(Color.WHITE)
-      textSize = 18f // Slightly larger for better visibility
+      textSize = 20f // Slightly larger for better visibility
+      gravity = Gravity.CENTER_HORIZONTAL // Center the text within the TextView
       visibility = View.GONE
       setBackgroundColor(Color.argb(150, 0, 0, 0)) // Darker background for better contrast
       setPadding(
         (16 * resources.displayMetrics.density).toInt(),
-        (8 * resources.displayMetrics.density).toInt(),
+        (12 * resources.displayMetrics.density).toInt(),
         (16 * resources.displayMetrics.density).toInt(),
-        (8 * resources.displayMetrics.density).toInt()
+        (12 * resources.displayMetrics.density).toInt()
       )
     }
     binding.root.addView(pauseText)
@@ -182,14 +183,24 @@ class PlayerActivity : AppCompatActivity() {
   }
 
   private fun handleTapGesture() {
+    // Use the same pause logic as from PlayerControls to avoid stutter
+    viewModel.pauseUnpause()
+  }
+
+  private fun updatePauseText(isPaused: Boolean) {
     // Remove any pending hide operations
     pauseText.removeCallbacks(hideRunnable)
     
-    // Toggle pause state via viewModel
-    viewModel.pauseUnpause()
-    
-    // We'll rely on the MPV observer to update the text state
-    // This avoids the stutter by having a single source of truth
+    if (isPaused) {
+      // Show "Paused" text and keep it visible
+      pauseText.text = "Paused"
+      pauseText.visibility = View.VISIBLE
+    } else {
+      // Show "Resume" text briefly then hide
+      pauseText.text = "Resume"
+      pauseText.visibility = View.VISIBLE
+      pauseText.postDelayed(hideRunnable, 1000) // Hide after 1 second
+    }
   }
 
   private fun setupBackPressHandler() {
@@ -776,16 +787,11 @@ class PlayerActivity : AppCompatActivity() {
     if (isPaused) {
       window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
       // Show "Paused" text and keep it visible
-      pauseText.removeCallbacks(hideRunnable)
-      pauseText.text = "Paused"
-      pauseText.visibility = View.VISIBLE
+      updatePauseText(true)
     } else {
       window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
       // Show "Resume" text briefly then hide
-      pauseText.removeCallbacks(hideRunnable)
-      pauseText.text = "Resume"
-      pauseText.visibility = View.VISIBLE
-      pauseText.postDelayed(hideRunnable, 1000) // Hide after 1 second
+      updatePauseText(false)
     }
   }
 
