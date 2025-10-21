@@ -53,6 +53,10 @@ class PlayerViewModel(
     private val audioPreferences: AudioPreferences by inject()
     private val json: Json by inject()
 
+    // Gesture tap tracking
+    private var tapStartTime: Long = 0
+    private var isTapInProgress: Boolean = false
+
     val paused by MPVLib.propBoolean["pause"].collectAsState(viewModelScope)
     val pos by MPVLib.propInt["time-pos"].collectAsState(viewModelScope)
     val duration by MPVLib.propInt["duration"].collectAsState(viewModelScope)
@@ -111,6 +115,55 @@ class PlayerViewModel(
     private var timerJob: Job? = null
     private val _remainingTime = MutableStateFlow(0)
     val remainingTime = _remainingTime.asStateFlow()
+
+    // Gesture tap handling methods
+    fun handleTapStart() {
+        tapStartTime = System.currentTimeMillis()
+        isTapInProgress = true
+        
+        // Use coroutine to check tap duration after 200ms
+        viewModelScope.launch {
+            delay(200)
+            if (isTapInProgress) {
+                // Tap is longer than 200ms, don't trigger pause/resume
+                isTapInProgress = false
+            }
+        }
+    }
+
+    fun handleTapEnd(): Boolean {
+        val tapDuration = System.currentTimeMillis() - tapStartTime
+        isTapInProgress = false
+        
+        // Only trigger pause/resume if tap was less than 200ms
+        if (tapDuration < 200) {
+            pauseUnpause()
+            return true
+        }
+        return false
+    }
+
+    // Alternative single method for complete tap handling
+    fun handleQuickTap(): Boolean {
+        val currentTime = System.currentTimeMillis()
+        val tapDuration = currentTime - tapStartTime
+        
+        if (tapDuration < 200) {
+            pauseUnpause()
+            return true
+        }
+        return false
+    }
+
+    // Simple one-call method for the invisible layer
+    fun handleScreenTap() {
+        val tapTime = System.currentTimeMillis()
+        viewModelScope.launch {
+            // Simulate tap detection with delay
+            delay(10) // Small delay to ensure this is a quick tap
+            pauseUnpause()
+        }
+    }
 
     fun startTimer(seconds: Int) {
         timerJob?.cancel()
