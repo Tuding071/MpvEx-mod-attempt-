@@ -152,14 +152,7 @@ class PlayerActivity : AppCompatActivity() {
   }
 
   private fun setupPlayerControls() {
-    binding.controls.setContent {
-      MpvexTheme {
-        Box(modifier = Modifier.fillMaxSize()) {
-          // Your existing player controls (if any)
-          PlayerControls(
-            viewModel = viewModel,
-            onBackPress = { handleBackPress() }
-          )
+    binding.controls.setContent { /* no UI */ }
           
           // ADD THE OVERLAY - This must be the last element to be on top
           PlayerOverlay(
