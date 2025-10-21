@@ -96,6 +96,7 @@ class PlayerActivity : AppCompatActivity() {
     pauseText.visibility = View.GONE 
     pauseText.text = ""
   }
+  private var isFrameStepping = false
 
   // Receivers and Listeners
   private val noisyReceiver = object : BroadcastReceiver() {
@@ -134,25 +135,27 @@ class PlayerActivity : AppCompatActivity() {
     }
     binding.root.addView(gestureLayer)
 
-    // FIXED: Proper top center positioning
+    // FIXED: Proper top center positioning with outline instead of background
     pauseText = TextView(this).apply {
       layoutParams = FrameLayout.LayoutParams(
-        FrameLayout.LayoutParams.MATCH_PARENT, // Use MATCH_PARENT for full width
         FrameLayout.LayoutParams.WRAP_CONTENT,
-        Gravity.TOP or Gravity.CENTER_HORIZONTAL // This ensures proper centering
+        FrameLayout.LayoutParams.WRAP_CONTENT,
+        Gravity.TOP or Gravity.CENTER_HORIZONTAL
       ).apply {
-        topMargin = (100 * resources.displayMetrics.density).toInt() // Increased margin for better visibility
+        topMargin = (80 * resources.displayMetrics.density).toInt()
       }
       setTextColor(Color.WHITE)
-      textSize = 20f // Slightly larger for better visibility
-      gravity = Gravity.CENTER_HORIZONTAL // Center the text within the TextView
+      textSize = 20f
+      gravity = Gravity.CENTER
       visibility = View.GONE
-      setBackgroundColor(Color.argb(150, 0, 0, 0)) // Darker background for better contrast
+      
+      // Add black outline instead of background
+      setShadowLayer(4f, 0f, 0f, Color.BLACK)
       setPadding(
-        (16 * resources.displayMetrics.density).toInt(),
-        (12 * resources.displayMetrics.density).toInt(),
-        (16 * resources.displayMetrics.density).toInt(),
-        (12 * resources.displayMetrics.density).toInt()
+        (20 * resources.displayMetrics.density).toInt(),
+        (8 * resources.displayMetrics.density).toInt(),
+        (20 * resources.displayMetrics.density).toInt(),
+        (8 * resources.displayMetrics.density).toInt()
       )
     }
     binding.root.addView(pauseText)
@@ -183,8 +186,30 @@ class PlayerActivity : AppCompatActivity() {
   }
 
   private fun handleTapGesture() {
-    // Use the same pause logic as from PlayerControls to avoid stutter
-    viewModel.pauseUnpause()
+    if (isFrameStepping) return
+    
+    lifecycleScope.launch {
+      isFrameStepping = true
+      try {
+        // Use the same approach as frame navigation for smooth pause/unpause
+        val isPaused = MPVLib.getPropertyBoolean("pause") ?: false
+        
+        if (isPaused) {
+          // Resume playback
+          MPVLib.setPropertyBoolean("pause", false)
+          updatePauseText(false)
+        } else {
+          // Pause playback - use frame-step approach for smoothness
+          MPVLib.setPropertyBoolean("pause", true)
+          updatePauseText(true)
+        }
+        
+        // Small delay to prevent rapid toggling
+        kotlinx.coroutines.delay(50)
+      } finally {
+        isFrameStepping = false
+      }
+    }
   }
 
   private fun updatePauseText(isPaused: Boolean) {
