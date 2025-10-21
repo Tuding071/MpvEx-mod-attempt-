@@ -3,6 +3,7 @@ package app.marlboroadvance.mpvex.ui.player
 
 import android.content.Context
 import android.graphics.Color
+import android.util.Log
 import android.view.Gravity
 import android.view.GestureDetector
 import android.view.MotionEvent
@@ -129,9 +130,4 @@ class CustomLayer(context: Context) : FrameLayout(context) {
         scope.cancel()
         pauseText.removeCallbacks(hideRunnable)
     }
-}
-
-// Simple logging
-private fun Log.e(tag: String, message: String, e: Exception? = null) {
-    android.util.Log.e(tag, message, e)
 }
