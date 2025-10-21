@@ -152,17 +152,16 @@ class PlayerActivity : AppCompatActivity() {
   }
 
   private fun setupPlayerControls() {
-    binding.controls.setContent { /* no UI */ }
-          
-          // ADD THE OVERLAY - This must be the last element to be on top
-          PlayerOverlay(
+    binding.controls.setContent {
+        // This is where you define the Composable UI for the controls
+
+        // ADD THE OVERLAY - must be the last element so it's on top
+        PlayerOverlay(
             viewModel = viewModel,
             modifier = Modifier.fillMaxSize()
-          )
-        }
-      }
+        )
     }
-  }
+}
 
   private fun setupPipHelper() {
     pipHelper = MPVPipHelper(
