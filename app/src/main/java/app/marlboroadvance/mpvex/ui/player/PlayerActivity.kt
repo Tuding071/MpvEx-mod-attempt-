@@ -20,6 +20,8 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.core.net.toUri
 import androidx.core.view.WindowCompat
@@ -150,7 +152,23 @@ class PlayerActivity : AppCompatActivity() {
   }
 
   private fun setupPlayerControls() {
-    binding.controls.setContent { /* no UI */ }
+    binding.controls.setContent {
+      MpvexTheme {
+        Box(modifier = Modifier.fillMaxSize()) {
+          // Your existing player controls (if any)
+          PlayerControls(
+            viewModel = viewModel,
+            onBackPress = { handleBackPress() }
+          )
+          
+          // ADD THE OVERLAY - This must be the last element to be on top
+          PlayerOverlay(
+            viewModel = viewModel,
+            modifier = Modifier.fillMaxSize()
+          )
+        }
+      }
+    }
   }
 
   private fun setupPipHelper() {
