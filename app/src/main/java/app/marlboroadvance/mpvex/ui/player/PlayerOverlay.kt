@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.ui.player
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -51,54 +52,46 @@ fun PlayerOverlay(
     }
     
     Box(
-        modifier = modifier.fillMaxSize()
-    ) {
-        // TEXT LAYER - Below the gesture layer (not clickable)
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(top = 48.dp)
-        ) {
-            // Pause text - stays visible while paused
-            if (showPauseText) {
-                Text(
-                    text = "Pause",
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium
-                    ),
-                    modifier = Modifier.align(Alignment.TopCenter)
-                )
-            }
-            
-            // Resume text - shows briefly when resuming
-            if (showResumeText) {
-                Text(
-                    text = "Resume",
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium
-                    ),
-                    modifier = Modifier.align(Alignment.TopCenter)
-                )
-            }
-        }
-        
-        // GESTURE LAYER - On top (clickable)
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clickable(
-                    onClick = {
+        modifier = modifier
+            .fillMaxSize()
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null, // This removes the ripple/black effect
+                onClick = {
                     // Direct MPVLib call to toggle pause
                     val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
                     MPVLib.setPropertyBoolean("pause", !currentPaused)
                 }
-                )
-        ) {
-            // This layer is just for gestures - no content
+            )
+    ) {
+        // Pause text - stays visible while paused
+        if (showPauseText) {
+            Text(
+                text = "PAUSE",
+                style = TextStyle(
+                    color = Color.White,
+                    fontSize = 20.sp, // Larger for visibility
+                    fontWeight = FontWeight.Bold // Bolder for visibility
+                ),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 60.dp)
+            )
+        }
+        
+        // Resume text - shows briefly when resuming
+        if (showResumeText) {
+            Text(
+                text = "RESUME",
+                style = TextStyle(
+                    color = Color.White,
+                    fontSize = 20.sp, // Larger for visibility
+                    fontWeight = FontWeight.Bold // Bolder for visibility
+                ),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 60.dp)
+            )
         }
     }
 }
