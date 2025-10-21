@@ -150,23 +150,8 @@ class PlayerActivity : AppCompatActivity() {
   }
 
   private fun setupPlayerControls() {
-    binding.controls.setContent {
-        MpvexTheme {
-            PlayerControls(
-                modifier = Modifier,
-                viewModel = viewModel,
-                player = player,
-                gestureLayer = {
-                    CustomGestureLayer(
-                        pixelThreshold = 50f,    // Adjust frame step sensitivity
-                        longPressMillis = 300L,  // Adjust 2x speed trigger time
-                        enabled = true
-                    )
-                }
-            )
-        }
-    }
-}
+    binding.controls.setContent { /* no UI */ }
+  }
 
   private fun setupPipHelper() {
     pipHelper = MPVPipHelper(
