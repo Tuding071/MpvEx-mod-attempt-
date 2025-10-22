@@ -1,9 +1,10 @@
 package app.marlboroadvance.mpvex.ui.player
 
-import android.view.MotionEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -15,12 +16,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.gestures.detectTapGestures
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import `is`.xyz.mpv.MPVLib
@@ -34,7 +36,6 @@ fun PlayerOverlay(
     val context = LocalContext.current
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
-    var touchStartTime by remember { mutableStateOf(0L) }
     
     // Update time every 100ms
     LaunchedEffect(Unit) {
@@ -49,54 +50,57 @@ fun PlayerOverlay(
         }
     }
     
-    // Handle long press detection
-    LaunchedEffect(touchStartTime) {
-        if (touchStartTime > 0) {
-            delay(300) // Wait 300ms
-            
-            // If touch is still active after 300ms, it's a long press
-            if (touchStartTime > 0) {
-                MPVLib.setPropertyFloat("speed", 2.0f)
-            }
-        }
-    }
-    
     Box(
-        modifier = modifier
-            .fillMaxSize()
-            .pointerInteropFilter { event ->
-                when (event.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        touchStartTime = System.currentTimeMillis()
-                        true
-                    }
-                    MotionEvent.ACTION_UP -> {
-                        val touchDuration = System.currentTimeMillis() - touchStartTime
-                        
-                        // Reset touch start time
-                        touchStartTime = 0
-                        
-                        if (touchDuration >= 300) {
-                            // Was long press - reset speed to normal
-                            MPVLib.setPropertyFloat("speed", 1.0f)
-                        } else if (touchDuration < 200) {
-                            // Quick tap - toggle pause/resume
+        modifier = modifier.fillMaxSize()
+    ) {
+        // CENTER AREA - Tap for pause/resume (no gestures)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.8f) // 80% width
+                .fillMaxHeight(0.7f) // 70% height  
+                .align(Alignment.Center)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = {
+                            // Simple tap - pause/resume using ViewModel (no glitching)
                             viewModel.pauseUnpause()
                         }
-                        // Between 200-300ms does nothing
-                        true
-                    }
-                    MotionEvent.ACTION_CANCEL -> {
-                        // Safety reset
-                        touchStartTime = 0
-                        MPVLib.setPropertyFloat("speed", 1.0f)
-                        true
-                    }
-                    else -> false
+                    )
                 }
-            }
-    ) {
-        // Current time - bottom left
+        )
+        
+        // BOTTOM 25% + LEFT/RIGHT AREAS - For future gestures (hold, swipe, etc.)
+        // These areas are reserved but currently inactive
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.25f)
+                .align(Alignment.BottomStart)
+        )
+        
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.25f)
+                .fillMaxHeight(0.7f)
+                .align(Alignment.CenterStart)
+        )
+        
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.25f)
+                .fillMaxHeight(0.7f)
+                .align(Alignment.CenterEnd)
+        )
+        
+        // TOP 5% - Ignore area (no gestures)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.05f)
+                .align(Alignment.TopStart)
+        )
+        
+        // Current time - bottom left (moved up more)
         Text(
             text = currentTime,
             style = TextStyle(
@@ -106,12 +110,12 @@ fun PlayerOverlay(
             ),
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 16.dp, bottom = 48.dp)
+                .padding(start = 16.dp, bottom = 60.dp) // Moved up to 60dp
                 .background(Color.Black.copy(alpha = 0.5f))
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         )
         
-        // Total time - bottom right
+        // Total time - bottom right (moved up more)
         Text(
             text = totalTime,
             style = TextStyle(
@@ -121,7 +125,7 @@ fun PlayerOverlay(
             ),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 48.dp)
+                .padding(end = 16.dp, bottom = 60.dp) // Moved up to 60dp
                 .background(Color.Black.copy(alpha = 0.5f))
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         )
