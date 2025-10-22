@@ -106,7 +106,7 @@ fun PlayerOverlay(
                 val absDeltaX = Math.abs(deltaX)
                 
                 // Check if we've moved 12 pixels and not already frame stepping
-                if (absDeltaX >= 12 && !isFrameStepping) {
+                if (absDeltaX >= 18 && !isFrameStepping) {
                     isFrameStepping = true
                     
                     coroutineScope.launch {
@@ -121,7 +121,7 @@ fun PlayerOverlay(
                         MPVLib.command("no-osd", command)
                         
                         // Wait for MPV to render (100ms like in original code)
-                        delay(100)
+                        delay(10)
                         
                         // Update current frame position for next step
                         currentFrameStepX = currentX
@@ -136,7 +136,7 @@ fun PlayerOverlay(
                 // Resume video if it was playing before frame stepping
                 if (wasPlayingBeforeFrameStep) {
                     coroutineScope.launch {
-                        delay(100) // 100ms delay before resuming
+                        delay(10) // 100ms delay before resuming
                         MPVLib.setPropertyBoolean("pause", false)
                     }
                 }
