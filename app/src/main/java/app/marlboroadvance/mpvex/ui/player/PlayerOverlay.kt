@@ -54,8 +54,7 @@ fun PlayerOverlay(
     var lastMoveTime by remember { mutableLongStateOf(0L) }
     var accumulatedDelta by remember { mutableFloatStateOf(0f) }
     var wasPlayingBeforeFrameStep by remember { mutableStateOf(false) }
-    var isFrameStepActive by remember { mutableStateOf(false) }
-    var frameStepJob by remember { mutableStateOf<Job?>(null) }
+    var hasSteppedFrames by remember { mutableStateOf(false) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
@@ -99,64 +98,63 @@ fun PlayerOverlay(
         }
     }
     
-    // Velocity-based frame stepping gesture handler
+    // Ultra-fast velocity-based frame stepping gesture handler
     fun handleFrameStepGesture(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 lastX = event.x
                 lastMoveTime = System.currentTimeMillis()
                 accumulatedDelta = 0f
+                hasSteppedFrames = false
                 
                 // Remember playback state and pause immediately
                 wasPlayingBeforeFrameStep = MPVLib.getPropertyBoolean("pause") == false
                 if (wasPlayingBeforeFrameStep) {
                     MPVLib.setPropertyBoolean("pause", true)
                 }
-                isFrameStepActive = true
-                
-                // Cancel any existing frame step job
-                frameStepJob?.cancel()
                 
                 return true
             }
             
             MotionEvent.ACTION_MOVE -> {
-                if (!isFrameStepActive) return true
-                
                 val currentX = event.x
                 val currentTime = System.currentTimeMillis()
                 
                 val deltaX = currentX - lastX
-                val deltaTime = (currentTime - lastMoveTime).coalesce(1L)
+                val deltaTime = maxOf(currentTime - lastMoveTime, 1L)
                 
                 // Calculate velocity (pixels per millisecond)
-                val velocity = abs(deltaX) / deltaTime
+                val velocity = abs(deltaX) / deltaTime.toFloat()
                 
                 // Accumulate delta
                 accumulatedDelta += deltaX
                 
-                // Threshold is 1 pixel
+                // 1 pixel threshold
                 val threshold = 1f
                 
                 if (abs(accumulatedDelta) >= threshold) {
                     val direction = sign(accumulatedDelta).toInt()
                     
                     // Calculate steps based on velocity (jog-shuttle behavior)
-                    // Higher velocity = more frames per action
+                    // More aggressive scaling for better responsiveness
                     val steps = when {
-                        velocity > 2.0f -> 5  // Very fast swipe
-                        velocity > 1.0f -> 3  // Fast swipe
-                        velocity > 0.5f -> 2  // Medium swipe
-                        else -> 1             // Slow swipe
+                        velocity > 3.0f -> 8   // Very fast swipe
+                        velocity > 1.5f -> 5   // Fast swipe
+                        velocity > 0.8f -> 3   // Medium swipe
+                        velocity > 0.3f -> 2   // Moderate swipe
+                        else -> 1              // Slow drag
                     }
                     
-                    // Execute frame steps directly without delays
+                    // Execute frame steps directly
                     val command = if (direction > 0) "frame-step" else "frame-back-step"
                     
                     // Step multiple frames based on velocity
                     repeat(steps) {
                         MPVLib.command("no-osd", command)
                     }
+                    
+                    // Mark that we've stepped frames
+                    hasSteppedFrames = true
                     
                     // Reset accumulated delta
                     accumulatedDelta = 0f
@@ -170,17 +168,18 @@ fun PlayerOverlay(
             }
             
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                isFrameStepActive = false
-                accumulatedDelta = 0f
-                
-                // Resume playback if it was playing before
-                if (wasPlayingBeforeFrameStep) {
-                    frameStepJob = coroutineScope.launch {
+                // Only resume if video was playing AND we actually stepped frames
+                if (wasPlayingBeforeFrameStep && hasSteppedFrames) {
+                    coroutineScope.launch {
                         delay(100)
                         MPVLib.setPropertyBoolean("pause", false)
-                        wasPlayingBeforeFrameStep = false
                     }
                 }
+                
+                // Reset all state
+                accumulatedDelta = 0f
+                wasPlayingBeforeFrameStep = false
+                hasSteppedFrames = false
                 
                 return true
             }
@@ -297,9 +296,6 @@ fun PlayerOverlay(
         )
     }
 }
-
-// Extension function to prevent division by zero
-private fun Long.coalesce(default: Long): Long = if (this == 0L) default else this
 
 // Function to format time with milliseconds in the requested format
 private fun formatTimeWithMilliseconds(seconds: Double): String {
