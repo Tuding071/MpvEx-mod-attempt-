@@ -38,6 +38,7 @@ fun PlayerOverlay(
     val context = LocalContext.current
     var currentTime by remember { mutableStateOf("00:00\n  00") }
     var totalTime by remember { mutableStateOf("00:00\n  00") }
+    var isSpeedingUp by remember { mutableStateOf(false) }
     
     // Update time every 50ms for smoother milliseconds
     LaunchedEffect(Unit) {
@@ -52,54 +53,101 @@ fun PlayerOverlay(
         }
     }
     
+    // Handle speed transitions with 100ms delay
+    LaunchedEffect(isSpeedingUp) {
+        if (isSpeedingUp) {
+            // 100ms delay before speeding up
+            delay(100)
+            MPVLib.setPropertyFloat("speed", 2.0f)
+        } else {
+            // 100ms delay before returning to normal
+            delay(100)
+            MPVLib.setPropertyFloat("speed", 1.0f)
+        }
+    }
+    
     Box(
         modifier = modifier.fillMaxSize()
     ) {
-        // CENTER AREA - Tap for pause/resume with transparent ripple
+        // CENTER AREA - Tap for pause/resume with 100ms delay
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.6f)
-                .fillMaxHeight(0.6f)
+                .fillMaxWidth(0.7f) // Increased from 60% to 70%
+                .fillMaxHeight(0.7f) // Increased from 60% to 70%
                 .align(Alignment.Center)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
                     onClick = {
-                        viewModel.pauseUnpause()
+                        // 100ms delay to reduce stutter
+                        LaunchedEffect(Unit) {
+                            delay(100)
+                            viewModel.pauseUnpause()
+                        }
                     }
                 )
         )
         
-        // BOTTOM 35% - Hold for 2x speed
+        // BOTTOM 30% - Hold for 2x speed
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.35f)
+                .fillMaxHeight(0.30f) // Changed from 35% to 30%
                 .align(Alignment.BottomStart)
                 .pointerInteropFilter { event ->
-                    handleHoldGesture(event)
+                    when (event.action) {
+                        MotionEvent.ACTION_DOWN -> {
+                            isSpeedingUp = true
+                            true
+                        }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            isSpeedingUp = false
+                            true
+                        }
+                        else -> false
+                    }
                 }
         )
         
-        // LEFT 35% - Hold for 2x speed
+        // LEFT 30% - Hold for 2x speed
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.35f)
-                .fillMaxHeight(0.6f)
+                .fillMaxWidth(0.30f) // Changed from 35% to 30%
+                .fillMaxHeight(0.7f) // Increased from 60% to 70%
                 .align(Alignment.CenterStart)
                 .pointerInteropFilter { event ->
-                    handleHoldGesture(event)
+                    when (event.action) {
+                        MotionEvent.ACTION_DOWN -> {
+                            isSpeedingUp = true
+                            true
+                        }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            isSpeedingUp = false
+                            true
+                        }
+                        else -> false
+                    }
                 }
         )
         
-        // RIGHT 35% - Hold for 2x speed
+        // RIGHT 30% - Hold for 2x speed
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.35f)
-                .fillMaxHeight(0.6f)
+                .fillMaxWidth(0.30f) // Changed from 35% to 30%
+                .fillMaxHeight(0.7f) // Increased from 60% to 70%
                 .align(Alignment.CenterEnd)
                 .pointerInteropFilter { event ->
-                    handleHoldGesture(event)
+                    when (event.action) {
+                        MotionEvent.ACTION_DOWN -> {
+                            isSpeedingUp = true
+                            true
+                        }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            isSpeedingUp = false
+                            true
+                        }
+                        else -> false
+                    }
                 }
         )
         
@@ -142,25 +190,6 @@ fun PlayerOverlay(
                 .background(Color.Black.copy(alpha = 0.5f))
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         )
-    }
-}
-
-// Handle hold gesture for 2x speed
-private fun handleHoldGesture(event: MotionEvent): Boolean {
-    return when (event.action) {
-        MotionEvent.ACTION_DOWN -> {
-            // Start a coroutine to detect long press
-            // In a real implementation, we'd use a state variable
-            // For now, we'll set speed immediately for testing
-            MPVLib.setPropertyFloat("speed", 2.0f)
-            true
-        }
-        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-            // Reset speed when finger is released
-            MPVLib.setPropertyFloat("speed", 1.0f)
-            true
-        }
-        else -> false
     }
 }
 
