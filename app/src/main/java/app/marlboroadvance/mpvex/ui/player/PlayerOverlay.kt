@@ -35,6 +35,16 @@ fun PlayerOverlay(
     val context = LocalContext.current
     var currentTime by remember { mutableStateOf("00:00\n  00") }
     var totalTime by remember { mutableStateOf("00:00\n  00") }
+    var pendingResume by remember { mutableStateOf(false) }
+    
+    // Handle delayed resume
+    LaunchedEffect(pendingResume) {
+        if (pendingResume) {
+            delay(200) // 200ms delay before resuming
+            viewModel.pauseUnpause()
+            pendingResume = false
+        }
+    }
     
     // Update time every 50ms for smoother milliseconds
     LaunchedEffect(Unit) {
@@ -65,15 +75,10 @@ fun PlayerOverlay(
                             val wasPaused = MPVLib.getPropertyBoolean("pause") ?: false
                             
                             if (wasPaused) {
-                                // Currently paused - about to resume
-                                // Add 200ms delay before resuming
-                                LaunchedEffect(Unit) {
-                                    delay(200)
-                                    viewModel.pauseUnpause()
-                                }
+                                // Currently paused - about to resume with delay
+                                pendingResume = true
                             } else {
-                                // Currently playing - about to pause
-                                // No delay for pause - instant response
+                                // Currently playing - about to pause (instant)
                                 viewModel.pauseUnpause()
                             }
                         }
