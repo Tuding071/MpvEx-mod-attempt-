@@ -33,6 +33,8 @@ fun PlayerOverlay(
     val context = LocalContext.current
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
+    var isTouching by remember { mutableStateOf(false) }
+    var touchStartTime by remember { mutableStateOf(0L) }
     
     // Update time every 100ms
     LaunchedEffect(Unit) {
@@ -47,6 +49,35 @@ fun PlayerOverlay(
         }
     }
     
+    // Handle speed control in real-time
+    LaunchedEffect(isTouching, touchStartTime) {
+        if (isTouching) {
+            val startTime = touchStartTime
+            
+            // Check every 50ms for long press
+            while (isTouching) {
+                val touchDuration = System.currentTimeMillis() - startTime
+                
+                if (touchDuration >= 300) {
+                    // Long press detected - set speed to 2x
+                    MPVLib.setPropertyFloat("speed", 2.0f)
+                }
+                
+                delay(50) // Check every 50ms
+            }
+            
+            // Touch ended - reset speed to normal
+            MPVLib.setPropertyFloat("speed", 1.0f)
+            
+            // Check if it was a quick tap (<200ms)
+            val finalDuration = System.currentTimeMillis() - startTime
+            if (finalDuration < 200) {
+                // Quick tap - toggle pause/resume
+                viewModel.pauseUnpause()
+            }
+        }
+    }
+    
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -56,37 +87,13 @@ fun PlayerOverlay(
                         val event = awaitPointerEvent()
                         val pressed = event.changes.any { it.pressed }
                         
-                        if (pressed) {
-                            val startTime = System.currentTimeMillis()
-                            var isLongPress = false
-                            
-                            // Wait for press to be released or 300ms for long press
-                            while (event.changes.any { it.pressed }) {
-                                val currentDuration = System.currentTimeMillis() - startTime
-                                
-                                if (currentDuration >= 300 && !isLongPress) {
-                                    // Long press detected - speed up to 2x
-                                    isLongPress = true
-                                    MPVLib.setPropertyFloat("speed", 2.0f)
-                                }
-                                
-                                // Small delay to prevent busy waiting
-                                awaitPointerEvent()
-                            }
-                            
-                            // Press released
-                            if (isLongPress) {
-                                // Was long press - reset speed
-                                MPVLib.setPropertyFloat("speed", 1.0f)
-                            } else {
-                                // Check if it was a quick tap (<200ms)
-                                val pressDuration = System.currentTimeMillis() - startTime
-                                if (pressDuration < 200) {
-                                    // Quick tap - toggle pause/resume
-                                    viewModel.pauseUnpause()
-                                }
-                                // Between 200-300ms does nothing
-                            }
+                        if (pressed && !isTouching) {
+                            // Touch started
+                            isTouching = true
+                            touchStartTime = System.currentTimeMillis()
+                        } else if (!pressed && isTouching) {
+                            // Touch ended
+                            isTouching = false
                         }
                     }
                 }
