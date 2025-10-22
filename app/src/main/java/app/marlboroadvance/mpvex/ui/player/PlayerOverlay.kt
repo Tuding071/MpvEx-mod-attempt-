@@ -69,7 +69,7 @@ fun PlayerOverlay(
             totalTime = formatTimeWithMilliseconds(duration)
             
             // Update frame info
-            viewModel.currentOnUpdateFrameInfo()
+            viewModel.updateFrameInfo()
             
             delay(50)
         }
