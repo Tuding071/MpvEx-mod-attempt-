@@ -52,11 +52,10 @@ fun PlayerOverlay(
             .fillMaxSize()
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
-                indication = null,
+                indication = null, // Keep it null for now to test if glitching stops
                 onClick = {
-                    // Direct MPVLib call to toggle pause
-                    val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
-                    MPVLib.setPropertyBoolean("pause", !currentPaused)
+                    // Use ViewModel instead of direct MPVLib to avoid timing issues
+                    viewModel.pauseUnpause()
                 }
             )
     ) {
