@@ -16,12 +16,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.gestures.detectTapGestures
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.Utils
 
@@ -33,24 +36,11 @@ fun PlayerOverlay(
     val context = LocalContext.current
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
-    var showResumeText by remember { mutableStateOf(false) }
-    
-    // Track pause state from ViewModel
-    val isPaused = viewModel.paused ?: false
-    
-    // Handle resume text display
-    LaunchedEffect(isPaused) {
-        if (!isPaused && showResumeText == false) {
-            // Just resumed - show resume text for 1 second
-            showResumeText = true
-            delay(1000)
-            showResumeText = false
-        }
-    }
+    var isSpeedBoost by remember { mutableStateOf(false) }
     
     // Update time every 100ms
     LaunchedEffect(Unit) {
-        while (true) {
+        while (isActive) {
             val currentPos = MPVLib.getPropertyInt("time-pos") ?: 0
             val duration = MPVLib.getPropertyInt("duration") ?: 0
             
@@ -64,45 +54,63 @@ fun PlayerOverlay(
     Box(
         modifier = modifier
             .fillMaxSize()
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onPress = { 
+                        // Start tracking press duration
+                        val startTime = System.currentTimeMillis()
+                        val wasPressed = tryAwaitRelease()
+                        
+                        if (wasPressed) {
+                            val pressDuration = System.currentTimeMillis() - startTime
+                            
+                            if (pressDuration > 300) {
+                                // Long press (hold) - speed up
+                                isSpeedBoost = true
+                                MPVLib.setPropertyFloat("speed", 2.0f)
+                            } else {
+                                // Short tap - toggle pause
+                                viewModel.pauseUnpause()
+                            }
+                        }
+                    },
+                    onTap = {
+                        // This handles quick taps (fallback)
+                        if (!isSpeedBoost) {
+                            viewModel.pauseUnpause()
+                        }
+                    }
+                )
+            }
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
                 onClick = {
-                    viewModel.pauseUnpause()
+                    // Fallback for simple clicks
+                    if (!isSpeedBoost) {
+                        viewModel.pauseUnpause()
+                    }
                 }
             )
     ) {
-        // PAUSE TEXT - Top center (visible only when paused)
-        Text(
-            text = "Pause",
-            style = TextStyle(
-                color = Color.White.copy(alpha = if (isPaused) 1f else 0f), // Visible when paused
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Medium
-            ),
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 48.dp)
-                .background(Color.Black.copy(alpha = if (isPaused) 0.5f else 0f)) // Background only when visible
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-        )
+        // Speed boost indicator - top center (visible when speed is 2x)
+        if (isSpeedBoost) {
+            Text(
+                text = "2x",
+                style = TextStyle(
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                ),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 48.dp)
+                    .background(Color.Red.copy(alpha = 0.7f))
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+        }
         
-        // RESUME TEXT - Top center (visible for 1 second after resuming)
-        Text(
-            text = "Resume",
-            style = TextStyle(
-                color = Color.White.copy(alpha = if (showResumeText) 1f else 0f), // Visible for 1 second after resume
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Medium
-            ),
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 48.dp)
-                .background(Color.Black.copy(alpha = if (showResumeText) 0.5f else 0f)) // Background only when visible
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-        )
-        
-        // Current time - bottom left
+        // Current time - bottom left (moved up a bit)
         Text(
             text = currentTime,
             style = TextStyle(
@@ -112,12 +120,12 @@ fun PlayerOverlay(
             ),
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 16.dp, bottom = 16.dp)
+                .padding(start = 16.dp, bottom = 32.dp) // Moved up from 16dp to 32dp
                 .background(Color.Black.copy(alpha = 0.5f))
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         )
         
-        // Total time - bottom right
+        // Total time - bottom right (moved up a bit)
         Text(
             text = totalTime,
             style = TextStyle(
@@ -127,9 +135,29 @@ fun PlayerOverlay(
             ),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 16.dp)
+                .padding(end = 16.dp, bottom = 32.dp) // Moved up from 16dp to 32dp
                 .background(Color.Black.copy(alpha = 0.5f))
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         )
+    }
+    
+    // Handle speed boost reset when finger is lifted
+    LaunchedEffect(isSpeedBoost) {
+        if (isSpeedBoost) {
+            // Wait for speed boost to end
+            while (isSpeedBoost) {
+                delay(100)
+            }
+            // Reset speed to normal
+            MPVLib.setPropertyFloat("speed", 1.0f)
+        }
+    }
+}
+
+// Reset speed boost when touch ends
+private suspend fun resetSpeedBoost(isSpeedBoost: Boolean, onReset: () -> Unit) {
+    if (isSpeedBoost) {
+        delay(100)
+        onReset()
     }
 }
