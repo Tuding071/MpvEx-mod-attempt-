@@ -36,7 +36,7 @@ fun PlayerOverlay(
     var currentTime by remember { mutableStateOf("00:00\n  00") }
     var totalTime by remember { mutableStateOf("00:00\n  00") }
     
-    // Update time as fast as possible without delay
+    // Update time every 50ms for smoother milliseconds
     LaunchedEffect(Unit) {
         while (isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
@@ -45,8 +45,7 @@ fun PlayerOverlay(
             currentTime = formatTimeWithMilliseconds(currentPos)
             totalTime = formatTimeWithMilliseconds(duration)
             
-            // No delay - let the coroutine yield naturally
-            // This will update as fast as the UI can handle without blocking
+            delay(50) // Faster update for milliseconds
         }
     }
     
@@ -62,8 +61,21 @@ fun PlayerOverlay(
                 .pointerInput(Unit) {
                     detectTapGestures(
                         onTap = {
-                            // Simple tap - pause/resume using ViewModel (no glitching)
-                            viewModel.pauseUnpause()
+                            // Check current state before toggling
+                            val wasPaused = MPVLib.getPropertyBoolean("pause") ?: false
+                            
+                            if (wasPaused) {
+                                // Currently paused - about to resume
+                                // Add 200ms delay before resuming
+                                LaunchedEffect(Unit) {
+                                    delay(200)
+                                    viewModel.pauseUnpause()
+                                }
+                            } else {
+                                // Currently playing - about to pause
+                                // No delay for pause - instant response
+                                viewModel.pauseUnpause()
+                            }
                         }
                     )
                 }
