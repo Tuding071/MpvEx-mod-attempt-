@@ -22,11 +22,10 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.gestures.detectTapGestures
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import `is`.xyz.mpv.MPVLib
-import `is`.xyz.mpv.Utils
+import androidx.compose.foundation.gestures.detectTapGestures
 
 @Composable
 fun PlayerOverlay(
@@ -34,19 +33,19 @@ fun PlayerOverlay(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var currentTime by remember { mutableStateOf("00:00") }
-    var totalTime by remember { mutableStateOf("00:00") }
+    var currentTime by remember { mutableStateOf("00:00\n  00") }
+    var totalTime by remember { mutableStateOf("00:00\n  00") }
     
-    // Update time every 100ms
+    // Update time every 50ms for smoother milliseconds
     LaunchedEffect(Unit) {
         while (isActive) {
-            val currentPos = MPVLib.getPropertyInt("time-pos") ?: 0
-            val duration = MPVLib.getPropertyInt("duration") ?: 0
+            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+            val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
             
-            currentTime = Utils.prettyTime(currentPos)
-            totalTime = Utils.prettyTime(duration)
+            currentTime = formatTimeWithMilliseconds(currentPos)
+            totalTime = formatTimeWithMilliseconds(duration)
             
-            delay(100)
+            delay(50) // Faster update for milliseconds
         }
     }
     
@@ -56,8 +55,8 @@ fun PlayerOverlay(
         // CENTER AREA - Tap for pause/resume (no gestures)
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.8f) // 80% width
-                .fillMaxHeight(0.7f) // 70% height  
+                .fillMaxWidth(0.6f) // 60% width (reduced from 80%)
+                .fillMaxHeight(0.6f) // 60% height (reduced from 70%)  
                 .align(Alignment.Center)
                 .pointerInput(Unit) {
                     detectTapGestures(
@@ -69,26 +68,27 @@ fun PlayerOverlay(
                 }
         )
         
-        // BOTTOM 25% + LEFT/RIGHT AREAS - For future gestures (hold, swipe, etc.)
-        // These areas are reserved but currently inactive
+        // BOTTOM 35% - For future gestures (hold, swipe, etc.)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.25f)
+                .fillMaxHeight(0.35f)
                 .align(Alignment.BottomStart)
         )
         
+        // LEFT 35% - For future gestures
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.25f)
-                .fillMaxHeight(0.7f)
+                .fillMaxWidth(0.35f)
+                .fillMaxHeight(0.6f)
                 .align(Alignment.CenterStart)
         )
         
+        // RIGHT 35% - For future gestures
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.25f)
-                .fillMaxHeight(0.7f)
+                .fillMaxWidth(0.35f)
+                .fillMaxHeight(0.6f)
                 .align(Alignment.CenterEnd)
         )
         
@@ -105,12 +105,13 @@ fun PlayerOverlay(
             text = currentTime,
             style = TextStyle(
                 color = Color.White,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium
+                fontSize = 12.sp, // Smaller font for two lines
+                fontWeight = FontWeight.Medium,
+                lineHeight = 14.sp
             ),
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 16.dp, bottom = 60.dp) // Moved up to 60dp
+                .padding(start = 16.dp, bottom = 70.dp) // Moved up to 70dp
                 .background(Color.Black.copy(alpha = 0.5f))
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         )
@@ -120,14 +121,38 @@ fun PlayerOverlay(
             text = totalTime,
             style = TextStyle(
                 color = Color.White,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium
+                fontSize = 12.sp, // Smaller font for two lines
+                fontWeight = FontWeight.Medium,
+                lineHeight = 14.sp
             ),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 60.dp) // Moved up to 60dp
+                .padding(end = 16.dp, bottom = 70.dp) // Moved up to 70dp
                 .background(Color.Black.copy(alpha = 0.5f))
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         )
+    }
+}
+
+// Function to format time with milliseconds in the requested format
+private fun formatTimeWithMilliseconds(seconds: Double): String {
+    val totalSeconds = seconds.toInt()
+    val milliseconds = ((seconds - totalSeconds) * 100).toInt()
+    
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val secs = totalSeconds % 60
+    
+    return if (hours > 0) {
+        // With hours: 
+        //   HHH
+        // MM:SS
+        //   MS
+        String.format("%3d\n%02d:%02d\n%3d", hours, minutes, secs, milliseconds)
+    } else {
+        // Without hours:
+        // MM:SS
+        //   MS
+        String.format("%02d:%02d\n%3d", minutes, secs, milliseconds)
     }
 }
