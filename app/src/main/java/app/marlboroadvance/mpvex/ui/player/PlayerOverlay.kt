@@ -39,6 +39,7 @@ fun PlayerOverlay(
     var currentTime by remember { mutableStateOf("00:00\n  00") }
     var totalTime by remember { mutableStateOf("00:00\n  00") }
     var isSpeedingUp by remember { mutableStateOf(false) }
+    var pendingPauseResume by remember { mutableStateOf(false) }
     
     // Update time every 50ms for smoother milliseconds
     LaunchedEffect(Unit) {
@@ -66,24 +67,29 @@ fun PlayerOverlay(
         }
     }
     
+    // Handle pause/resume with 100ms delay
+    LaunchedEffect(pendingPauseResume) {
+        if (pendingPauseResume) {
+            delay(100)
+            viewModel.pauseUnpause()
+            pendingPauseResume = false
+        }
+    }
+    
     Box(
         modifier = modifier.fillMaxSize()
     ) {
         // CENTER AREA - Tap for pause/resume with 100ms delay
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.7f) // Increased from 60% to 70%
-                .fillMaxHeight(0.7f) // Increased from 60% to 70%
+                .fillMaxWidth(0.7f)
+                .fillMaxHeight(0.7f)
                 .align(Alignment.Center)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
                     onClick = {
-                        // 100ms delay to reduce stutter
-                        LaunchedEffect(Unit) {
-                            delay(100)
-                            viewModel.pauseUnpause()
-                        }
+                        pendingPauseResume = true
                     }
                 )
         )
@@ -92,7 +98,7 @@ fun PlayerOverlay(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.30f) // Changed from 35% to 30%
+                .fillMaxHeight(0.30f)
                 .align(Alignment.BottomStart)
                 .pointerInteropFilter { event ->
                     when (event.action) {
@@ -112,8 +118,8 @@ fun PlayerOverlay(
         // LEFT 30% - Hold for 2x speed
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.30f) // Changed from 35% to 30%
-                .fillMaxHeight(0.7f) // Increased from 60% to 70%
+                .fillMaxWidth(0.30f)
+                .fillMaxHeight(0.7f)
                 .align(Alignment.CenterStart)
                 .pointerInteropFilter { event ->
                     when (event.action) {
@@ -133,8 +139,8 @@ fun PlayerOverlay(
         // RIGHT 30% - Hold for 2x speed
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.30f) // Changed from 35% to 30%
-                .fillMaxHeight(0.7f) // Increased from 60% to 70%
+                .fillMaxWidth(0.30f)
+                .fillMaxHeight(0.7f)
                 .align(Alignment.CenterEnd)
                 .pointerInteropFilter { event ->
                     when (event.action) {
