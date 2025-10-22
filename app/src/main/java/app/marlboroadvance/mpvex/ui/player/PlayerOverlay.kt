@@ -36,7 +36,7 @@ fun PlayerOverlay(
     var currentTime by remember { mutableStateOf("00:00\n  00") }
     var totalTime by remember { mutableStateOf("00:00\n  00") }
     
-    // Update time every 50ms for smoother milliseconds
+    // Update time as fast as possible without delay
     LaunchedEffect(Unit) {
         while (isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
@@ -45,7 +45,8 @@ fun PlayerOverlay(
             currentTime = formatTimeWithMilliseconds(currentPos)
             totalTime = formatTimeWithMilliseconds(duration)
             
-            delay(50) // Faster update for milliseconds
+            // No delay - let the coroutine yield naturally
+            // This will update as fast as the UI can handle without blocking
         }
     }
     
