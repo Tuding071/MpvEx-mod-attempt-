@@ -34,6 +34,7 @@ fun PlayerOverlay(
     val context = LocalContext.current
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
+    var touchStartTime by remember { mutableStateOf(0L) }
     
     // Update time every 100ms
     LaunchedEffect(Unit) {
@@ -48,29 +49,32 @@ fun PlayerOverlay(
         }
     }
     
+    // Handle long press detection
+    LaunchedEffect(touchStartTime) {
+        if (touchStartTime > 0) {
+            delay(300) // Wait 300ms
+            
+            // If touch is still active after 300ms, it's a long press
+            if (touchStartTime > 0) {
+                MPVLib.setPropertyFloat("speed", 2.0f)
+            }
+        }
+    }
+    
     Box(
         modifier = modifier
             .fillMaxSize()
             .pointerInteropFilter { event ->
                 when (event.action) {
                     MotionEvent.ACTION_DOWN -> {
-                        // Start a coroutine to handle the timing
-                        LaunchedEffect(Unit) {
-                            val startTime = System.currentTimeMillis()
-                            
-                            // Wait for either release or 300ms
-                            delay(300)
-                            
-                            // If we get here and finger is still down, it's a long press
-                            if (System.currentTimeMillis() - startTime >= 300) {
-                                // Long press detected - set speed to 2x
-                                MPVLib.setPropertyFloat("speed", 2.0f)
-                            }
-                        }
+                        touchStartTime = System.currentTimeMillis()
                         true
                     }
                     MotionEvent.ACTION_UP -> {
-                        val touchDuration = System.currentTimeMillis() - event.downTime
+                        val touchDuration = System.currentTimeMillis() - touchStartTime
+                        
+                        // Reset touch start time
+                        touchStartTime = 0
                         
                         if (touchDuration >= 300) {
                             // Was long press - reset speed to normal
@@ -83,7 +87,8 @@ fun PlayerOverlay(
                         true
                     }
                     MotionEvent.ACTION_CANCEL -> {
-                        // Safety reset if touch is cancelled
+                        // Safety reset
+                        touchStartTime = 0
                         MPVLib.setPropertyFloat("speed", 1.0f)
                         true
                     }
