@@ -59,78 +59,89 @@ fun PlayerOverlay(
     }
     
     Box(
-        modifier = modifier
-            .fillMaxSize()
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = {
-                    // Use ViewModel for better state management
-                    viewModel.pauseUnpause()
-                    debugText = "Tapped! isPaused was: ${viewModel.paused}"
-                }
-            )
+        modifier = modifier.fillMaxSize()
     ) {
-        // DEBUG TEXT - Always visible to see what's happening
-        Text(
-            text = debugText,
-            style = TextStyle(
-                color = Color.Red, // Bright red for visibility
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold
-            ),
+        // GESTURE LAYER - Full screen clickable area (on bottom)
+        Box(
             modifier = Modifier
-                .align(Alignment.TopStart)
-                .background(Color.Black.copy(alpha = 0.7f))
-                .padding(8.dp)
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {
+                        // Use ViewModel for better state management
+                        viewModel.pauseUnpause()
+                        debugText = "Tapped! isPaused was: ${viewModel.paused}"
+                    }
+                )
         )
         
-        // Pause text with very visible background for debugging
-        if (showPauseText) {
+        // TEXT LAYER - On top, NOT clickable
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+        ) {
+            // DEBUG TEXT - Always visible to see what's happening
             Text(
-                text = "PAUSE",
+                text = debugText,
                 style = TextStyle(
-                    color = Color.White,
-                    fontSize = 24.sp, // Even larger
+                    color = Color.Red, // Bright red for visibility
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.Bold
                 ),
                 modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 80.dp)
-                    .background(Color.Red.copy(alpha = 0.8f)) // Bright red background for debugging
-                    .padding(horizontal = 20.dp, vertical = 12.dp)
+                    .align(Alignment.TopStart)
+                    .background(Color.Black.copy(alpha = 0.7f))
+                    .padding(8.dp)
             )
-        }
-        
-        // Resume text with very visible background for debugging
-        if (showResumeText) {
+            
+            // Pause text with very visible background for debugging
+            if (showPauseText) {
+                Text(
+                    text = "PAUSE",
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 24.sp, // Even larger
+                        fontWeight = FontWeight.Bold
+                    ),
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 80.dp)
+                        .background(Color.Red.copy(alpha = 0.8f)) // Bright red background for debugging
+                        .padding(horizontal = 20.dp, vertical = 12.dp)
+                )
+            }
+            
+            // Resume text with very visible background for debugging
+            if (showResumeText) {
+                Text(
+                    text = "RESUME",
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 24.sp, // Even larger
+                        fontWeight = FontWeight.Bold
+                    ),
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 80.dp)
+                        .background(Color.Green.copy(alpha = 0.8f)) // Bright green background for debugging
+                        .padding(horizontal = 20.dp, vertical = 12.dp)
+                )
+            }
+            
+            // Additional debug info
             Text(
-                text = "RESUME",
+                text = "Paused: $isPaused\nShowPause: $showPauseText\nShowResume: $showResumeText",
                 style = TextStyle(
-                    color = Color.White,
-                    fontSize = 24.sp, // Even larger
-                    fontWeight = FontWeight.Bold
+                    color = Color.Yellow,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Normal
                 ),
                 modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 80.dp)
-                    .background(Color.Green.copy(alpha = 0.8f)) // Bright green background for debugging
-                    .padding(horizontal = 20.dp, vertical = 12.dp)
+                    .align(Alignment.BottomStart)
+                    .background(Color.Black.copy(alpha = 0.7f))
+                    .padding(8.dp)
             )
         }
-        
-        // Additional debug info
-        Text(
-            text = "Paused: $isPaused\nShowPause: $showPauseText\nShowResume: $showResumeText",
-            style = TextStyle(
-                color = Color.Yellow,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Normal
-            ),
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .background(Color.Black.copy(alpha = 0.7f))
-                .padding(8.dp)
-        )
     }
 }
