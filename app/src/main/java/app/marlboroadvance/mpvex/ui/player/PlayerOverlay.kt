@@ -1,10 +1,12 @@
 package app.marlboroadvance.mpvex.ui.player
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -53,10 +55,10 @@ fun PlayerOverlay(
     
     Box(
         modifier = modifier
-            .fillMaxSize()
+            .fillMaxWidth()
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
-                indication = null, // This removes the ripple/black effect
+                indication = null,
                 onClick = {
                     // Direct MPVLib call to toggle pause
                     val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
@@ -64,34 +66,46 @@ fun PlayerOverlay(
                 }
             )
     ) {
-        // Pause text - stays visible while paused
+        // Pause text with transparent padding
         if (showPauseText) {
-            Text(
-                text = "PAUSE",
-                style = TextStyle(
-                    color = Color.White,
-                    fontSize = 20.sp, // Larger for visibility
-                    fontWeight = FontWeight.Bold // Bolder for visibility
-                ),
+            Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .padding(top = 60.dp)
-            )
+            ) {
+                Text(
+                    text = "PAUSE",
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    modifier = Modifier
+                        .background(Color.Black.copy(alpha = 0.3f)) // Very subtle dark background
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
         }
         
-        // Resume text - shows briefly when resuming
+        // Resume text with transparent padding
         if (showResumeText) {
-            Text(
-                text = "RESUME",
-                style = TextStyle(
-                    color = Color.White,
-                    fontSize = 20.sp, // Larger for visibility
-                    fontWeight = FontWeight.Bold // Bolder for visibility
-                ),
+            Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .padding(top = 60.dp)
-            )
+            ) {
+                Text(
+                    text = "RESUME",
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    modifier = Modifier
+                        .background(Color.Black.copy(alpha = 0.3f)) // Very subtle dark background
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
         }
     }
 }
