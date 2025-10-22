@@ -59,7 +59,7 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // Update time every 50ms for smoother milliseconds
+    // Update time and frame info every 50ms
     LaunchedEffect(Unit) {
         while (isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
@@ -67,6 +67,9 @@ fun PlayerOverlay(
             
             currentTime = formatTimeWithMilliseconds(currentPos)
             totalTime = formatTimeWithMilliseconds(duration)
+            
+            // Update frame info
+            viewModel.currentOnUpdateFrameInfo()
             
             delay(50)
         }
@@ -132,8 +135,8 @@ fun PlayerOverlay(
                 // Accumulate delta
                 accumulatedDelta += deltaX
                 
-                // Threshold is 3 pixels
-                val threshold = 3f
+                // Threshold is 1 pixel
+                val threshold = 1f
                 
                 if (abs(accumulatedDelta) >= threshold) {
                     val direction = sign(accumulatedDelta).toInt()
