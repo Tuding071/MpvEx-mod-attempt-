@@ -33,6 +33,20 @@ fun PlayerOverlay(
     val context = LocalContext.current
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
+    var showResumeText by remember { mutableStateOf(false) }
+    
+    // Track pause state from ViewModel
+    val isPaused = viewModel.paused ?: false
+    
+    // Handle resume text display
+    LaunchedEffect(isPaused) {
+        if (!isPaused && showResumeText == false) {
+            // Just resumed - show resume text for 1 second
+            showResumeText = true
+            delay(1000)
+            showResumeText = false
+        }
+    }
     
     // Update time every 100ms
     LaunchedEffect(Unit) {
@@ -52,13 +66,42 @@ fun PlayerOverlay(
             .fillMaxSize()
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
-                indication = null, // Keep it null for now to test if glitching stops
+                indication = null,
                 onClick = {
-                    // Use ViewModel instead of direct MPVLib to avoid timing issues
                     viewModel.pauseUnpause()
                 }
             )
     ) {
+        // PAUSE TEXT - Top center (visible only when paused)
+        Text(
+            text = "Pause",
+            style = TextStyle(
+                color = Color.White.copy(alpha = if (isPaused) 1f else 0f), // Visible when paused
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Medium
+            ),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 48.dp)
+                .background(Color.Black.copy(alpha = if (isPaused) 0.5f else 0f)) // Background only when visible
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        )
+        
+        // RESUME TEXT - Top center (visible for 1 second after resuming)
+        Text(
+            text = "Resume",
+            style = TextStyle(
+                color = Color.White.copy(alpha = if (showResumeText) 1f else 0f), // Visible for 1 second after resume
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Medium
+            ),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 48.dp)
+                .background(Color.Black.copy(alpha = if (showResumeText) 0.5f else 0f)) // Background only when visible
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        )
+        
         // Current time - bottom left
         Text(
             text = currentTime,
