@@ -1,6 +1,5 @@
 package app.marlboroadvance.mpvex.ui.player
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
@@ -23,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import `is`.xyz.mpv.MPVLib
+import `is`.xyz.mpv.Utils
 
 @Composable
 fun PlayerOverlay(
@@ -30,118 +30,63 @@ fun PlayerOverlay(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var showPauseText by remember { mutableStateOf(false) }
-    var showResumeText by remember { mutableStateOf(false) }
-    var debugText by remember { mutableStateOf("Debug: No state") }
+    var currentTime by remember { mutableStateOf("00:00") }
+    var totalTime by remember { mutableStateOf("00:00") }
     
-    // Use ViewModel's paused state instead of direct MPVLib for better timing
-    val isPaused = viewModel.paused ?: false
-    
-    // Handle pause state changes
-    LaunchedEffect(isPaused) {
-        debugText = "LaunchedEffect: isPaused = $isPaused"
-        
-        if (isPaused) {
-            showPauseText = true
-            showResumeText = false
-            debugText = "SHOWING PAUSE TEXT"
-        } else {
-            if (showPauseText) { // Only show resume if we were previously showing pause
-                showPauseText = false
-                showResumeText = true
-                debugText = "SHOWING RESUME TEXT"
-                // Hide resume text after 1 second
-                delay(1000)
-                showResumeText = false
-                debugText = "HIDING RESUME TEXT"
-            }
+    // Update time every 100ms
+    LaunchedEffect(Unit) {
+        while (true) {
+            val currentPos = MPVLib.getPropertyInt("time-pos") ?: 0
+            val duration = MPVLib.getPropertyInt("duration") ?: 0
+            
+            currentTime = Utils.prettyTime(currentPos)
+            totalTime = Utils.prettyTime(duration)
+            
+            delay(100) // Update every 100ms
         }
     }
     
     Box(
-        modifier = modifier.fillMaxSize()
+        modifier = modifier
+            .fillMaxSize()
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {
+                    // Direct MPVLib call to toggle pause
+                    val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
+                    MPVLib.setPropertyBoolean("pause", !currentPaused)
+                }
+            )
     ) {
-        // GESTURE LAYER - Full screen clickable area (on bottom)
-        Box(
+        // Current time - bottom left
+        Text(
+            text = currentTime,
+            style = TextStyle(
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            ),
             modifier = Modifier
-                .fillMaxSize()
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = {
-                        // Use ViewModel for better state management
-                        viewModel.pauseUnpause()
-                        debugText = "Tapped! isPaused was: ${viewModel.paused}"
-                    }
-                )
+                .align(Alignment.BottomStart)
+                .padding(start = 16.dp, bottom = 16.dp)
+                .background(Color.Black.copy(alpha = 0.5f))
+                .padding(horizontal = 8.dp, vertical = 4.dp)
         )
         
-        // TEXT LAYER - On top, NOT clickable
-        Box(
+        // Total time - bottom right
+        Text(
+            text = totalTime,
+            style = TextStyle(
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            ),
             modifier = Modifier
-                .fillMaxSize()
-        ) {
-            // DEBUG TEXT - Always visible to see what's happening
-            Text(
-                text = debugText,
-                style = TextStyle(
-                    color = Color.Red, // Bright red for visibility
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold
-                ),
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .background(Color.Black.copy(alpha = 0.7f))
-                    .padding(8.dp)
-            )
-            
-            // Pause text with very visible background for debugging
-            if (showPauseText) {
-                Text(
-                    text = "PAUSE",
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 24.sp, // Even larger
-                        fontWeight = FontWeight.Bold
-                    ),
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = 80.dp)
-                        .background(Color.Red.copy(alpha = 0.8f)) // Bright red background for debugging
-                        .padding(horizontal = 20.dp, vertical = 12.dp)
-                )
-            }
-            
-            // Resume text with very visible background for debugging
-            if (showResumeText) {
-                Text(
-                    text = "RESUME",
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 24.sp, // Even larger
-                        fontWeight = FontWeight.Bold
-                    ),
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = 80.dp)
-                        .background(Color.Green.copy(alpha = 0.8f)) // Bright green background for debugging
-                        .padding(horizontal = 20.dp, vertical = 12.dp)
-                )
-            }
-            
-            // Additional debug info
-            Text(
-                text = "Paused: $isPaused\nShowPause: $showPauseText\nShowResume: $showResumeText",
-                style = TextStyle(
-                    color = Color.Yellow,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Normal
-                ),
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .background(Color.Black.copy(alpha = 0.7f))
-                    .padding(8.dp)
-            )
-        }
+                .align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 16.dp)
+                .background(Color.Black.copy(alpha = 0.5f))
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+        )
     }
 }
