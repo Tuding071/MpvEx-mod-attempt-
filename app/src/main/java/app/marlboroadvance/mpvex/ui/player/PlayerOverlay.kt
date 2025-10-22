@@ -1,8 +1,6 @@
 package app.marlboroadvance.mpvex.ui.player
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -22,7 +20,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.gestures.detectTapGestures
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import `is`.xyz.mpv.MPVLib
@@ -46,7 +43,7 @@ fun PlayerOverlay(
             currentTime = Utils.prettyTime(currentPos)
             totalTime = Utils.prettyTime(duration)
             
-            delay(100) // Update every 100ms
+            delay(100)
         }
     }
     
@@ -56,33 +53,38 @@ fun PlayerOverlay(
             .pointerInput(Unit) {
                 detectTapGestures(
                     onPress = { 
-                        // Start tracking press duration
                         val startTime = System.currentTimeMillis()
-                        val wasPressed = tryAwaitRelease()
+                        var isLongPress = false
                         
-                        if (wasPressed) {
+                        // Wait for 300ms to detect long press
+                        try {
+                            delay(300)
+                            // If we reach here, it's a long press
+                            isLongPress = true
+                            MPVLib.setPropertyFloat("speed", 2.0f)
+                        } catch (e: Exception) {
+                            // Press was released before 300ms
+                        }
+                        
+                        // Wait for release
+                        tryAwaitRelease()
+                        
+                        // Reset speed if it was a long press
+                        if (isLongPress) {
+                            MPVLib.setPropertyFloat("speed", 1.0f)
+                        } else {
+                            // Check if it was a quick tap (<200ms)
                             val pressDuration = System.currentTimeMillis() - startTime
-                            
-                            if (pressDuration > 300) {
-                                // Long press (hold) - speed up to 2x
-                                MPVLib.setPropertyFloat("speed", 2.0f)
-                            } else {
-                                // Short tap - toggle pause
+                            if (pressDuration < 200) {
                                 viewModel.pauseUnpause()
                             }
-                        } else {
-                            // Finger was released - reset speed to normal
-                            MPVLib.setPropertyFloat("speed", 1.0f)
+                            // If between 200-300ms, do nothing
                         }
-                    },
-                    onTap = {
-                        // Fallback for quick taps
-                        viewModel.pauseUnpause()
                     }
                 )
             }
     ) {
-        // Current time - bottom left (moved up more)
+        // Current time - bottom left
         Text(
             text = currentTime,
             style = TextStyle(
@@ -92,12 +94,12 @@ fun PlayerOverlay(
             ),
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 16.dp, bottom = 48.dp) // Moved up to 48dp
+                .padding(start = 16.dp, bottom = 48.dp)
                 .background(Color.Black.copy(alpha = 0.5f))
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         )
         
-        // Total time - bottom right (moved up more)
+        // Total time - bottom right
         Text(
             text = totalTime,
             style = TextStyle(
@@ -107,7 +109,7 @@ fun PlayerOverlay(
             ),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 48.dp) // Moved up to 48dp
+                .padding(end = 16.dp, bottom = 48.dp)
                 .background(Color.Black.copy(alpha = 0.5f))
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         )
