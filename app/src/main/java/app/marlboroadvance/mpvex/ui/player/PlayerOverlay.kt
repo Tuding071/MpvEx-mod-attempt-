@@ -36,7 +36,6 @@ fun PlayerOverlay(
     val context = LocalContext.current
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
-    var isSpeedBoost by remember { mutableStateOf(false) }
     
     // Update time every 100ms
     LaunchedEffect(Unit) {
@@ -65,52 +64,25 @@ fun PlayerOverlay(
                             val pressDuration = System.currentTimeMillis() - startTime
                             
                             if (pressDuration > 300) {
-                                // Long press (hold) - speed up
-                                isSpeedBoost = true
+                                // Long press (hold) - speed up to 2x
                                 MPVLib.setPropertyFloat("speed", 2.0f)
                             } else {
                                 // Short tap - toggle pause
                                 viewModel.pauseUnpause()
                             }
+                        } else {
+                            // Finger was released - reset speed to normal
+                            MPVLib.setPropertyFloat("speed", 1.0f)
                         }
                     },
                     onTap = {
-                        // This handles quick taps (fallback)
-                        if (!isSpeedBoost) {
-                            viewModel.pauseUnpause()
-                        }
+                        // Fallback for quick taps
+                        viewModel.pauseUnpause()
                     }
                 )
             }
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = {
-                    // Fallback for simple clicks
-                    if (!isSpeedBoost) {
-                        viewModel.pauseUnpause()
-                    }
-                }
-            )
     ) {
-        // Speed boost indicator - top center (visible when speed is 2x)
-        if (isSpeedBoost) {
-            Text(
-                text = "2x",
-                style = TextStyle(
-                    color = Color.White,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold
-                ),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 48.dp)
-                    .background(Color.Red.copy(alpha = 0.7f))
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-            )
-        }
-        
-        // Current time - bottom left (moved up a bit)
+        // Current time - bottom left (moved up more)
         Text(
             text = currentTime,
             style = TextStyle(
@@ -120,12 +92,12 @@ fun PlayerOverlay(
             ),
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 16.dp, bottom = 32.dp) // Moved up from 16dp to 32dp
+                .padding(start = 16.dp, bottom = 48.dp) // Moved up to 48dp
                 .background(Color.Black.copy(alpha = 0.5f))
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         )
         
-        // Total time - bottom right (moved up a bit)
+        // Total time - bottom right (moved up more)
         Text(
             text = totalTime,
             style = TextStyle(
@@ -135,29 +107,9 @@ fun PlayerOverlay(
             ),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 32.dp) // Moved up from 16dp to 32dp
+                .padding(end = 16.dp, bottom = 48.dp) // Moved up to 48dp
                 .background(Color.Black.copy(alpha = 0.5f))
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         )
-    }
-    
-    // Handle speed boost reset when finger is lifted
-    LaunchedEffect(isSpeedBoost) {
-        if (isSpeedBoost) {
-            // Wait for speed boost to end
-            while (isSpeedBoost) {
-                delay(100)
-            }
-            // Reset speed to normal
-            MPVLib.setPropertyFloat("speed", 1.0f)
-        }
-    }
-}
-
-// Reset speed boost when touch ends
-private suspend fun resetSpeedBoost(isSpeedBoost: Boolean, onReset: () -> Unit) {
-    if (isSpeedBoost) {
-        delay(100)
-        onReset()
     }
 }
