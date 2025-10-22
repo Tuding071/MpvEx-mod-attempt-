@@ -27,6 +27,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.Utils
 
@@ -41,6 +44,14 @@ fun PlayerOverlay(
     var isSpeedingUp by remember { mutableStateOf(false) }
     var pendingPauseResume by remember { mutableStateOf(false) }
     var isPausing by remember { mutableStateOf(false) }
+    
+    // Frame stepping variables
+    var isFrameStepping by remember { mutableStateOf(false) }
+    var frameStepStartX by remember { mutableStateOf(0f) }
+    var currentFrameStepX by remember { mutableStateOf(0f) }
+    var lastFrameStepTime by remember { mutableStateOf(0L) }
+    
+    val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
     // Update time every 50ms for smoother milliseconds
     LaunchedEffect(Unit) {
@@ -58,11 +69,9 @@ fun PlayerOverlay(
     // Handle speed transitions with 100ms delay
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
-            // 100ms delay before speeding up
             delay(100)
             MPVLib.setPropertyFloat("speed", 2.0f)
         } else {
-            // 100ms delay before returning to normal
             delay(100)
             MPVLib.setPropertyFloat("speed", 1.0f)
         }
@@ -72,15 +81,80 @@ fun PlayerOverlay(
     LaunchedEffect(pendingPauseResume) {
         if (pendingPauseResume) {
             if (isPausing) {
-                // Pause - 50ms delay
                 delay(50)
             } else {
-                // Resume - 150ms delay
                 delay(150)
             }
             viewModel.pauseUnpause()
             pendingPauseResume = false
         }
+    }
+    
+    // Frame stepping gesture handler
+    fun handleFrameStepGesture(event: MotionEvent): Boolean {
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                frameStepStartX = event.x
+                currentFrameStepX = event.x
+                lastFrameStepTime = System.currentTimeMillis()
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val currentX = event.x
+                val deltaX = currentX - currentFrameStepX
+                val absDeltaX = Math.abs(deltaX)
+                
+                // Check if we've moved 12 pixels
+                if (absDeltaX >= 12 && !isFrameStepping) {
+                    isFrameStepping = true
+                    
+                    coroutineScope.launch {
+                        // Pause video first
+                        delay(50)
+                        MPVLib.setPropertyBoolean("pause", true)
+                        
+                        // Calculate frame skip based on swipe speed
+                        val currentTime = System.currentTimeMillis()
+                        val timeDelta = currentTime - lastFrameStepTime
+                        val swipeSpeed = absDeltaX / timeDelta // pixels per millisecond
+                        
+                        val frameSkip = when {
+                            swipeSpeed > 2.0 -> 10 // Very fast swipe - skip 10 frames
+                            swipeSpeed > 1.0 -> 5  // Fast swipe - skip 5 frames
+                            swipeSpeed > 0.5 -> 3  // Medium swipe - skip 3 frames
+                            else -> 1              // Slow swipe - single frame
+                        }
+                        
+                        // Execute frame steps
+                        val command = if (deltaX > 0) "frame-step" else "frame-back-step"
+                        repeat(frameSkip) {
+                            MPVLib.command("no-osd", command)
+                            delay(100) // Wait for MPV to render
+                        }
+                        
+                        // Update current frame position
+                        currentFrameStepX = currentX
+                        lastFrameStepTime = currentTime
+                        
+                        // Unlock frame stepping
+                        isFrameStepping = false
+                    }
+                } else if (!isFrameStepping) {
+                    // Update current position for speed calculation
+                    currentFrameStepX = currentX
+                }
+                
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                // Reset frame stepping state
+                isFrameStepping = false
+                frameStepStartX = 0f
+                currentFrameStepX = 0f
+                return true
+            }
+        }
+        return false
     }
     
     Box(
@@ -89,14 +163,13 @@ fun PlayerOverlay(
         // CENTER AREA - Tap for pause/resume with different delays
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.73f) // Increased from 70% to 73%
+                .fillMaxWidth(0.73f)
                 .fillMaxHeight(0.7f)
                 .align(Alignment.Center)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
                     onClick = {
-                        // Check current state to determine if we're pausing or resuming
                         val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
                         isPausing = !currentPaused
                         pendingPauseResume = true
@@ -104,66 +177,36 @@ fun PlayerOverlay(
                 )
         )
         
-        // BOTTOM 30% - Hold for 2x speed
+        // BOTTOM 30% - Frame stepping gesture
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .fillMaxHeight(0.30f)
                 .align(Alignment.BottomStart)
                 .pointerInteropFilter { event ->
-                    when (event.action) {
-                        MotionEvent.ACTION_DOWN -> {
-                            isSpeedingUp = true
-                            true
-                        }
-                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                            isSpeedingUp = false
-                            true
-                        }
-                        else -> false
-                    }
+                    handleFrameStepGesture(event)
                 }
         )
         
-        // LEFT 27% - Hold for 2x speed
+        // LEFT 27% - Frame stepping gesture
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.27f) // Changed from 30% to 27%
+                .fillMaxWidth(0.27f)
                 .fillMaxHeight(0.7f)
                 .align(Alignment.CenterStart)
                 .pointerInteropFilter { event ->
-                    when (event.action) {
-                        MotionEvent.ACTION_DOWN -> {
-                            isSpeedingUp = true
-                            true
-                        }
-                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                            isSpeedingUp = false
-                            true
-                        }
-                        else -> false
-                    }
+                    handleFrameStepGesture(event)
                 }
         )
         
-        // RIGHT 27% - Hold for 2x speed
+        // RIGHT 27% - Frame stepping gesture
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.27f) // Changed from 30% to 27%
+                .fillMaxWidth(0.27f)
                 .fillMaxHeight(0.7f)
                 .align(Alignment.CenterEnd)
                 .pointerInteropFilter { event ->
-                    when (event.action) {
-                        MotionEvent.ACTION_DOWN -> {
-                            isSpeedingUp = true
-                            true
-                        }
-                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                            isSpeedingUp = false
-                            true
-                        }
-                        else -> false
-                    }
+                    handleFrameStepGesture(event)
                 }
         )
         
