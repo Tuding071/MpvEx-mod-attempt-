@@ -49,7 +49,7 @@ fun PlayerOverlay(
     var isFrameStepping by remember { mutableStateOf(false) }
     var frameStepStartX by remember { mutableStateOf(0f) }
     var currentFrameStepX by remember { mutableStateOf(0f) }
-    var lastFrameStepTime by remember { mutableStateOf(0L) }
+    var wasPlayingBeforeFrameStep by remember { mutableStateOf(false) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
@@ -90,13 +90,14 @@ fun PlayerOverlay(
         }
     }
     
-    // Frame stepping gesture handler
+    // Frame stepping gesture handler for bottom area
     fun handleFrameStepGesture(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 frameStepStartX = event.x
                 currentFrameStepX = event.x
-                lastFrameStepTime = System.currentTimeMillis()
+                // Remember if video was playing before frame stepping
+                wasPlayingBeforeFrameStep = MPVLib.getPropertyBoolean("pause") == false
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
@@ -104,55 +105,65 @@ fun PlayerOverlay(
                 val deltaX = currentX - currentFrameStepX
                 val absDeltaX = Math.abs(deltaX)
                 
-                // Check if we've moved 12 pixels
+                // Check if we've moved 12 pixels and not already frame stepping
                 if (absDeltaX >= 12 && !isFrameStepping) {
                     isFrameStepping = true
                     
                     coroutineScope.launch {
-                        // Pause video first
-                        delay(50)
-                        MPVLib.setPropertyBoolean("pause", true)
-                        
-                        // Calculate frame skip based on swipe speed
-                        val currentTime = System.currentTimeMillis()
-                        val timeDelta = currentTime - lastFrameStepTime
-                        val swipeSpeed = absDeltaX / timeDelta // pixels per millisecond
-                        
-                        val frameSkip = when {
-                            swipeSpeed > 2.0 -> 10 // Very fast swipe - skip 10 frames
-                            swipeSpeed > 1.0 -> 5  // Fast swipe - skip 5 frames
-                            swipeSpeed > 0.5 -> 3  // Medium swipe - skip 3 frames
-                            else -> 1              // Slow swipe - single frame
+                        // Pause video first (with 50ms delay like in the original code)
+                        if (MPVLib.getPropertyBoolean("pause") == false) {
+                            MPVLib.setPropertyBoolean("pause", true)
+                            delay(50)
                         }
                         
-                        // Execute frame steps
+                        // Execute frame step based on direction
                         val command = if (deltaX > 0) "frame-step" else "frame-back-step"
-                        repeat(frameSkip) {
-                            MPVLib.command("no-osd", command)
-                            delay(100) // Wait for MPV to render
-                        }
+                        MPVLib.command("no-osd", command)
                         
-                        // Update current frame position
+                        // Wait for MPV to render (100ms like in original code)
+                        delay(100)
+                        
+                        // Update current frame position for next step
                         currentFrameStepX = currentX
-                        lastFrameStepTime = currentTime
                         
-                        // Unlock frame stepping
+                        // Unlock frame stepping for next movement
                         isFrameStepping = false
                     }
-                } else if (!isFrameStepping) {
-                    // Update current position for speed calculation
-                    currentFrameStepX = currentX
                 }
-                
                 return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                // Resume video if it was playing before frame stepping
+                if (wasPlayingBeforeFrameStep) {
+                    coroutineScope.launch {
+                        delay(100) // 100ms delay before resuming
+                        MPVLib.setPropertyBoolean("pause", false)
+                    }
+                }
+                
                 // Reset frame stepping state
                 isFrameStepping = false
                 frameStepStartX = 0f
                 currentFrameStepX = 0f
+                wasPlayingBeforeFrameStep = false
                 return true
             }
+        }
+        return false
+    }
+    
+    // Hold gesture handler for left/right areas (2x speed)
+    fun handleHoldGesture(event: MotionEvent): Boolean {
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                isSpeedingUp = true
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                isSpeedingUp = false
+                return true
+            }
+            else -> false
         }
         return false
     }
@@ -177,7 +188,7 @@ fun PlayerOverlay(
                 )
         )
         
-        // BOTTOM 30% - Frame stepping gesture
+        // BOTTOM 30% - Frame stepping gesture (horizontal drag)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -188,25 +199,25 @@ fun PlayerOverlay(
                 }
         )
         
-        // LEFT 27% - Frame stepping gesture
+        // LEFT 27% - Hold for 2x speed
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.27f)
                 .fillMaxHeight(0.7f)
                 .align(Alignment.CenterStart)
                 .pointerInteropFilter { event ->
-                    handleFrameStepGesture(event)
+                    handleHoldGesture(event)
                 }
         )
         
-        // RIGHT 27% - Frame stepping gesture
+        // RIGHT 27% - Hold for 2x speed
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.27f)
                 .fillMaxHeight(0.7f)
                 .align(Alignment.CenterEnd)
                 .pointerInteropFilter { event ->
-                    handleFrameStepGesture(event)
+                    handleHoldGesture(event)
                 }
         )
         
