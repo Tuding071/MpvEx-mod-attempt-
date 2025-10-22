@@ -34,8 +34,6 @@ fun PlayerOverlay(
     val context = LocalContext.current
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
-    var touchStartTime by remember { mutableStateOf(0L) }
-    var isLongPressing by remember { mutableStateOf(false) }
     
     // Update time every 100ms
     LaunchedEffect(Unit) {
@@ -56,43 +54,37 @@ fun PlayerOverlay(
             .pointerInteropFilter { event ->
                 when (event.action) {
                     MotionEvent.ACTION_DOWN -> {
-                        touchStartTime = System.currentTimeMillis()
-                        isLongPressing = false
+                        // Start a coroutine to handle the timing
+                        LaunchedEffect(Unit) {
+                            val startTime = System.currentTimeMillis()
+                            
+                            // Wait for either release or 300ms
+                            delay(300)
+                            
+                            // If we get here and finger is still down, it's a long press
+                            if (System.currentTimeMillis() - startTime >= 300) {
+                                // Long press detected - set speed to 2x
+                                MPVLib.setPropertyFloat("speed", 2.0f)
+                            }
+                        }
                         true
                     }
                     MotionEvent.ACTION_UP -> {
-                        val touchDuration = System.currentTimeMillis() - touchStartTime
+                        val touchDuration = System.currentTimeMillis() - event.downTime
                         
-                        if (isLongPressing) {
-                            // Was long press - reset speed
+                        if (touchDuration >= 300) {
+                            // Was long press - reset speed to normal
                             MPVLib.setPropertyFloat("speed", 1.0f)
-                            isLongPressing = false
-                        } else {
-                            // Check if it was a quick tap
-                            if (touchDuration < 200) {
-                                // Quick tap - toggle pause/resume
-                                viewModel.pauseUnpause()
-                            }
-                            // Between 200-300ms does nothing
+                        } else if (touchDuration < 200) {
+                            // Quick tap - toggle pause/resume
+                            viewModel.pauseUnpause()
                         }
-                        true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        val touchDuration = System.currentTimeMillis() - touchStartTime
-                        
-                        if (touchDuration >= 300 && !isLongPressing) {
-                            // Long press detected - speed up to 2x
-                            isLongPressing = true
-                            MPVLib.setPropertyFloat("speed", 2.0f)
-                        }
+                        // Between 200-300ms does nothing
                         true
                     }
                     MotionEvent.ACTION_CANCEL -> {
-                        // Reset if touch is cancelled
-                        if (isLongPressing) {
-                            MPVLib.setPropertyFloat("speed", 1.0f)
-                            isLongPressing = false
-                        }
+                        // Safety reset if touch is cancelled
+                        MPVLib.setPropertyFloat("speed", 1.0f)
                         true
                     }
                     else -> false
