@@ -174,7 +174,7 @@ fun PlayerOverlay(
     // Calculate seek position from X coordinate using proper alignment
     fun calculateSeekPosition(x: Float): Double {
         val screenWidth = context.resources.displayMetrics.widthPixels.toFloat()
-        val horizontalPadding = 64f // 32dp on each side
+        val horizontalPadding = 128f // 64dp on each side (DOUBLE padding)
         
         // Calculate percentage within seekbar (with padding)
         val availableWidth = screenWidth - (horizontalPadding * 2)
@@ -194,14 +194,14 @@ fun PlayerOverlay(
     fun isTouchInThumbArea(touchX: Float): Boolean {
         val progressPercent = getCurrentProgressPercent()
         val screenWidth = context.resources.displayMetrics.widthPixels.toFloat()
-        val horizontalPadding = 64f
+        val horizontalPadding = 128f // DOUBLE padding
         val availableWidth = screenWidth - (horizontalPadding * 2)
         
         // Calculate thumb center position
         val thumbCenterX = (progressPercent * availableWidth) + horizontalPadding
         
-        // Define thumb touch area (48px radius around thumb center)
-        val thumbTouchRadius = 48f
+        // Define thumb touch area (64px radius around thumb center) - LARGER AREA
+        val thumbTouchRadius = 64f
         
         return Math.abs(touchX - thumbCenterX) <= thumbTouchRadius
     }
@@ -463,10 +463,13 @@ fun PlayerOverlay(
                     .fillMaxWidth()
                     .fillMaxHeight(0.05f)
                     .align(Alignment.BottomStart)
+                    .pointerInteropFilter { event ->
+                        handleProgressBarDrag(event)
+                    }
             ) {
                 val progressPercent = getCurrentProgressPercent()
                 val screenWidth = LocalContext.current.resources.displayMetrics.widthPixels
-                val horizontalPadding = 64f
+                val horizontalPadding = 128f // DOUBLE padding
                 val availableWidth = screenWidth - (horizontalPadding * 2)
                 val thumbCenterX = (progressPercent * availableWidth) + horizontalPadding
                 
@@ -484,7 +487,7 @@ fun PlayerOverlay(
                         .fillMaxWidth()
                         .fillMaxHeight(0.6f)
                         .align(Alignment.Center)
-                        .padding(horizontal = 32.dp)
+                        .padding(horizontal = 64.dp) // DOUBLE padding (64dp each side)
                 ) {
                     // Background track (grey)
                     Box(
@@ -511,18 +514,6 @@ fun PlayerOverlay(
                         .fillMaxWidth()
                         .fillMaxHeight(0.2f)
                         .align(Alignment.BottomStart)
-                )
-                
-                // INVISIBLE THUMB TOUCH AREA (48px radius around progress tip)
-                Box(
-                    modifier = Modifier
-                        .offset(x = (thumbCenterX - horizontalPadding - 24).dp)
-                        .width(48.dp)
-                        .fillMaxHeight()
-                        .background(Color.Transparent)
-                        .pointerInteropFilter { event ->
-                            handleProgressBarDrag(event)
-                        }
                 )
             }
         }
