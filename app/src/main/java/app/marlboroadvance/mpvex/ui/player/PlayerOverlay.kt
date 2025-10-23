@@ -52,7 +52,7 @@ fun PlayerOverlay(
     var isSpeedingUp by remember { mutableStateOf(false) }
     var pendingPauseResume by remember { mutableStateOf(false) }
     var isPausing by remember { mutableStateOf(false) }
-    var showSeekbar by remember { mutableStateOf(true) } // Entire seekbar visibility
+    var showSeekbar by remember { mutableStateOf(true) }
     
     // Drag seeking variables
     var isSeeking by remember { mutableStateOf(false) }
@@ -67,6 +67,8 @@ fun PlayerOverlay(
     // Tap detection variables
     var leftTapStartTime by remember { mutableStateOf(0L) }
     var rightTapStartTime by remember { mutableStateOf(0L) }
+    var leftIsHolding by remember { mutableStateOf(false) }
+    var rightIsHolding by remember { mutableStateOf(false) }
     
     // Auto-hide control
     var autoHideJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -81,6 +83,15 @@ fun PlayerOverlay(
                 delay(4000)
                 showSeekbar = false
             }
+        }
+    }
+    
+    // Handle speed reset when not holding
+    LaunchedEffect(leftIsHolding, rightIsHolding) {
+        if (!leftIsHolding && !rightIsHolding && isSpeedingUp) {
+            delay(100)
+            MPVLib.setPropertyDouble("speed", 1.0)
+            isSpeedingUp = false
         }
     }
     
@@ -163,7 +174,7 @@ fun PlayerOverlay(
     // Calculate seek position from X coordinate
     fun calculateSeekPosition(x: Float): Double {
         val screenWidth = context.resources.displayMetrics.widthPixels.toFloat()
-        val horizontalPadding = 48f // 24dp on each side (more padding)
+        val horizontalPadding = 48f // 24dp on each side
         
         // Calculate percentage within seekbar (with padding)
         val availableWidth = screenWidth - (horizontalPadding * 2)
@@ -173,43 +184,31 @@ fun PlayerOverlay(
         return progressPercent * videoDuration
     }
     
-    // Thumb drag gesture (ONLY the thumb is draggable)
-    fun handleThumbDrag(event: MotionEvent): Boolean {
+    // Progress bar drag gesture (ENTIRE progress bar is draggable)
+    fun handleProgressBarDrag(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
-                // Check if touch is near the thumb position
-                val progressPercent = (currentPosition / videoDuration).coerceIn(0.0, 1.0)
-                val screenWidth = context.resources.displayMetrics.widthPixels.toFloat()
-                val horizontalPadding = 48f
-                val availableWidth = screenWidth - (horizontalPadding * 2)
-                val thumbCenterX = (progressPercent * availableWidth) + horizontalPadding
-                val thumbRadius = 24f // Touch radius around thumb
+                // Cancel auto-hide during seeking
+                autoHideJob?.cancel()
+                showSeekbar = true
                 
-                // Only start seeking if touch is near the thumb
-                if (Math.abs(event.x - thumbCenterX) <= thumbRadius) {
-                    // Cancel auto-hide during seeking
-                    autoHideJob?.cancel()
-                    showSeekbar = true
-                    
-                    seekStartX = event.x
-                    seekStartPosition = currentPosition
-                    wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
-                    isSeeking = true
-                    showSeekTime = true
-                    
-                    // Calculate initial seek position
-                    val targetPosition = calculateSeekPosition(event.x)
-                    performRealTimeSeek(targetPosition)
-                    seekTargetTime = formatTimeSimple(targetPosition)
-                    
-                    // Pause video when seeking starts
-                    if (wasPlayingBeforeSeek) {
-                        MPVLib.setPropertyBoolean("pause", true)
-                    }
-                    
-                    return true
+                seekStartX = event.x
+                seekStartPosition = currentPosition
+                wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
+                isSeeking = true
+                showSeekTime = true
+                
+                // Calculate initial seek position
+                val targetPosition = calculateSeekPosition(event.x)
+                performRealTimeSeek(targetPosition)
+                seekTargetTime = formatTimeSimple(targetPosition)
+                
+                // Pause video when seeking starts
+                if (wasPlayingBeforeSeek) {
+                    MPVLib.setPropertyBoolean("pause", true)
                 }
-                return false
+                
+                return true
             }
             MotionEvent.ACTION_MOVE -> {
                 if (isSeeking) {
@@ -217,7 +216,7 @@ fun PlayerOverlay(
                     performRealTimeSeek(targetPosition)
                     seekTargetTime = formatTimeSimple(targetPosition)
                 }
-                return isSeeking
+                return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (isSeeking) {
@@ -245,7 +244,7 @@ fun PlayerOverlay(
                         showSeekbar = false
                     }
                 }
-                return isSeeking
+                return true
             }
         }
         return false
@@ -320,10 +319,13 @@ fun PlayerOverlay(
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 leftTapStartTime = System.currentTimeMillis()
+                leftIsHolding = true
                 true
             }
             MotionEvent.ACTION_UP -> {
                 val tapDuration = System.currentTimeMillis() - leftTapStartTime
+                leftIsHolding = false
+                
                 if (tapDuration < 200) {
                     // Short tap - toggle seekbar
                     if (showSeekbar) {
@@ -333,13 +335,13 @@ fun PlayerOverlay(
                         showSeekbarWithAutoHide()
                     }
                 } else if (tapDuration >= 300) {
-                    // Long press - speed up
+                    // Long press - speed up (will auto-reset via LaunchedEffect)
                     isSpeedingUp = true
                 }
                 true
             }
             MotionEvent.ACTION_CANCEL -> {
-                isSpeedingUp = false
+                leftIsHolding = false
                 true
             }
             else -> false
@@ -351,10 +353,13 @@ fun PlayerOverlay(
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 rightTapStartTime = System.currentTimeMillis()
+                rightIsHolding = true
                 true
             }
             MotionEvent.ACTION_UP -> {
                 val tapDuration = System.currentTimeMillis() - rightTapStartTime
+                rightIsHolding = false
+                
                 if (tapDuration < 200) {
                     // Short tap - toggle seekbar
                     if (showSeekbar) {
@@ -364,13 +369,13 @@ fun PlayerOverlay(
                         showSeekbarWithAutoHide()
                     }
                 } else if (tapDuration >= 300) {
-                    // Long press - speed up
+                    // Long press - speed up (will auto-reset via LaunchedEffect)
                     isSpeedingUp = true
                 }
                 true
             }
             MotionEvent.ACTION_CANCEL -> {
-                isSpeedingUp = false
+                rightIsHolding = false
                 true
             }
             else -> false
@@ -416,12 +421,11 @@ fun PlayerOverlay(
                     .fillMaxWidth()
                     .fillMaxHeight(0.05f)
                     .align(Alignment.BottomStart)
+                    .pointerInteropFilter { event ->
+                        handleProgressBarDrag(event)
+                    }
             ) {
                 val progressPercent = (currentPosition / videoDuration).coerceIn(0.0, 1.0)
-                val screenWidth = LocalContext.current.resources.displayMetrics.widthPixels
-                val horizontalPadding = 48f // 24dp on each side (more padding)
-                val availableWidth = screenWidth - (horizontalPadding * 2)
-                val thumbPosition = (progressPercent * availableWidth) + horizontalPadding
                 
                 // 1% Top transparent area
                 Box(
@@ -437,7 +441,7 @@ fun PlayerOverlay(
                         .fillMaxWidth()
                         .fillMaxHeight(0.6f)
                         .align(Alignment.Center)
-                        .padding(horizontal = 24.dp) // More padding
+                        .padding(horizontal = 24.dp)
                 ) {
                     // Background track (grey)
                     Box(
@@ -448,24 +452,13 @@ fun PlayerOverlay(
                             .clip(RectangleShape)
                     )
                     
-                    // Progress fill (white)
+                    // Progress fill (white) - NO THUMB, just the progress bar
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(progressPercent.toFloat())
                             .fillMaxHeight()
                             .background(Color.White)
                             .clip(RectangleShape)
-                    )
-                    
-                    // Thumb (white circle at progress end) - ONLY THIS IS DRAGGABLE
-                    Box(
-                        modifier = Modifier
-                            .offset(x = (thumbPosition - horizontalPadding - 8).dp)
-                            .size(16.dp)
-                            .background(Color.White, androidx.compose.foundation.shape.CircleShape)
-                            .pointerInteropFilter { event ->
-                                handleThumbDrag(event)
-                            }
                     )
                 }
                 
