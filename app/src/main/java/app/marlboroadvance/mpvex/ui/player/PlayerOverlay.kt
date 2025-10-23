@@ -59,13 +59,19 @@ fun PlayerOverlay(
     var currentPosition by remember { mutableStateOf(0.0) }
     var videoDuration by remember { mutableStateOf(1.0) }
     
+    // Auto-hide control
+    var autoHideJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // Auto-hide seekbar after 4 seconds
+    // Start auto-hide when seekbar is shown
     LaunchedEffect(showSeekbar) {
-        if (showSeekbar) {
-            delay(4000)
-            showSeekbar = false
+        if (showSeekbar && !isSeeking) {
+            autoHideJob?.cancel()
+            autoHideJob = coroutineScope.launch {
+                delay(4000)
+                showSeekbar = false
+            }
         }
     }
     
@@ -89,7 +95,7 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("hr-seek-framedrop", "no") // No frame dropping
     }
     
-    // Update time and progress every 250ms
+    // Update time and progress every 100ms (faster updates)
     LaunchedEffect(Unit) {
         while (isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
@@ -100,7 +106,7 @@ fun PlayerOverlay(
             currentPosition = currentPos
             videoDuration = duration
             
-            delay(250)
+            delay(100) // Changed from 250ms to 100ms
         }
     }
     
@@ -134,16 +140,31 @@ fun PlayerOverlay(
         MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
     }
     
-    // Fast sensitivity seekbar drag gesture (3% bottom area)
+    // Function to show seekbar and manage auto-hide
+    fun showSeekbarWithAutoHide() {
+        showSeekbar = true
+        autoHideJob?.cancel()
+        if (!isSeeking) {
+            autoHideJob = coroutineScope.launch {
+                delay(4000)
+                showSeekbar = false
+            }
+        }
+    }
+    
+    // Seekbar drag gesture (3 pixels = 100ms)
     fun handleSeekbarDrag(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
+                // Cancel auto-hide during seeking
+                autoHideJob?.cancel()
+                showSeekbar = true
+                
                 seekStartX = event.x
                 seekStartPosition = currentPosition
                 wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
                 isSeeking = true
                 showSeekTime = true
-                showSeekbar = true // Keep seekbar visible during seeking
                 
                 // Pause video when seeking starts for smoother frame updates
                 if (wasPlayingBeforeSeek) {
@@ -157,8 +178,8 @@ fun PlayerOverlay(
                     val currentX = event.x
                     val deltaX = currentX - seekStartX
                     
-                    // FASTER SENSITIVITY: 1 pixel = 33ms (0.033 seconds)
-                    val pixelsPerSecond = 1f / 0.033f // ~30.3 pixels per second (3x faster than horizontal)
+                    // 3 pixels = 100ms (0.1 seconds)
+                    val pixelsPerSecond = 3f / 0.1f // 30 pixels per second
                     val timeDeltaSeconds = deltaX / pixelsPerSecond
                     
                     // Calculate new position
@@ -178,7 +199,7 @@ fun PlayerOverlay(
                     // Final position adjustment
                     val currentX = event.x
                     val deltaX = currentX - seekStartX
-                    val pixelsPerSecond = 1f / 0.033f
+                    val pixelsPerSecond = 3f / 0.1f
                     val timeDeltaSeconds = deltaX / pixelsPerSecond
                     val newPositionSeconds = seekStartPosition + timeDeltaSeconds
                     val clampedPosition = newPositionSeconds.coerceIn(0.0, videoDuration)
@@ -194,12 +215,18 @@ fun PlayerOverlay(
                         }
                     }
                     
-                    // Reset seeking state
+                    // Reset seeking state and restart auto-hide
                     isSeeking = false
                     showSeekTime = false
                     seekStartX = 0f
                     seekStartPosition = 0.0
                     wasPlayingBeforeSeek = false
+                    
+                    // Restart auto-hide after seeking ends
+                    autoHideJob = coroutineScope.launch {
+                        delay(4000)
+                        showSeekbar = false
+                    }
                 }
                 return true
             }
@@ -207,7 +234,7 @@ fun PlayerOverlay(
         return false
     }
     
-    // Continuous drag seeking gesture handler for bottom area (27% above seekbar)
+    // Continuous drag seeking gesture handler for bottom area (3 pixels = 33ms)
     fun handleDragSeekGesture(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -229,7 +256,7 @@ fun PlayerOverlay(
                     val currentX = event.x
                     val deltaX = currentX - seekStartX
                     
-                    // Normal sensitivity: 3 pixels = 33ms (0.033 seconds)
+                    // 3 pixels = 33ms (0.033 seconds)
                     val pixelsPerSecond = 3f / 0.033f // ~90.9 pixels per second
                     val timeDeltaSeconds = deltaX / pixelsPerSecond
                     
@@ -300,7 +327,14 @@ fun PlayerOverlay(
     
     // Tap handler to show/hide seekbar (only for left/right areas)
     fun handleTapToShowSeekbar() {
-        showSeekbar = !showSeekbar
+        if (showSeekbar) {
+            // If already showing, hide immediately
+            showSeekbar = false
+            autoHideJob?.cancel()
+        } else {
+            // If hidden, show and start auto-hide
+            showSeekbarWithAutoHide()
+        }
     }
     
     Box(
@@ -335,7 +369,7 @@ fun PlayerOverlay(
                 }
         )
         
-        // BOTTOM 3% - Seekbar area (fast sensitivity seeking + white progress bar)
+        // BOTTOM 3% - Seekbar area (progress bar + second seeking area)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -345,7 +379,7 @@ fun PlayerOverlay(
                     handleSeekbarDrag(event)
                 }
         ) {
-            // White progress bar (updates every 250ms with currentPosition)
+            // White progress bar (updates every 100ms with currentPosition)
             if (showSeekbar) {
                 Box(
                     modifier = Modifier
