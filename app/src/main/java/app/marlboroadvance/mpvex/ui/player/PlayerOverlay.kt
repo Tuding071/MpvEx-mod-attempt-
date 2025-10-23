@@ -51,7 +51,7 @@ fun PlayerOverlay(
     var isSpeedingUp by remember { mutableStateOf(false) }
     var pendingPauseResume by remember { mutableStateOf(false) }
     var isPausing by remember { mutableStateOf(false) }
-    var showSeekbar by remember { mutableStateOf(true) } // Start visible
+    var showSeekbar by remember { mutableStateOf(false) } // Start hidden
     
     // Drag seeking variables
     var isSeeking by remember { mutableStateOf(false) }
@@ -138,7 +138,7 @@ fun PlayerOverlay(
         MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
     }
     
-    // Seekbar drag gesture handler (only for the thumb)
+    // Seekbar drag gesture handler (only for the bottom 3% area)
     fun handleSeekbarDrag(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -170,7 +170,7 @@ fun PlayerOverlay(
                     val newPositionSeconds = seekStartPosition + timeDeltaSeconds
                     val clampedPosition = newPositionSeconds.coerceIn(0.0, videoDuration)
                     
-                    // Perform real-time seek with same logic as drag seeking
+                    // Perform real-time seek with same precision as horizontal dragging
                     performRealTimeSeek(clampedPosition)
                     
                     // Update seek target time display
@@ -213,7 +213,7 @@ fun PlayerOverlay(
         return false
     }
     
-    // Continuous drag seeking gesture handler for bottom area
+    // Continuous drag seeking gesture handler for bottom area (27% - above seekbar)
     fun handleDragSeekGesture(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -222,7 +222,6 @@ fun PlayerOverlay(
                 wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
                 isSeeking = true
                 showSeekTime = true
-                showSeekbar = true // Show seekbar when dragging bottom area
                 
                 // Pause video when seeking starts for smoother frame updates
                 if (wasPlayingBeforeSeek) {
@@ -294,7 +293,6 @@ fun PlayerOverlay(
     fun handleHoldGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
-                showSeekbar = true // Show seekbar when holding speed buttons
                 isSpeedingUp = true
                 true
             }
@@ -306,9 +304,9 @@ fun PlayerOverlay(
         }
     }
     
-    // Tap handler to show seekbar (only for left/right areas)
+    // Tap handler to show/hide seekbar (only for left/right areas)
     fun handleTapToShowSeekbar() {
-        showSeekbar = true
+        showSeekbar = !showSeekbar
     }
     
     Box(
@@ -331,18 +329,52 @@ fun PlayerOverlay(
                 )
         )
         
-        // BOTTOM 30% - Continuous drag seeking
+        // BOTTOM 27% - Continuous drag seeking (ABOVE the seekbar)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.30f)
+                .fillMaxHeight(0.27f)
                 .align(Alignment.BottomStart)
+                .offset(y = (-30).dp) // Position above the seekbar area
                 .pointerInteropFilter { event ->
                     handleDragSeekGesture(event)
                 }
         )
         
-        // LEFT 27% - Hold for 2x speed AND tap to show seekbar
+        // BOTTOM 3% - Seekbar area (SOLID LINE)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.03f)
+                .align(Alignment.BottomStart)
+                .pointerInteropFilter { event ->
+                    handleSeekbarDrag(event)
+                }
+        ) {
+            // Background (transparent for touch area)
+            
+            // White progress line
+            val progressPercent = (currentPosition / videoDuration).coerceIn(0.0, 1.0)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(progressPercent.toFloat())
+                    .fillMaxHeight()
+                    .background(Color.White)
+            )
+            
+            // White thumb at the end (only visible when seekbar is shown)
+            if (showSeekbar) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .offset(x = (progressPercent * (LocalContext.current.resources.displayMetrics.widthPixels)).dp)
+                        .size(16.dp)
+                        .background(Color.White, androidx.compose.foundation.shape.CircleShape)
+                )
+            }
+        }
+        
+        // LEFT 27% - Hold for 2x speed AND tap to show/hide seekbar
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.27f)
@@ -358,7 +390,7 @@ fun PlayerOverlay(
                 }
         )
         
-        // RIGHT 27% - Hold for 2x speed AND tap to show seekbar
+        // RIGHT 27% - Hold for 2x speed AND tap to show/hide seekbar
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.27f)
@@ -392,7 +424,7 @@ fun PlayerOverlay(
             ),
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 16.dp, bottom = 70.dp)
+                .padding(start = 16.dp, bottom = 40.dp) // Adjusted for seekbar
                 .background(Color.Black.copy(alpha = 0.5f))
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         )
@@ -407,7 +439,7 @@ fun PlayerOverlay(
             ),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 70.dp)
+                .padding(end = 16.dp, bottom = 40.dp) // Adjusted for seekbar
                 .background(Color.Black.copy(alpha = 0.5f))
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         )
@@ -427,47 +459,6 @@ fun PlayerOverlay(
                     .background(Color.Black.copy(alpha = 0.7f))
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
-        }
-        
-        // SEEKBAR - Facebook Lite style with WHITE progress
-        if (showSeekbar) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .align(Alignment.BottomCenter)
-                    .offset(y = (-50).dp) // Position above time displays
-            ) {
-                // Background track (thin grey line)
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(3.dp)
-                        .background(Color.Gray.copy(alpha = 0.7f))
-                        .clip(RectangleShape)
-                )
-                
-                // Progress track (WHITE - watched portion)
-                val progressPercent = (currentPosition / videoDuration).coerceIn(0.0, 1.0)
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(progressPercent.toFloat())
-                        .fillMaxHeight()
-                        .background(Color.White) // Changed to white
-                        .clip(RectangleShape)
-                )
-                
-                // Thumb (white circle) - Only the thumb is draggable
-                Box(
-                    modifier = Modifier
-                        .offset(x = (progressPercent * (LocalContext.current.resources.displayMetrics.widthPixels - 32)).dp)
-                        .size(16.dp)
-                        .background(Color.White, androidx.compose.foundation.shape.CircleShape)
-                        .pointerInteropFilter { event ->
-                            handleSeekbarDrag(event)
-                        }
-                )
-            }
         }
     }
 }
