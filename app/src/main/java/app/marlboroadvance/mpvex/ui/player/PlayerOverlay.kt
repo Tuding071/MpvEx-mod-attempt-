@@ -378,11 +378,10 @@ fun PlayerOverlay(
                 )
                 
                 // Progress track (white - watched portion)
+                val progressWidth = (currentPosition / videoDuration).coerceIn(0.0, 1.0)
                 Box(
                     modifier = Modifier
-                        .width((currentPosition / videoDuration).coerceIn(0.0, 1.0).times(
-                            (LocalContext.current.resources.displayMetrics.widthPixels - 32).dp
-                        ))
+                        .fillMaxWidth(progressWidth.toFloat())
                         .fillMaxHeight()
                         .background(Color.White)
                         .clip(RectangleShape)
@@ -391,8 +390,7 @@ fun PlayerOverlay(
                 // Thumb (white ball)
                 Box(
                     modifier = Modifier
-                        .offset(x = ((currentPosition / videoDuration).coerceIn(0.0, 1.0) * 
-                                   (LocalContext.current.resources.displayMetrics.widthPixels - 32)).dp)
+                        .offset(x = (progressWidth * (LocalContext.current.resources.displayMetrics.widthPixels - 32)).dp)
                         .size(16.dp)
                         .background(Color.White, androidx.compose.foundation.shape.CircleShape)
                         .pointerInteropFilter { event ->
