@@ -54,6 +54,11 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
+    // Force software decoding on startup
+    LaunchedEffect(Unit) {
+        MPVLib.setPropertyString("hwdec", "no")
+    }
+    
     // Update time every 50ms for smoother milliseconds
     LaunchedEffect(Unit) {
         while (isActive) {
@@ -111,15 +116,18 @@ fun PlayerOverlay(
                     val currentX = event.x
                     val deltaX = currentX - seekStartX
                     
-                    // Lowered sensitivity by 50%: 20 pixels = 1 second (was 10 pixels = 1 second)
-                    val sensitivity = 60f
-                    val timeDelta = (deltaX / sensitivity).toInt()
+                    // Precise sensitivity: 5 pixels = 33ms (0.033 seconds)
+                    // Formula: timeDelta = (deltaX / 5) * 0.033 seconds
+                    val pixelsPerSecond = 5f / 0.033f // ~151.5 pixels per second
+                    val timeDeltaSeconds = deltaX / pixelsPerSecond
+                    val timeDeltaMs = (timeDeltaSeconds * 1000).toInt()
                     
-                    // Calculate new position
-                    val newPosition = (seekStartPosition + timeDelta).coerceIn(0, Int.MAX_VALUE)
+                    // Calculate new position in milliseconds
+                    val newPositionMs = (seekStartPosition * 1000) + timeDeltaMs
+                    val newPositionSeconds = (newPositionMs / 1000.0).toInt()
                     
                     // Seek immediately for responsive feedback
-                    viewModel.seekTo(newPosition, false)
+                    viewModel.seekTo(newPositionSeconds, false)
                     
                     // Update frame every 100ms with guaranteed refresh
                     val currentTime = System.currentTimeMillis()
