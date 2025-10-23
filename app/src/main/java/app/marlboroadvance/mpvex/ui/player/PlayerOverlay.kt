@@ -193,7 +193,15 @@ fun PlayerOverlay(
         return progressPercent * videoDuration
     }
     
-    // PRECISE SLIDER SEEKING - Traditional slider approach
+    // Calculate thumb position for display
+    fun getThumbPosition(progress: Float): Float {
+        val screenWidth = context.resources.displayMetrics.widthPixels.toFloat()
+        val horizontalPadding = 64f
+        val availableWidth = screenWidth - (horizontalPadding * 2)
+        return (progress * availableWidth) + horizontalPadding
+    }
+    
+    // PRECISE SLIDER SEEKING - Touch position matches thumb position exactly
     fun handleSliderSeek(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -205,7 +213,7 @@ fun PlayerOverlay(
                 isSeeking = true
                 showSeekTime = true
                 
-                // Calculate initial slider position
+                // Calculate position based on EXACT touch point
                 val targetPosition = calculateSeekPosition(event.x)
                 userSliderPosition = (targetPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
                 
@@ -222,7 +230,7 @@ fun PlayerOverlay(
             }
             MotionEvent.ACTION_MOVE -> {
                 if (isSeeking) {
-                    // Calculate target position using precise percentage
+                    // Calculate target position using EXACT touch point
                     val targetPosition = calculateSeekPosition(event.x)
                     userSliderPosition = (targetPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
                     
@@ -234,7 +242,7 @@ fun PlayerOverlay(
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (isSeeking) {
-                    // Final position using precise percentage
+                    // Final position using EXACT touch point
                     val targetPosition = calculateSeekPosition(event.x)
                     userSliderPosition = (targetPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
                     performRealTimeSeek(targetPosition)
@@ -442,7 +450,7 @@ fun PlayerOverlay(
                 }
         )
         
-        // SEEKBAR AREA - Total 5% height with PRECISE SLIDER
+        // SEEKBAR AREA - Total 5% height with VISIBLE THUMB
         if (showSeekbar) {
             Box(
                 modifier = Modifier
@@ -455,6 +463,7 @@ fun PlayerOverlay(
             ) {
                 // Use animated progress for smooth visual feedback
                 val progressPercent = animatedProgress.coerceIn(0f, 1f)
+                val thumbPosition = getThumbPosition(progressPercent)
                 
                 // 1% Top transparent area
                 Box(
@@ -481,13 +490,22 @@ fun PlayerOverlay(
                             .clip(RectangleShape)
                     )
                     
-                    // Progress fill (white) - Uses animated progress for smooth movement
+                    // Progress fill (white) - Goes UNDER the thumb
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(progressPercent)
                             .fillMaxHeight()
                             .background(Color.White)
                             .clip(RectangleShape)
+                    )
+                    
+                    // DARK GREY THUMB at the tip of progress bar
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .width(4.dp) // Thin thumb
+                            .fillMaxHeight()
+                            .background(Color.DarkGray)
                     )
                 }
                 
@@ -497,6 +515,15 @@ fun PlayerOverlay(
                         .fillMaxWidth()
                         .fillMaxHeight(0.2f)
                         .align(Alignment.BottomStart)
+                )
+                
+                // INVISIBLE TOUCH AREA that follows thumb position (for easy grabbing)
+                Box(
+                    modifier = Modifier
+                        .offset(x = (thumbPosition - 64f - 16f).dp) // Center the touch area on thumb
+                        .width(32.dp) // 32px touch area around thumb
+                        .fillMaxHeight()
+                        .background(Color.Transparent)
                 )
             }
         }
