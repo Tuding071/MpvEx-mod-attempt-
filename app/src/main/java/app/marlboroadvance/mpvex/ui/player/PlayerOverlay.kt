@@ -10,7 +10,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -20,7 +25,11 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.*
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.Utils
 
@@ -30,48 +39,59 @@ fun PlayerOverlay(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var currentTime by remember { mutableStateOf("00:00\n000") }
-    var totalTime by remember { mutableStateOf("00:00\n000") }
+    var currentTime by remember { mutableStateOf("00:00\n  00") }
+    var totalTime by remember { mutableStateOf("00:00\n  00") }
     var isSpeedingUp by remember { mutableStateOf(false) }
     var pendingPauseResume by remember { mutableStateOf(false) }
     var isPausing by remember { mutableStateOf(false) }
-
+    
     // Drag seeking variables
     var isSeeking by remember { mutableStateOf(false) }
     var seekStartX by remember { mutableStateOf(0f) }
     var seekStartPosition by remember { mutableStateOf(0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     var lastSeekUpdateTime by remember { mutableStateOf(0L) }
-
+    
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
-
-    // Update time every 50ms for smooth ms display
+    
+    // Update time every 50ms for smoother milliseconds
     LaunchedEffect(Unit) {
         while (isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
             val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-
+            
             currentTime = formatTimeWithMilliseconds(currentPos)
             totalTime = formatTimeWithMilliseconds(duration)
-
+            
             delay(50)
         }
     }
-
-    // Handle speed transitions
+    
+    // Handle speed transitions with 100ms delay
     LaunchedEffect(isSpeedingUp) {
-        MPVLib.setPropertyFloat("speed", if (isSpeedingUp) 2.0f else 1.0f)
+        if (isSpeedingUp) {
+            delay(100)
+            MPVLib.setPropertyFloat("speed", 2.0f)
+        } else {
+            delay(100)
+            MPVLib.setPropertyFloat("speed", 1.0f)
+        }
     }
-
-    // Handle pause/resume
+    
+    // Handle pause/resume with different delays
     LaunchedEffect(pendingPauseResume) {
         if (pendingPauseResume) {
+            if (isPausing) {
+                delay(50)
+            } else {
+                delay(150)
+            }
             viewModel.pauseUnpause()
             pendingPauseResume = false
         }
     }
-
-    // Continuous drag seeking gesture handler
+    
+    // Continuous drag seeking gesture handler for bottom area
     fun handleDragSeekGesture(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -79,47 +99,49 @@ fun PlayerOverlay(
                 seekStartPosition = MPVLib.getPropertyInt("time-pos") ?: 0
                 wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
                 isSeeking = true
-
-                // Pause video during seek
+                
+                // Pause video when seeking starts
                 if (wasPlayingBeforeSeek) {
                     MPVLib.setPropertyBoolean("pause", true)
                 }
                 return true
             }
-
             MotionEvent.ACTION_MOVE -> {
                 if (isSeeking) {
                     val currentX = event.x
                     val deltaX = currentX - seekStartX
-
-                    // Sensitivity: 25 pixels = 1 second
-                    val sensitivity = 25f
+                    
+                    // Lowered sensitivity by 50%: 20 pixels = 1 second (was 10 pixels = 1 second)
+                    val sensitivity = 20f
                     val timeDelta = (deltaX / sensitivity).toInt()
-
-                    val newPosition = (seekStartPosition + timeDelta).coerceAtLeast(0)
-
-                    // Seek continuously
+                    
+                    // Calculate new position
+                    val newPosition = (seekStartPosition + timeDelta).coerceIn(0, Int.MAX_VALUE)
+                    
+                    // Seek immediately for responsive feedback
                     viewModel.seekTo(newPosition, false)
-
-                    // Update every 100ms to refresh the frame visually
-                    val now = System.currentTimeMillis()
-                    if (now - lastSeekUpdateTime >= 100) {
-                        MPVLib.command("no-osd", "frame-step")
-                        MPVLib.command("no-osd", "frame-back-step")
-                        lastSeekUpdateTime = now
+                    
+                    // Update frame every 100ms with guaranteed refresh
+                    val currentTime = System.currentTimeMillis()
+                    if (currentTime - lastSeekUpdateTime >= 100) {
+                        // Force frame refresh with guaranteed update
+                        MPVLib.command("no-osd", "seek", "0", "relative", "exact")
+                        lastSeekUpdateTime = currentTime
                     }
                 }
                 return true
             }
-
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (isSeeking) {
+                    // Resume video if it was playing before seek
                     if (wasPlayingBeforeSeek) {
                         coroutineScope.launch {
-                            delay(100)
+                            delay(100) // 100ms delay before resuming
                             MPVLib.setPropertyBoolean("pause", false)
                         }
                     }
+                    
+                    // Reset seeking state
                     isSeeking = false
                     seekStartX = 0f
                     seekStartPosition = 0
@@ -131,8 +153,8 @@ fun PlayerOverlay(
         }
         return false
     }
-
-    // Hold gesture for 2x speed
+    
+    // Hold gesture handler for left/right areas (2x speed)
     fun handleHoldGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -146,11 +168,11 @@ fun PlayerOverlay(
             else -> false
         }
     }
-
+    
     Box(
         modifier = modifier.fillMaxSize()
     ) {
-        // CENTER TAP → pause/resume
+        // CENTER AREA - Tap for pause/resume with different delays
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.73f)
@@ -166,8 +188,8 @@ fun PlayerOverlay(
                     }
                 )
         )
-
-        // BOTTOM → continuous drag seek
+        
+        // BOTTOM 30% - Continuous drag seeking
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -177,8 +199,8 @@ fun PlayerOverlay(
                     handleDragSeekGesture(event)
                 }
         )
-
-        // LEFT → hold for 2x speed
+        
+        // LEFT 27% - Hold for 2x speed
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.27f)
@@ -188,8 +210,8 @@ fun PlayerOverlay(
                     handleHoldGesture(event)
                 }
         )
-
-        // RIGHT → hold for 2x speed
+        
+        // RIGHT 27% - Hold for 2x speed
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.27f)
@@ -199,16 +221,16 @@ fun PlayerOverlay(
                     handleHoldGesture(event)
                 }
         )
-
-        // TOP ignore zone
+        
+        // TOP 5% - Ignore area
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .fillMaxHeight(0.05f)
                 .align(Alignment.TopStart)
         )
-
-        // Current time
+        
+        // Current time - bottom left
         Text(
             text = currentTime,
             style = TextStyle(
@@ -223,8 +245,8 @@ fun PlayerOverlay(
                 .background(Color.Black.copy(alpha = 0.5f))
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         )
-
-        // Total time
+        
+        // Total time - bottom right
         Text(
             text = totalTime,
             style = TextStyle(
@@ -242,18 +264,18 @@ fun PlayerOverlay(
     }
 }
 
-// ⏱ Format time with 3-digit milliseconds
+// Function to format time with milliseconds in the requested format
 private fun formatTimeWithMilliseconds(seconds: Double): String {
     val totalSeconds = seconds.toInt()
-    val milliseconds = ((seconds - totalSeconds) * 1000).toInt().coerceIn(0, 999)
-
+    val milliseconds = ((seconds - totalSeconds) * 100).toInt()
+    
     val hours = totalSeconds / 3600
     val minutes = (totalSeconds % 3600) / 60
     val secs = totalSeconds % 60
-
+    
     return if (hours > 0) {
-        String.format("%02d:%02d:%02d\n%03d", hours, minutes, secs, milliseconds)
+        String.format("%3d\n%02d:%02d\n%3d", hours, minutes, secs, milliseconds)
     } else {
-        String.format("%02d:%02d\n%03d", minutes, secs, milliseconds)
+        String.format("%02d:%02d\n%3d", minutes, secs, milliseconds)
     }
 }
