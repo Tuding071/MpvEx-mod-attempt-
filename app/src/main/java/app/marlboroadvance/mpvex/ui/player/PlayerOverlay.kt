@@ -112,7 +112,7 @@ fun PlayerOverlay(
                     val deltaX = currentX - seekStartX
                     
                     // Lowered sensitivity by 50%: 20 pixels = 1 second (was 10 pixels = 1 second)
-                    val sensitivity = 20f
+                    val sensitivity = 60f
                     val timeDelta = (deltaX / sensitivity).toInt()
                     
                     // Calculate new position
