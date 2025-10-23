@@ -171,83 +171,63 @@ fun PlayerOverlay(
         }
     }
     
-    // Calculate seek position from X coordinate using proper alignment
+    // Calculate seek position from X coordinate using proper percentage calculation
     fun calculateSeekPosition(x: Float): Double {
         val screenWidth = context.resources.displayMetrics.widthPixels.toFloat()
-        val horizontalPadding = 128f // 64dp on each side (DOUBLE padding)
+        val horizontalPadding = 64f // 64dp on each side
         
         // Calculate percentage within seekbar (with padding)
         val availableWidth = screenWidth - (horizontalPadding * 2)
         val relativeX = (x - horizontalPadding).coerceIn(0f, availableWidth)
         val progressPercent = relativeX / availableWidth
         
-        // Convert percentage to video time
+        // Convert percentage to video time: progressPercent * totalDuration
         return progressPercent * videoDuration
     }
     
-    // Get current progress percentage for thumb positioning
+    // Get current progress percentage for display
     fun getCurrentProgressPercent(): Float {
         return (currentPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
     }
     
-    // Check if touch is within thumb area
-    fun isTouchInThumbArea(touchX: Float): Boolean {
-        val progressPercent = getCurrentProgressPercent()
-        val screenWidth = context.resources.displayMetrics.widthPixels.toFloat()
-        val horizontalPadding = 128f // DOUBLE padding
-        val availableWidth = screenWidth - (horizontalPadding * 2)
-        
-        // Calculate thumb center position
-        val thumbCenterX = (progressPercent * availableWidth) + horizontalPadding
-        
-        // Define thumb touch area (64px radius around thumb center) - LARGER AREA
-        val thumbTouchRadius = 64f
-        
-        return Math.abs(touchX - thumbCenterX) <= thumbTouchRadius
-    }
-    
-    // Progress bar drag gesture with thumb area detection
-    fun handleProgressBarDrag(event: MotionEvent): Boolean {
+    // SIMPLE SEEK BAR DRAG GESTURE - Entire area is touchable
+    fun handleSeekbarDrag(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
-                // Only start seeking if touch is within thumb area
-                if (isTouchInThumbArea(event.x)) {
-                    // Cancel auto-hide during seeking
-                    autoHideJob?.cancel()
-                    showSeekbar = true
-                    
-                    seekStartX = event.x
-                    seekStartPosition = currentPosition
-                    wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
-                    isSeeking = true
-                    showSeekTime = true
-                    
-                    // Calculate initial seek position using proper alignment
-                    val targetPosition = calculateSeekPosition(event.x)
-                    performRealTimeSeek(targetPosition)
-                    seekTargetTime = formatTimeSimple(targetPosition)
-                    
-                    // Pause video when seeking starts
-                    if (wasPlayingBeforeSeek) {
-                        MPVLib.setPropertyBoolean("pause", true)
-                    }
-                    
-                    return true
+                // Cancel auto-hide during seeking
+                autoHideJob?.cancel()
+                showSeekbar = true
+                
+                seekStartX = event.x
+                seekStartPosition = currentPosition
+                wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
+                isSeeking = true
+                showSeekTime = true
+                
+                // Calculate initial seek position using proper percentage
+                val targetPosition = calculateSeekPosition(event.x)
+                performRealTimeSeek(targetPosition)
+                seekTargetTime = formatTimeSimple(targetPosition)
+                
+                // Pause video when seeking starts
+                if (wasPlayingBeforeSeek) {
+                    MPVLib.setPropertyBoolean("pause", true)
                 }
-                return false
+                
+                return true
             }
             MotionEvent.ACTION_MOVE -> {
                 if (isSeeking) {
-                    // Calculate target position using proper alignment
+                    // Calculate target position using proper percentage
                     val targetPosition = calculateSeekPosition(event.x)
                     performRealTimeSeek(targetPosition)
                     seekTargetTime = formatTimeSimple(targetPosition)
                 }
-                return isSeeking
+                return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (isSeeking) {
-                    // Final position using proper alignment
+                    // Final position using proper percentage
                     val targetPosition = calculateSeekPosition(event.x)
                     performRealTimeSeek(targetPosition)
                     
@@ -272,7 +252,7 @@ fun PlayerOverlay(
                         showSeekbar = false
                     }
                 }
-                return isSeeking
+                return true
             }
         }
         return false
@@ -464,14 +444,10 @@ fun PlayerOverlay(
                     .fillMaxHeight(0.05f)
                     .align(Alignment.BottomStart)
                     .pointerInteropFilter { event ->
-                        handleProgressBarDrag(event)
+                        handleSeekbarDrag(event)
                     }
             ) {
                 val progressPercent = getCurrentProgressPercent()
-                val screenWidth = LocalContext.current.resources.displayMetrics.widthPixels
-                val horizontalPadding = 128f // DOUBLE padding
-                val availableWidth = screenWidth - (horizontalPadding * 2)
-                val thumbCenterX = (progressPercent * availableWidth) + horizontalPadding
                 
                 // 1% Top transparent area
                 Box(
@@ -487,7 +463,7 @@ fun PlayerOverlay(
                         .fillMaxWidth()
                         .fillMaxHeight(0.6f)
                         .align(Alignment.Center)
-                        .padding(horizontal = 64.dp) // DOUBLE padding (64dp each side)
+                        .padding(horizontal = 64.dp) // 64dp padding each side
                 ) {
                     // Background track (grey)
                     Box(
@@ -498,7 +474,7 @@ fun PlayerOverlay(
                             .clip(RectangleShape)
                     )
                     
-                    // Progress fill (white) - NO VISUAL THUMB, just the progress bar
+                    // Progress fill (white) - This will follow finger position
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(progressPercent)
