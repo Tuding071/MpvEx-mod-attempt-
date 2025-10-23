@@ -171,20 +171,26 @@ fun PlayerOverlay(
         }
     }
     
-    // Calculate seek position from X coordinate
+    // Calculate seek position from X coordinate using proper alignment
     fun calculateSeekPosition(x: Float): Double {
         val screenWidth = context.resources.displayMetrics.widthPixels.toFloat()
-        val horizontalPadding = 48f // 24dp on each side
+        val horizontalPadding = 64f // 32dp on each side (more padding)
         
         // Calculate percentage within seekbar (with padding)
         val availableWidth = screenWidth - (horizontalPadding * 2)
         val relativeX = (x - horizontalPadding).coerceIn(0f, availableWidth)
         val progressPercent = relativeX / availableWidth
         
+        // Convert percentage to video time
         return progressPercent * videoDuration
     }
     
-    // Progress bar drag gesture (ENTIRE progress bar is draggable)
+    // Get current progress percentage for thumb positioning
+    fun getCurrentProgressPercent(): Float {
+        return (currentPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
+    }
+    
+    // Progress bar drag gesture with proper alignment
     fun handleProgressBarDrag(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -198,7 +204,7 @@ fun PlayerOverlay(
                 isSeeking = true
                 showSeekTime = true
                 
-                // Calculate initial seek position
+                // Calculate initial seek position using proper alignment
                 val targetPosition = calculateSeekPosition(event.x)
                 performRealTimeSeek(targetPosition)
                 seekTargetTime = formatTimeSimple(targetPosition)
@@ -212,6 +218,7 @@ fun PlayerOverlay(
             }
             MotionEvent.ACTION_MOVE -> {
                 if (isSeeking) {
+                    // Calculate target position using proper alignment
                     val targetPosition = calculateSeekPosition(event.x)
                     performRealTimeSeek(targetPosition)
                     seekTargetTime = formatTimeSimple(targetPosition)
@@ -220,6 +227,7 @@ fun PlayerOverlay(
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (isSeeking) {
+                    // Final position using proper alignment
                     val targetPosition = calculateSeekPosition(event.x)
                     performRealTimeSeek(targetPosition)
                     
@@ -314,12 +322,21 @@ fun PlayerOverlay(
         return false
     }
     
-    // Left area gesture handler with tap detection
+    // Left area gesture handler with proper tap/hold detection
     fun handleLeftAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 leftTapStartTime = System.currentTimeMillis()
                 leftIsHolding = true
+                
+                // Start checking for long press after 300ms
+                coroutineScope.launch {
+                    delay(300)
+                    if (leftIsHolding) {
+                        // Long press detected - activate 2x speed
+                        isSpeedingUp = true
+                    }
+                }
                 true
             }
             MotionEvent.ACTION_UP -> {
@@ -334,10 +351,8 @@ fun PlayerOverlay(
                     } else {
                         showSeekbarWithAutoHide()
                     }
-                } else if (tapDuration >= 300) {
-                    // Long press - speed up (will auto-reset via LaunchedEffect)
-                    isSpeedingUp = true
                 }
+                // Long press speed will auto-reset via LaunchedEffect
                 true
             }
             MotionEvent.ACTION_CANCEL -> {
@@ -348,12 +363,21 @@ fun PlayerOverlay(
         }
     }
     
-    // Right area gesture handler with tap detection
+    // Right area gesture handler with proper tap/hold detection
     fun handleRightAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 rightTapStartTime = System.currentTimeMillis()
                 rightIsHolding = true
+                
+                // Start checking for long press after 300ms
+                coroutineScope.launch {
+                    delay(300)
+                    if (rightIsHolding) {
+                        // Long press detected - activate 2x speed
+                        isSpeedingUp = true
+                    }
+                }
                 true
             }
             MotionEvent.ACTION_UP -> {
@@ -368,10 +392,8 @@ fun PlayerOverlay(
                     } else {
                         showSeekbarWithAutoHide()
                     }
-                } else if (tapDuration >= 300) {
-                    // Long press - speed up (will auto-reset via LaunchedEffect)
-                    isSpeedingUp = true
                 }
+                // Long press speed will auto-reset via LaunchedEffect
                 true
             }
             MotionEvent.ACTION_CANCEL -> {
@@ -425,7 +447,7 @@ fun PlayerOverlay(
                         handleProgressBarDrag(event)
                     }
             ) {
-                val progressPercent = (currentPosition / videoDuration).coerceIn(0.0, 1.0)
+                val progressPercent = getCurrentProgressPercent()
                 
                 // 1% Top transparent area
                 Box(
@@ -441,7 +463,7 @@ fun PlayerOverlay(
                         .fillMaxWidth()
                         .fillMaxHeight(0.6f)
                         .align(Alignment.Center)
-                        .padding(horizontal = 24.dp)
+                        .padding(horizontal = 32.dp) // More padding (32dp each side)
                 ) {
                     // Background track (grey)
                     Box(
@@ -455,7 +477,7 @@ fun PlayerOverlay(
                     // Progress fill (white) - NO THUMB, just the progress bar
                     Box(
                         modifier = Modifier
-                            .fillMaxWidth(progressPercent.toFloat())
+                            .fillMaxWidth(progressPercent)
                             .fillMaxHeight()
                             .background(Color.White)
                             .clip(RectangleShape)
