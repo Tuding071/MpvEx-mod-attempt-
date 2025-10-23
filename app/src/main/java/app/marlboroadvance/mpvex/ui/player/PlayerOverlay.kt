@@ -48,7 +48,7 @@ fun PlayerOverlay(
     // Drag seeking variables
     var isSeeking by remember { mutableStateOf(false) }
     var seekStartX by remember { mutableStateOf(0f) }
-    var seekStartPosition by remember { mutableStateOf(0) }
+    var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     var lastSeekUpdateTime by remember { mutableStateOf(0L) }
     
@@ -76,10 +76,10 @@ fun PlayerOverlay(
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
             delay(100)
-            MPVLib.setPropertyFloat("speed", 2.0f)
+            MPVLib.setPropertyDouble("speed", 2.0)
         } else {
             delay(100)
-            MPVLib.setPropertyFloat("speed", 1.0f)
+            MPVLib.setPropertyDouble("speed", 1.0)
         }
     }
     
@@ -96,19 +96,33 @@ fun PlayerOverlay(
         }
     }
     
+    // Real-time seeking function that properly updates frames
+    fun performRealTimeSeek(targetPosition: Double) {
+        // Use absolute seeking for precise frame updates
+        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+        
+        // Force a frame refresh - this is crucial for real-time updates
+        MPVLib.setPropertyString("untimed", "yes")
+    }
+    
     // Continuous drag seeking gesture handler for bottom area
     fun handleDragSeekGesture(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 seekStartX = event.x
-                seekStartPosition = MPVLib.getPropertyInt("time-pos") ?: 0
+                seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
                 wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
                 isSeeking = true
                 
-                // Pause video when seeking starts
+                // Pause video when seeking starts for smoother frame updates
                 if (wasPlayingBeforeSeek) {
                     MPVLib.setPropertyBoolean("pause", true)
                 }
+                
+                // Enable precise seeking mode
+                MPVLib.setPropertyString("hr-seek", "absolute")
+                MPVLib.setPropertyString("video-sync", "display-resample")
+                
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
@@ -116,43 +130,56 @@ fun PlayerOverlay(
                     val currentX = event.x
                     val deltaX = currentX - seekStartX
                     
-                    // Precise sensitivity: 5 pixels = 33ms (0.033 seconds)
-                    // Formula: timeDelta = (deltaX / 5) * 0.033 seconds
-                    val pixelsPerSecond = 5f / 0.033f // ~151.5 pixels per second
+                    // More responsive sensitivity: 3 pixels = 33ms (0.033 seconds)
+                    val pixelsPerSecond = 3f / 0.033f // ~90.9 pixels per second
                     val timeDeltaSeconds = deltaX / pixelsPerSecond
-                    val timeDeltaMs = (timeDeltaSeconds * 1000).toInt()
                     
-                    // Calculate new position in milliseconds
-                    val newPositionMs = (seekStartPosition * 1000) + timeDeltaMs
-                    val newPositionSeconds = (newPositionMs / 1000.0).toInt()
+                    // Calculate new position in seconds with double precision
+                    val newPositionSeconds = seekStartPosition + timeDeltaSeconds
                     
-                    // Seek immediately for responsive feedback
-                    viewModel.seekTo(newPositionSeconds, false)
+                    // Ensure position is within bounds
+                    val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+                    val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
                     
-                    // Update frame every 100ms with guaranteed refresh
-                    val currentTime = System.currentTimeMillis()
-                    if (currentTime - lastSeekUpdateTime >= 100) {
-                        // Force frame refresh with guaranteed update
-                        MPVLib.command("no-osd", "seek", "0", "relative", "exact")
-                        lastSeekUpdateTime = currentTime
-                    }
+                    // Perform real-time seek with immediate frame update
+                    performRealTimeSeek(clampedPosition)
+                    
+                    // Update current time display immediately
+                    val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+                    currentTime = formatTimeWithMilliseconds(currentPos)
                 }
                 return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (isSeeking) {
+                    // Final position adjustment
+                    val currentX = event.x
+                    val deltaX = currentX - seekStartX
+                    val pixelsPerSecond = 3f / 0.033f
+                    val timeDeltaSeconds = deltaX / pixelsPerSecond
+                    val newPositionSeconds = seekStartPosition + timeDeltaSeconds
+                    val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+                    val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
+                    
+                    // Final seek to ensure accuracy
+                    performRealTimeSeek(clampedPosition)
+                    
                     // Resume video if it was playing before seek
                     if (wasPlayingBeforeSeek) {
                         coroutineScope.launch {
-                            delay(100) // 100ms delay before resuming
+                            delay(100)
                             MPVLib.setPropertyBoolean("pause", false)
                         }
                     }
                     
+                    // Reset seeking mode
+                    MPVLib.setPropertyString("hr-seek", "no")
+                    MPVLib.setPropertyString("video-sync", "audio")
+                    
                     // Reset seeking state
                     isSeeking = false
                     seekStartX = 0f
-                    seekStartPosition = 0
+                    seekStartPosition = 0.0
                     wasPlayingBeforeSeek = false
                     lastSeekUpdateTime = 0L
                 }
@@ -269,6 +296,22 @@ fun PlayerOverlay(
                 .background(Color.Black.copy(alpha = 0.5f))
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         )
+        
+        // Seeking indicator (optional - for visual feedback)
+        if (isSeeking) {
+            Text(
+                text = "SEEKING",
+                style = TextStyle(
+                    color = Color.Yellow,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                ),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color.Black.copy(alpha = 0.7f))
+                    .padding(8.dp)
+            )
+        }
     }
 }
 
