@@ -10,8 +10,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.height
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -21,9 +19,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -51,7 +47,7 @@ fun PlayerOverlay(
     var isSpeedingUp by remember { mutableStateOf(false) }
     var pendingPauseResume by remember { mutableStateOf(false) }
     var isPausing by remember { mutableStateOf(false) }
-    var showSeekbar by remember { mutableStateOf(false) } // Start hidden
+    var showSeekbar by remember { mutableStateOf(false) }
     
     // Drag seeking variables
     var isSeeking by remember { mutableStateOf(false) }
@@ -81,31 +77,24 @@ fun PlayerOverlay(
         
         // Large cache settings for smooth seeking
         MPVLib.setPropertyString("cache", "yes")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 100 * 1024 * 1024) // 100MB cache
-        MPVLib.setPropertyString("demuxer-readahead-secs", "60") // 60 seconds preload
-        MPVLib.setPropertyString("cache-secs", "60") // 60 seconds cache
-        MPVLib.setPropertyString("cache-pause", "no") // Don't pause cache during seeking
+        MPVLib.setPropertyInt("demuxer-max-bytes", 100 * 1024 * 1024)
+        MPVLib.setPropertyString("demuxer-readahead-secs", "60")
+        MPVLib.setPropertyString("cache-secs", "60")
+        MPVLib.setPropertyString("cache-pause", "no")
         
         // Frame-accurate seeking settings
         MPVLib.setPropertyString("video-sync", "display-resample")
         MPVLib.setPropertyString("untimed", "yes")
         MPVLib.setPropertyString("hr-seek", "yes")
-        MPVLib.setPropertyString("hr-seek-framedrop", "no") // No frame dropping
-    }
-    
-    // Update time and progress every 250ms
-    LaunchedEffect(Unit) {
-        while (isActive) {
-            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-            val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
-            
-            currentTime = formatTimeSimple(currentPos)
-            totalTime = formatTimeSimple(duration)
-            currentPosition = currentPos
-            videoDuration = duration
-            
-            delay(250)
-        }
+        MPVLib.setPropertyString("hr-seek-framedrop", "no")
+        
+        // Initial time setup (ONLY ONCE - no interval updates)
+        val initialPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+        currentTime = formatTimeSimple(initialPos)
+        totalTime = formatTimeSimple(duration)
+        currentPosition = initialPos
+        videoDuration = duration
     }
     
     // Handle speed transitions with 100ms delay
@@ -136,9 +125,20 @@ fun PlayerOverlay(
     fun performRealTimeSeek(targetPosition: Double) {
         // Use absolute seeking for precise frame updates
         MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+        
+        // Update current time immediately after seeking
+        currentTime = formatTimeSimple(targetPosition)
+        currentPosition = targetPosition
     }
     
-    // Seekbar drag gesture handler (only for the bottom 3% area)
+    // Function to update time display (called only when needed)
+    fun updateTimeDisplay() {
+        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+        currentTime = formatTimeSimple(currentPos)
+        currentPosition = currentPos
+    }
+    
+    // Seekbar drag gesture handler
     fun handleSeekbarDrag(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -147,9 +147,8 @@ fun PlayerOverlay(
                 wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
                 isSeeking = true
                 showSeekTime = true
-                showSeekbar = true // Keep seekbar visible during seeking
+                showSeekbar = true
                 
-                // Pause video when seeking starts for smoother frame updates
                 if (wasPlayingBeforeSeek) {
                     MPVLib.setPropertyBoolean("pause", true)
                 }
@@ -161,26 +160,20 @@ fun PlayerOverlay(
                     val currentX = event.x
                     val deltaX = currentX - seekStartX
                     
-                    // Calculate position based on screen width
                     val screenWidth = context.resources.displayMetrics.widthPixels.toFloat()
                     val progressPercent = deltaX / screenWidth
                     val timeDeltaSeconds = progressPercent * videoDuration
                     
-                    // Calculate new position
                     val newPositionSeconds = seekStartPosition + timeDeltaSeconds
                     val clampedPosition = newPositionSeconds.coerceIn(0.0, videoDuration)
                     
-                    // Perform real-time seek with same precision as horizontal dragging
                     performRealTimeSeek(clampedPosition)
-                    
-                    // Update seek target time display
                     seekTargetTime = formatTimeSimple(clampedPosition)
                 }
                 return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (isSeeking) {
-                    // Final position adjustment
                     val currentX = event.x
                     val deltaX = currentX - seekStartX
                     val screenWidth = context.resources.displayMetrics.widthPixels.toFloat()
@@ -189,18 +182,17 @@ fun PlayerOverlay(
                     val newPositionSeconds = seekStartPosition + timeDeltaSeconds
                     val clampedPosition = newPositionSeconds.coerceIn(0.0, videoDuration)
                     
-                    // Final seek to ensure accuracy
                     performRealTimeSeek(clampedPosition)
                     
-                    // Resume video if it was playing before seek
                     if (wasPlayingBeforeSeek) {
                         coroutineScope.launch {
                             delay(100)
                             MPVLib.setPropertyBoolean("pause", false)
+                            // Update time once after resuming playback
+                            updateTimeDisplay()
                         }
                     }
                     
-                    // Reset seeking state
                     isSeeking = false
                     showSeekTime = false
                     seekStartX = 0f
@@ -213,17 +205,16 @@ fun PlayerOverlay(
         return false
     }
     
-    // Continuous drag seeking gesture handler for bottom area (27% - above seekbar)
+    // Continuous drag seeking gesture handler for bottom area
     fun handleDragSeekGesture(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 seekStartX = event.x
-                seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+                seekStartPosition = currentPosition
                 wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
                 isSeeking = true
                 showSeekTime = true
                 
-                // Pause video when seeking starts for smoother frame updates
                 if (wasPlayingBeforeSeek) {
                     MPVLib.setPropertyBoolean("pause", true)
                 }
@@ -235,28 +226,20 @@ fun PlayerOverlay(
                     val currentX = event.x
                     val deltaX = currentX - seekStartX
                     
-                    // More responsive sensitivity: 3 pixels = 33ms (0.033 seconds)
-                    val pixelsPerSecond = 3f / 0.033f // ~90.9 pixels per second
+                    val pixelsPerSecond = 3f / 0.033f
                     val timeDeltaSeconds = deltaX / pixelsPerSecond
                     
-                    // Calculate new position in seconds with double precision
                     val newPositionSeconds = seekStartPosition + timeDeltaSeconds
-                    
-                    // Ensure position is within bounds
                     val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
                     val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
                     
-                    // Perform real-time seek with immediate frame update
                     performRealTimeSeek(clampedPosition)
-                    
-                    // Update seek target time display
                     seekTargetTime = formatTimeSimple(clampedPosition)
                 }
                 return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (isSeeking) {
-                    // Final position adjustment
                     val currentX = event.x
                     val deltaX = currentX - seekStartX
                     val pixelsPerSecond = 3f / 0.033f
@@ -265,18 +248,16 @@ fun PlayerOverlay(
                     val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
                     val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
                     
-                    // Final seek to ensure accuracy
                     performRealTimeSeek(clampedPosition)
                     
-                    // Resume video if it was playing before seek
                     if (wasPlayingBeforeSeek) {
                         coroutineScope.launch {
                             delay(100)
                             MPVLib.setPropertyBoolean("pause", false)
+                            updateTimeDisplay()
                         }
                     }
                     
-                    // Reset seeking state
                     isSeeking = false
                     showSeekTime = false
                     seekStartX = 0f
@@ -304,7 +285,7 @@ fun PlayerOverlay(
         }
     }
     
-    // Tap handler to show/hide seekbar (only for left/right areas)
+    // Tap handler to show/hide seekbar
     fun handleTapToShowSeekbar() {
         showSeekbar = !showSeekbar
     }
@@ -312,7 +293,7 @@ fun PlayerOverlay(
     Box(
         modifier = modifier.fillMaxSize()
     ) {
-        // CENTER AREA - Tap for pause/resume with different delays
+        // CENTER AREA - Tap for pause/resume
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.73f)
@@ -325,23 +306,25 @@ fun PlayerOverlay(
                         val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
                         isPausing = !currentPaused
                         pendingPauseResume = true
+                        // Update time after pause/resume
+                        updateTimeDisplay()
                     }
                 )
         )
         
-        // BOTTOM 27% - Continuous drag seeking (ABOVE the seekbar)
+        // BOTTOM 27% - Horizontal drag seeking
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .fillMaxHeight(0.27f)
                 .align(Alignment.BottomStart)
-                .offset(y = (-30).dp) // Position above the seekbar area
+                .offset(y = (-3).dp)
                 .pointerInteropFilter { event ->
                     handleDragSeekGesture(event)
                 }
         )
         
-        // BOTTOM 3% - Seekbar area (SOLID LINE)
+        // BOTTOM 3% - Seekbar area (plain white line)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -351,9 +334,7 @@ fun PlayerOverlay(
                     handleSeekbarDrag(event)
                 }
         ) {
-            // Background (transparent for touch area)
-            
-            // White progress line
+            // White progress line (no thumb)
             val progressPercent = (currentPosition / videoDuration).coerceIn(0.0, 1.0)
             Box(
                 modifier = Modifier
@@ -361,20 +342,9 @@ fun PlayerOverlay(
                     .fillMaxHeight()
                     .background(Color.White)
             )
-            
-            // White thumb at the end (only visible when seekbar is shown)
-            if (showSeekbar) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .offset(x = (progressPercent * (LocalContext.current.resources.displayMetrics.widthPixels)).dp)
-                        .size(16.dp)
-                        .background(Color.White, androidx.compose.foundation.shape.CircleShape)
-                )
-            }
         }
         
-        // LEFT 27% - Hold for 2x speed AND tap to show/hide seekbar
+        // LEFT 27% - Hold for 2x speed + tap to show/hide seekbar
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.27f)
@@ -390,7 +360,7 @@ fun PlayerOverlay(
                 }
         )
         
-        // RIGHT 27% - Hold for 2x speed AND tap to show/hide seekbar
+        // RIGHT 27% - Hold for 2x speed + tap to show/hide seekbar
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.27f)
@@ -414,7 +384,7 @@ fun PlayerOverlay(
                 .align(Alignment.TopStart)
         )
         
-        // Current time - bottom left
+        // Current time - bottom left (updates naturally, not on interval)
         Text(
             text = currentTime,
             style = TextStyle(
@@ -424,7 +394,7 @@ fun PlayerOverlay(
             ),
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 16.dp, bottom = 40.dp) // Adjusted for seekbar
+                .padding(start = 16.dp, bottom = 40.dp)
                 .background(Color.Black.copy(alpha = 0.5f))
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         )
@@ -439,12 +409,12 @@ fun PlayerOverlay(
             ),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 40.dp) // Adjusted for seekbar
+                .padding(end = 16.dp, bottom = 40.dp)
                 .background(Color.Black.copy(alpha = 0.5f))
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         )
         
-        // Center seek time - shows target position during seeking (positioned higher up)
+        // Center seek time - shows target position during seeking
         if (showSeekTime) {
             Text(
                 text = seekTargetTime,
@@ -455,7 +425,7 @@ fun PlayerOverlay(
                 ),
                 modifier = Modifier
                     .align(Alignment.Center)
-                    .offset(y = (-40).dp) // Positioned 40dp above center
+                    .offset(y = (-40).dp)
                     .background(Color.Black.copy(alpha = 0.7f))
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
