@@ -39,8 +39,10 @@ fun PlayerOverlay(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var currentTime by remember { mutableStateOf("00:00\n  00") }
-    var totalTime by remember { mutableStateOf("00:00\n  00") }
+    var currentTime by remember { mutableStateOf("00:00") }
+    var totalTime by remember { mutableStateOf("00:00") }
+    var seekTargetTime by remember { mutableStateOf("00:00") }
+    var showSeekTime by remember { mutableStateOf(false) }
     var isSpeedingUp by remember { mutableStateOf(false) }
     var pendingPauseResume by remember { mutableStateOf(false) }
     var isPausing by remember { mutableStateOf(false) }
@@ -50,25 +52,31 @@ fun PlayerOverlay(
     var seekStartX by remember { mutableStateOf(0f) }
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
-    var lastSeekUpdateTime by remember { mutableStateOf(0L) }
+    var lastDragUpdate by remember { mutableStateOf(0L) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // Force software decoding on startup
+    // Aggressive software decoding optimization
     LaunchedEffect(Unit) {
         MPVLib.setPropertyString("hwdec", "no")
+        MPVLib.setPropertyString("vo", "gpu")
+        MPVLib.setPropertyString("profile", "fast")
+        MPVLib.setPropertyInt("demuxer-max-bytes", 100 * 1024 * 1024) // 100MB cache
+        MPVLib.setPropertyString("demuxer-readahead-secs", "30")
+        MPVLib.setPropertyString("video-sync", "display-resample")
+        MPVLib.setPropertyString("untimed", "yes")
     }
     
-    // Update time every 50ms for smoother milliseconds
+    // Update time every 250ms
     LaunchedEffect(Unit) {
         while (isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
             val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
             
-            currentTime = formatTimeWithMilliseconds(currentPos)
-            totalTime = formatTimeWithMilliseconds(duration)
+            currentTime = formatTimeSimple(currentPos)
+            totalTime = formatTimeSimple(duration)
             
-            delay(50)
+            delay(250)
         }
     }
     
@@ -96,13 +104,20 @@ fun PlayerOverlay(
         }
     }
     
-    // Real-time seeking function that properly updates frames
-    fun performRealTimeSeek(targetPosition: Double) {
-        // Use absolute seeking for precise frame updates
-        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+    // Smart seeking function with dual-mode (fast vs precise)
+    fun performSmartSeek(targetPosition: Double, dragSpeed: Double) {
+        val isFastSeek = Math.abs(dragSpeed) > 2.0
         
-        // Force a frame refresh - this is crucial for real-time updates
-        MPVLib.setPropertyString("untimed", "yes")
+        if (isFastSeek) {
+            // FAST SEEKING: Keyframe mode for instant response
+            MPVLib.command("seek", targetPosition.toString(), "absolute", "keyframes")
+        } else {
+            // SLOW SEEKING: Precise mode for accuracy
+            MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+        }
+        
+        // Update seek target time display
+        seekTargetTime = formatTimeSimple(targetPosition)
     }
     
     // Continuous drag seeking gesture handler for bottom area
@@ -113,13 +128,15 @@ fun PlayerOverlay(
                 seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
                 wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
                 isSeeking = true
+                showSeekTime = true
+                lastDragUpdate = System.currentTimeMillis()
                 
                 // Pause video when seeking starts for smoother frame updates
                 if (wasPlayingBeforeSeek) {
                     MPVLib.setPropertyBoolean("pause", true)
                 }
                 
-                // Enable precise seeking mode
+                // Enable high-performance seeking mode
                 MPVLib.setPropertyString("hr-seek", "absolute")
                 MPVLib.setPropertyString("video-sync", "display-resample")
                 
@@ -127,10 +144,15 @@ fun PlayerOverlay(
             }
             MotionEvent.ACTION_MOVE -> {
                 if (isSeeking) {
+                    val currentTime = System.currentTimeMillis()
                     val currentX = event.x
                     val deltaX = currentX - seekStartX
                     
-                    // More responsive sensitivity: 3 pixels = 33ms (0.033 seconds)
+                    // Calculate drag speed for smart seeking
+                    val timeDelta = (currentTime - lastDragUpdate) / 1000.0
+                    val dragSpeed = if (timeDelta > 0) Math.abs(deltaX / timeDelta) else 0.0
+                    
+                    // Responsive sensitivity: 3 pixels = 33ms (0.033 seconds)
                     val pixelsPerSecond = 3f / 0.033f // ~90.9 pixels per second
                     val timeDeltaSeconds = deltaX / pixelsPerSecond
                     
@@ -141,12 +163,11 @@ fun PlayerOverlay(
                     val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
                     val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
                     
-                    // Perform real-time seek with immediate frame update
-                    performRealTimeSeek(clampedPosition)
+                    // Perform smart seek based on drag speed
+                    performSmartSeek(clampedPosition, dragSpeed)
                     
-                    // Update current time display immediately
-                    val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-                    currentTime = formatTimeWithMilliseconds(currentPos)
+                    // Update last drag time
+                    lastDragUpdate = currentTime
                 }
                 return true
             }
@@ -161,8 +182,8 @@ fun PlayerOverlay(
                     val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
                     val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
                     
-                    // Final seek to ensure accuracy
-                    performRealTimeSeek(clampedPosition)
+                    // Final precise seek to ensure accuracy
+                    MPVLib.command("seek", clampedPosition.toString(), "absolute", "exact")
                     
                     // Resume video if it was playing before seek
                     if (wasPlayingBeforeSeek) {
@@ -178,10 +199,11 @@ fun PlayerOverlay(
                     
                     // Reset seeking state
                     isSeeking = false
+                    showSeekTime = false
                     seekStartX = 0f
                     seekStartPosition = 0.0
                     wasPlayingBeforeSeek = false
-                    lastSeekUpdateTime = 0L
+                    lastDragUpdate = 0L
                 }
                 return true
             }
@@ -270,9 +292,8 @@ fun PlayerOverlay(
             text = currentTime,
             style = TextStyle(
                 color = Color.White,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                lineHeight = 14.sp
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
             ),
             modifier = Modifier
                 .align(Alignment.BottomStart)
@@ -286,9 +307,8 @@ fun PlayerOverlay(
             text = totalTime,
             style = TextStyle(
                 color = Color.White,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                lineHeight = 14.sp
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
             ),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
@@ -297,36 +317,36 @@ fun PlayerOverlay(
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         )
         
-        // Seeking indicator (optional - for visual feedback)
-        if (isSeeking) {
+        // Center seek time - shows target position during seeking (positioned higher up)
+        if (showSeekTime) {
             Text(
-                text = "SEEKING",
+                text = seekTargetTime,
                 style = TextStyle(
-                    color = Color.Yellow,
-                    fontSize = 14.sp,
+                    color = Color.White,
+                    fontSize = 24.sp,
                     fontWeight = FontWeight.Bold
                 ),
                 modifier = Modifier
                     .align(Alignment.Center)
+                    .offset(y = (-40).dp) // Positioned 40dp above center
                     .background(Color.Black.copy(alpha = 0.7f))
-                    .padding(8.dp)
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
             )
         }
     }
 }
 
-// Function to format time with milliseconds in the requested format
-private fun formatTimeWithMilliseconds(seconds: Double): String {
+// Function to format time simply without milliseconds
+private fun formatTimeSimple(seconds: Double): String {
     val totalSeconds = seconds.toInt()
-    val milliseconds = ((seconds - totalSeconds) * 100).toInt()
     
     val hours = totalSeconds / 3600
     val minutes = (totalSeconds % 3600) / 60
     val secs = totalSeconds % 60
     
     return if (hours > 0) {
-        String.format("%3d\n%02d:%02d\n%3d", hours, minutes, secs, milliseconds)
+        String.format("%02d:%02d:%02d", hours, minutes, secs)
     } else {
-        String.format("%02d:%02d\n%3d", minutes, secs, milliseconds)
+        String.format("%02d:%02d", minutes, secs)
     }
 }
