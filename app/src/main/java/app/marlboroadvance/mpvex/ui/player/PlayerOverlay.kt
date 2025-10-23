@@ -179,21 +179,19 @@ fun PlayerOverlay(
         }
     }
     
-    // Calculate seek position from X coordinate - FIXED to use seekbar bounds
+    // Calculate seek position from X coordinate - FIXED to use full width (no padding)
     fun calculateSeekPosition(x: Float): Double {
         val screenWidth = context.resources.displayMetrics.widthPixels.toFloat()
-        val horizontalPadding = 64f // 64dp on each side
         
-        // Calculate percentage within seekbar (with padding) - FIXED BOUNDS
-        val availableWidth = screenWidth - (horizontalPadding * 2)
-        val relativeX = (x - horizontalPadding).coerceIn(0f, availableWidth)
-        val progressPercent = relativeX / availableWidth
+        // Calculate percentage within full screen width - NO PADDING
+        val relativeX = x.coerceIn(0f, screenWidth)
+        val progressPercent = relativeX / screenWidth
         
         // Convert percentage to video time
         return progressPercent * videoDuration
     }
     
-    // PRECISE SLIDER SEEKING - Touch position matches exactly
+    // PRECISE SLIDER SEEKING - Touch position matches exactly (no padding)
     fun handleSliderSeek(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -205,7 +203,7 @@ fun PlayerOverlay(
                 isSeeking = true
                 showSeekTime = true
                 
-                // Calculate position based on EXACT touch point within seekbar bounds
+                // Calculate position based on EXACT touch point with NO PADDING
                 val targetPosition = calculateSeekPosition(event.x)
                 userSliderPosition = (targetPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
                 
@@ -222,7 +220,7 @@ fun PlayerOverlay(
             }
             MotionEvent.ACTION_MOVE -> {
                 if (isSeeking) {
-                    // Calculate target position using EXACT touch point within seekbar bounds
+                    // Calculate target position using EXACT touch point with NO PADDING
                     val targetPosition = calculateSeekPosition(event.x)
                     userSliderPosition = (targetPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
                     
@@ -234,7 +232,7 @@ fun PlayerOverlay(
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (isSeeking) {
-                    // Final position using EXACT touch point within seekbar bounds
+                    // Final position using EXACT touch point with NO PADDING
                     val targetPosition = calculateSeekPosition(event.x)
                     userSliderPosition = (targetPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
                     performRealTimeSeek(targetPosition)
@@ -449,9 +447,9 @@ fun PlayerOverlay(
                     .fillMaxWidth()
                     .fillMaxHeight(0.15f)
                     .align(Alignment.BottomStart)
-                    .padding(horizontal = 16.dp) // Outer padding
+                    // REMOVED padding from here - seekbar uses full width
             ) {
-                // Current time - left side
+                // Current time - left side with 32dp padding
                 Text(
                     text = currentTime,
                     style = TextStyle(
@@ -461,11 +459,12 @@ fun PlayerOverlay(
                     ),
                     modifier = Modifier
                         .align(Alignment.CenterStart)
-                        .background(Color.DarkGray.copy(alpha = 0.8f)) // Dark grey background
+                        .padding(start = 32.dp) // Added 32dp padding on left
+                        .background(Color.DarkGray.copy(alpha = 0.8f))
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 )
                 
-                // Total time - right side
+                // Total time - right side with 32dp padding
                 Text(
                     text = totalTime,
                     style = TextStyle(
@@ -475,14 +474,15 @@ fun PlayerOverlay(
                     ),
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
-                        .background(Color.DarkGray.copy(alpha = 0.8f)) // Dark grey background
+                        .padding(end = 32.dp) // Added 32dp padding on right
+                        .background(Color.DarkGray.copy(alpha = 0.8f))
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 )
                 
-                // SEEKBAR AREA - Between times
+                // SEEKBAR AREA - Between times, uses full width (no padding)
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth(0.7f)
+                        .fillMaxWidth() // Changed from 0.7f to 1f - uses full width
                         .fillMaxHeight(0.4f)
                         .align(Alignment.Center)
                         .pointerInteropFilter { event ->
@@ -579,7 +579,7 @@ fun PlayerOverlay(
                 modifier = Modifier
                     .align(Alignment.Center)
                     .offset(y = (-40).dp)
-                    .background(Color.DarkGray.copy(alpha = 0.8f)) // Dark grey background
+                    .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
         }
