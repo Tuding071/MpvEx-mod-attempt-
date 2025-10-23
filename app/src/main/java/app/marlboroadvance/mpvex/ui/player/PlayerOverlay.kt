@@ -52,7 +52,7 @@ fun PlayerOverlay(
     var isSpeedingUp by remember { mutableStateOf(false) }
     var pendingPauseResume by remember { mutableStateOf(false) }
     var isPausing by remember { mutableStateOf(false) }
-    var showSeekbar by remember { mutableStateOf(true) }
+    var showSeekbar by remember { mutableStateOf(false) }
     
     // Drag seeking variables
     var isSeeking by remember { mutableStateOf(false) }
@@ -139,7 +139,7 @@ fun PlayerOverlay(
         MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
     }
     
-    // Handle seekbar drag gesture
+    // Seekbar drag gesture handler (only for the thumb)
     fun handleSeekbarDrag(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -162,7 +162,7 @@ fun PlayerOverlay(
                     val currentX = event.x
                     val deltaX = currentX - seekStartX
                     
-                    // Calculate position based on seekbar width (assuming full screen width)
+                    // Calculate position based on screen width
                     val screenWidth = context.resources.displayMetrics.widthPixels.toFloat()
                     val progressPercent = deltaX / screenWidth
                     val timeDeltaSeconds = progressPercent * videoDuration
@@ -171,7 +171,7 @@ fun PlayerOverlay(
                     val newPositionSeconds = seekStartPosition + timeDeltaSeconds
                     val clampedPosition = newPositionSeconds.coerceIn(0.0, videoDuration)
                     
-                    // Perform real-time seek
+                    // Perform real-time seek with same logic as drag seeking
                     performRealTimeSeek(clampedPosition)
                     
                     // Update seek target time display
@@ -216,15 +216,84 @@ fun PlayerOverlay(
     
     // Continuous drag seeking gesture handler for bottom area
     fun handleDragSeekGesture(event: MotionEvent): Boolean {
-        showSeekbar = true // Show seekbar when dragging in bottom area
-        return handleSeekbarDrag(event)
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                seekStartX = event.x
+                seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+                wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
+                isSeeking = true
+                showSeekTime = true
+                
+                // Pause video when seeking starts for smoother frame updates
+                if (wasPlayingBeforeSeek) {
+                    MPVLib.setPropertyBoolean("pause", true)
+                }
+                
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (isSeeking) {
+                    val currentX = event.x
+                    val deltaX = currentX - seekStartX
+                    
+                    // More responsive sensitivity: 3 pixels = 33ms (0.033 seconds)
+                    val pixelsPerSecond = 3f / 0.033f // ~90.9 pixels per second
+                    val timeDeltaSeconds = deltaX / pixelsPerSecond
+                    
+                    // Calculate new position in seconds with double precision
+                    val newPositionSeconds = seekStartPosition + timeDeltaSeconds
+                    
+                    // Ensure position is within bounds
+                    val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+                    val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
+                    
+                    // Perform real-time seek with immediate frame update
+                    performRealTimeSeek(clampedPosition)
+                    
+                    // Update seek target time display
+                    seekTargetTime = formatTimeSimple(clampedPosition)
+                }
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (isSeeking) {
+                    // Final position adjustment
+                    val currentX = event.x
+                    val deltaX = currentX - seekStartX
+                    val pixelsPerSecond = 3f / 0.033f
+                    val timeDeltaSeconds = deltaX / pixelsPerSecond
+                    val newPositionSeconds = seekStartPosition + timeDeltaSeconds
+                    val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+                    val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
+                    
+                    // Final seek to ensure accuracy
+                    performRealTimeSeek(clampedPosition)
+                    
+                    // Resume video if it was playing before seek
+                    if (wasPlayingBeforeSeek) {
+                        coroutineScope.launch {
+                            delay(100)
+                            MPVLib.setPropertyBoolean("pause", false)
+                        }
+                    }
+                    
+                    // Reset seeking state
+                    isSeeking = false
+                    showSeekTime = false
+                    seekStartX = 0f
+                    seekStartPosition = 0.0
+                    wasPlayingBeforeSeek = false
+                }
+                return true
+            }
+        }
+        return false
     }
     
     // Hold gesture handler for left/right areas (2x speed)
     fun handleHoldGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
-                showSeekbar = true // Show seekbar when holding speed buttons
                 isSpeedingUp = true
                 true
             }
@@ -244,7 +313,7 @@ fun PlayerOverlay(
     Box(
         modifier = modifier.fillMaxSize()
     ) {
-        // CENTER AREA - Tap for pause/resume with different delays (NO seekbar toggle)
+        // CENTER AREA - Tap for pause/resume with different delays
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.73f)
@@ -359,38 +428,38 @@ fun PlayerOverlay(
             )
         }
         
-        // SEEKBAR - Only show when enabled
+        // FACEBOOK LITE STYLE SEEKBAR - Only show when enabled
         if (showSeekbar) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp)
                     .align(Alignment.BottomCenter)
-                    .offset(y = (-30).dp) // Position above bottom controls
+                    .offset(y = (-50).dp) // Position above time displays
             ) {
-                // Background track (semi-transparent grey)
+                // Background track (thin grey line)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(4.dp)
-                        .background(Color.Gray.copy(alpha = 0.6f))
+                        .height(3.dp)
+                        .background(Color.Gray.copy(alpha = 0.7f))
                         .clip(RectangleShape)
                 )
                 
-                // Progress track (white - watched portion)
-                val progressWidth = (currentPosition / videoDuration).coerceIn(0.0, 1.0)
+                // Progress track (blue - watched portion) - Facebook Lite uses blue
+                val progressPercent = (currentPosition / videoDuration).coerceIn(0.0, 1.0)
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth(progressWidth.toFloat())
+                        .fillMaxWidth(progressPercent.toFloat())
                         .fillMaxHeight()
-                        .background(Color.White)
+                        .background(Color(0xFF0084FF)) // Facebook blue color
                         .clip(RectangleShape)
                 )
                 
-                // Thumb (white ball)
+                // Thumb (white circle) - Only the thumb is draggable
                 Box(
                     modifier = Modifier
-                        .offset(x = (progressWidth * (LocalContext.current.resources.displayMetrics.widthPixels - 32)).dp)
+                        .offset(x = (progressPercent * (LocalContext.current.resources.displayMetrics.widthPixels - 32)).dp)
                         .size(16.dp)
                         .background(Color.White, androidx.compose.foundation.shape.CircleShape)
                         .pointerInteropFilter { event ->
