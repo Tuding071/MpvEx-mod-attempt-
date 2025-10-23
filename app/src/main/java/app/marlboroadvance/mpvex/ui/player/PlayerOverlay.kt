@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.ui.player
 
 import android.view.MotionEvent
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -63,6 +64,13 @@ fun PlayerOverlay(
     // Video progress for seekbar
     var currentPosition by remember { mutableStateOf(0.0) }
     var videoDuration by remember { mutableStateOf(1.0) }
+    
+    // Slider state
+    var userSliderPosition by remember { mutableStateOf(0f) }
+    val animatedProgress by animateFloatAsState(
+        targetValue = if (isSeeking) userSliderPosition else (currentPosition / videoDuration).coerceIn(0.0, 1.0).toFloat(),
+        label = "seekbar_animation"
+    )
     
     // Tap detection variables
     var leftTapStartTime by remember { mutableStateOf(0L) }
@@ -171,7 +179,7 @@ fun PlayerOverlay(
         }
     }
     
-    // Calculate seek position from X coordinate using proper percentage calculation
+    // Calculate seek position from X coordinate using precise percentage
     fun calculateSeekPosition(x: Float): Double {
         val screenWidth = context.resources.displayMetrics.widthPixels.toFloat()
         val horizontalPadding = 64f // 64dp on each side
@@ -181,31 +189,27 @@ fun PlayerOverlay(
         val relativeX = (x - horizontalPadding).coerceIn(0f, availableWidth)
         val progressPercent = relativeX / availableWidth
         
-        // Convert percentage to video time: progressPercent * totalDuration
+        // Convert percentage to video time
         return progressPercent * videoDuration
     }
     
-    // Get current progress percentage for display
-    fun getCurrentProgressPercent(): Float {
-        return (currentPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
-    }
-    
-    // SIMPLE SEEK BAR DRAG GESTURE - Entire area is touchable
-    fun handleSeekbarDrag(event: MotionEvent): Boolean {
+    // PRECISE SLIDER SEEKING - Traditional slider approach
+    fun handleSliderSeek(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 // Cancel auto-hide during seeking
                 autoHideJob?.cancel()
                 showSeekbar = true
                 
-                seekStartX = event.x
-                seekStartPosition = currentPosition
                 wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
                 isSeeking = true
                 showSeekTime = true
                 
-                // Calculate initial seek position using proper percentage
+                // Calculate initial slider position
                 val targetPosition = calculateSeekPosition(event.x)
+                userSliderPosition = (targetPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
+                
+                // Perform initial seek
                 performRealTimeSeek(targetPosition)
                 seekTargetTime = formatTimeSimple(targetPosition)
                 
@@ -218,8 +222,11 @@ fun PlayerOverlay(
             }
             MotionEvent.ACTION_MOVE -> {
                 if (isSeeking) {
-                    // Calculate target position using proper percentage
+                    // Calculate target position using precise percentage
                     val targetPosition = calculateSeekPosition(event.x)
+                    userSliderPosition = (targetPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
+                    
+                    // Perform real-time seek
                     performRealTimeSeek(targetPosition)
                     seekTargetTime = formatTimeSimple(targetPosition)
                 }
@@ -227,8 +234,9 @@ fun PlayerOverlay(
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (isSeeking) {
-                    // Final position using proper percentage
+                    // Final position using precise percentage
                     val targetPosition = calculateSeekPosition(event.x)
+                    userSliderPosition = (targetPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
                     performRealTimeSeek(targetPosition)
                     
                     // Resume video if it was playing before seek
@@ -242,8 +250,6 @@ fun PlayerOverlay(
                     // Reset seeking state and restart auto-hide
                     isSeeking = false
                     showSeekTime = false
-                    seekStartX = 0f
-                    seekStartPosition = 0.0
                     wasPlayingBeforeSeek = false
                     
                     // Restart auto-hide after seeking ends
@@ -436,7 +442,7 @@ fun PlayerOverlay(
                 }
         )
         
-        // SEEKBAR AREA - Total 5% height (ENTIRE seekbar shows/hides)
+        // SEEKBAR AREA - Total 5% height with PRECISE SLIDER
         if (showSeekbar) {
             Box(
                 modifier = Modifier
@@ -444,10 +450,11 @@ fun PlayerOverlay(
                     .fillMaxHeight(0.05f)
                     .align(Alignment.BottomStart)
                     .pointerInteropFilter { event ->
-                        handleSeekbarDrag(event)
+                        handleSliderSeek(event)
                     }
             ) {
-                val progressPercent = getCurrentProgressPercent()
+                // Use animated progress for smooth visual feedback
+                val progressPercent = animatedProgress.coerceIn(0f, 1f)
                 
                 // 1% Top transparent area
                 Box(
@@ -463,7 +470,7 @@ fun PlayerOverlay(
                         .fillMaxWidth()
                         .fillMaxHeight(0.6f)
                         .align(Alignment.Center)
-                        .padding(horizontal = 64.dp) // 64dp padding each side
+                        .padding(horizontal = 64.dp)
                 ) {
                     // Background track (grey)
                     Box(
@@ -474,7 +481,7 @@ fun PlayerOverlay(
                             .clip(RectangleShape)
                     )
                     
-                    // Progress fill (white) - This will follow finger position
+                    // Progress fill (white) - Uses animated progress for smooth movement
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(progressPercent)
