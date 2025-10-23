@@ -54,6 +54,7 @@ fun PlayerOverlay(
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     var lastDragUpdate by remember { mutableStateOf(0L) }
+    var lastFrameSeekTime by remember { mutableStateOf(0L) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
@@ -66,6 +67,9 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("demuxer-readahead-secs", "30")
         MPVLib.setPropertyString("video-sync", "display-resample")
         MPVLib.setPropertyString("untimed", "yes")
+        
+        // Enable frame-stepping and precise seeking
+        MPVLib.setPropertyString("hr-seek-framedrop", "no")
     }
     
     // Update time every 250ms
@@ -113,9 +117,26 @@ fun PlayerOverlay(
             // FAST SEEKING: Keyframe mode for instant response
             MPVLib.command("seek", targetPosition.toString(), "absolute", "keyframes")
         } else {
-            // SLOW SEEKING: Precise mode for accuracy
+            // SLOW SEEKING: Frame-accurate mode for smooth visual feedback
+            // Use exact seeking with frame stepping for smooth updates
             MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+            
+            // Force frame update for immediate visual feedback
+            MPVLib.setPropertyString("video-sync", "display-resample")
+            MPVLib.command("frame-step") // Force one frame step
         }
+        
+        // Update seek target time display
+        seekTargetTime = formatTimeSimple(targetPosition)
+    }
+    
+    // Frame-by-frame seeking for ultra-smooth slow movements
+    fun performFrameByFrameSeek(targetPosition: Double) {
+        // Use precise frame-accurate seeking
+        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+        
+        // Force immediate frame update
+        MPVLib.command("frame-step")
         
         // Update seek target time display
         seekTargetTime = formatTimeSimple(targetPosition)
@@ -131,6 +152,7 @@ fun PlayerOverlay(
                 isSeeking = true
                 showSeekTime = true
                 lastDragUpdate = System.currentTimeMillis()
+                lastFrameSeekTime = System.currentTimeMillis()
                 
                 // Pause video when seeking starts for smoother frame updates
                 if (wasPlayingBeforeSeek) {
@@ -140,6 +162,7 @@ fun PlayerOverlay(
                 // Enable high-performance seeking mode
                 MPVLib.setPropertyString("hr-seek", "absolute")
                 MPVLib.setPropertyString("video-sync", "display-resample")
+                MPVLib.setPropertyString("hr-seek-framedrop", "no") // No frame dropping during precise seeks
                 
                 return true
             }
@@ -164,8 +187,15 @@ fun PlayerOverlay(
                     val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
                     val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
                     
-                    // Perform smart seek based on drag speed
-                    performSmartSeek(clampedPosition, dragSpeed)
+                    // For very slow movements, use frame-by-frame seeking for smooth visual feedback
+                    val frameTimeDelta = currentTime - lastFrameSeekTime
+                    if (dragSpeed <= 1.0 && frameTimeDelta >= 33) { // 30fps max for frame-by-frame
+                        performFrameByFrameSeek(clampedPosition)
+                        lastFrameSeekTime = currentTime
+                    } else {
+                        // Use smart seeking for faster movements
+                        performSmartSeek(clampedPosition, dragSpeed)
+                    }
                     
                     // Update last drag time
                     lastDragUpdate = currentTime
@@ -186,6 +216,9 @@ fun PlayerOverlay(
                     // Final precise seek to ensure accuracy
                     MPVLib.command("seek", clampedPosition.toString(), "absolute", "exact")
                     
+                    // Force one final frame update
+                    MPVLib.command("frame-step")
+                    
                     // Resume video if it was playing before seek
                     if (wasPlayingBeforeSeek) {
                         coroutineScope.launch {
@@ -197,6 +230,7 @@ fun PlayerOverlay(
                     // Reset seeking mode
                     MPVLib.setPropertyString("hr-seek", "no")
                     MPVLib.setPropertyString("video-sync", "audio")
+                    MPVLib.setPropertyString("hr-seek-framedrop", "yes") // Allow frame dropping during playback
                     
                     // Reset seeking state
                     isSeeking = false
@@ -205,6 +239,7 @@ fun PlayerOverlay(
                     seekStartPosition = 0.0
                     wasPlayingBeforeSeek = false
                     lastDragUpdate = 0L
+                    lastFrameSeekTime = 0L
                 }
                 return true
             }
