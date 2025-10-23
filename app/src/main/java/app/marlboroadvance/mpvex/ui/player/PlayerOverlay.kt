@@ -53,7 +53,6 @@ fun PlayerOverlay(
     var seekStartX by remember { mutableStateOf(0f) }
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
-    var lastFrameUpdateTime by remember { mutableStateOf(0L) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
@@ -77,7 +76,7 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("hr-seek-framedrop", "no") // No frame dropping
     }
     
-    // Update time every 250ms
+    // Update time every 250ms (optimized from 50ms)
     LaunchedEffect(Unit) {
         while (isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
@@ -114,32 +113,10 @@ fun PlayerOverlay(
         }
     }
     
-    // Always use frame-accurate seeking with adaptive frame skipping
-    fun performFrameAccurateSeek(targetPosition: Double, dragSpeed: Double) {
-        val currentTime = System.currentTimeMillis()
-        val timeSinceLastFrame = currentTime - lastFrameUpdateTime
-        
-        // Adaptive frame skipping based on drag speed
-        val frameSkipInterval = when {
-            dragSpeed > 10.0 -> 500L // Super fast: 1 frame every 500ms
-            dragSpeed > 5.0 -> 250L  // Very fast: 1 frame every 250ms  
-            dragSpeed > 2.0 -> 100L  // Fast: 1 frame every 100ms
-            else -> 33L              // Normal: ~30fps (33ms per frame)
-        }
-        
-        // Only update frame if enough time has passed (frame skipping for fast drags)
-        if (timeSinceLastFrame >= frameSkipInterval) {
-            // Always use exact frame-accurate seeking
-            MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
-            
-            // Force frame update for immediate visual feedback
-            MPVLib.command("frame-step")
-            
-            lastFrameUpdateTime = currentTime
-        }
-        
-        // Always update seek target time display
-        seekTargetTime = formatTimeSimple(targetPosition)
+    // Simple real-time seeking function
+    fun performRealTimeSeek(targetPosition: Double) {
+        // Use absolute seeking for precise frame updates
+        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
     }
     
     // Continuous drag seeking gesture handler for bottom area
@@ -151,30 +128,20 @@ fun PlayerOverlay(
                 wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
                 isSeeking = true
                 showSeekTime = true
-                lastFrameUpdateTime = System.currentTimeMillis()
                 
                 // Pause video when seeking starts for smoother frame updates
                 if (wasPlayingBeforeSeek) {
                     MPVLib.setPropertyBoolean("pause", true)
                 }
                 
-                // Enable high-performance seeking mode
-                MPVLib.setPropertyString("video-sync", "display-resample")
-                MPVLib.setPropertyString("hr-seek-framedrop", "no")
-                
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
                 if (isSeeking) {
-                    val currentTime = System.currentTimeMillis()
                     val currentX = event.x
                     val deltaX = currentX - seekStartX
                     
-                    // Calculate drag speed (pixels per second)
-                    val timeDelta = (currentTime - lastFrameUpdateTime) / 1000.0
-                    val dragSpeed = if (timeDelta > 0) Math.abs(deltaX / timeDelta) else 0.0
-                    
-                    // Responsive sensitivity: 3 pixels = 33ms (0.033 seconds)
+                    // More responsive sensitivity: 3 pixels = 33ms (0.033 seconds)
                     val pixelsPerSecond = 3f / 0.033f // ~90.9 pixels per second
                     val timeDeltaSeconds = deltaX / pixelsPerSecond
                     
@@ -185,8 +152,11 @@ fun PlayerOverlay(
                     val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
                     val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
                     
-                    // Always use frame-accurate seeking with adaptive frame skipping
-                    performFrameAccurateSeek(clampedPosition, dragSpeed)
+                    // Perform real-time seek with immediate frame update
+                    performRealTimeSeek(clampedPosition)
+                    
+                    // Update seek target time display
+                    seekTargetTime = formatTimeSimple(clampedPosition)
                 }
                 return true
             }
@@ -201,9 +171,8 @@ fun PlayerOverlay(
                     val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
                     val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
                     
-                    // Final precise seek to ensure accuracy
-                    MPVLib.command("seek", clampedPosition.toString(), "absolute", "exact")
-                    MPVLib.command("frame-step") // Force final frame update
+                    // Final seek to ensure accuracy
+                    performRealTimeSeek(clampedPosition)
                     
                     // Resume video if it was playing before seek
                     if (wasPlayingBeforeSeek) {
@@ -219,7 +188,6 @@ fun PlayerOverlay(
                     seekStartX = 0f
                     seekStartPosition = 0.0
                     wasPlayingBeforeSeek = false
-                    lastFrameUpdateTime = 0L
                 }
                 return true
             }
