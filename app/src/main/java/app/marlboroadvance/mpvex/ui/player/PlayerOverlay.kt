@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -52,7 +51,7 @@ fun PlayerOverlay(
     var isSpeedingUp by remember { mutableStateOf(false) }
     var pendingPauseResume by remember { mutableStateOf(false) }
     var isPausing by remember { mutableStateOf(false) }
-    var showSeekbar by remember { mutableStateOf(false) }
+    var showSeekbar by remember { mutableStateOf(true) } // Start visible
     
     // Drag seeking variables
     var isSeeking by remember { mutableStateOf(false) }
@@ -223,6 +222,7 @@ fun PlayerOverlay(
                 wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
                 isSeeking = true
                 showSeekTime = true
+                showSeekbar = true // Show seekbar when dragging bottom area
                 
                 // Pause video when seeking starts for smoother frame updates
                 if (wasPlayingBeforeSeek) {
@@ -294,6 +294,7 @@ fun PlayerOverlay(
     fun handleHoldGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
+                showSeekbar = true // Show seekbar when holding speed buttons
                 isSpeedingUp = true
                 true
             }
@@ -428,7 +429,7 @@ fun PlayerOverlay(
             )
         }
         
-        // FACEBOOK LITE STYLE SEEKBAR - Only show when enabled
+        // SEEKBAR - Facebook Lite style with WHITE progress
         if (showSeekbar) {
             Box(
                 modifier = Modifier
@@ -446,13 +447,13 @@ fun PlayerOverlay(
                         .clip(RectangleShape)
                 )
                 
-                // Progress track (blue - watched portion) - Facebook Lite uses blue
+                // Progress track (WHITE - watched portion)
                 val progressPercent = (currentPosition / videoDuration).coerceIn(0.0, 1.0)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(progressPercent.toFloat())
                         .fillMaxHeight()
-                        .background(Color(0xFF0084FF)) // Facebook blue color
+                        .background(Color.White) // Changed to white
                         .clip(RectangleShape)
                 )
                 
