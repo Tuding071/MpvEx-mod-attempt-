@@ -179,12 +179,12 @@ fun PlayerOverlay(
         }
     }
     
-    // Calculate seek position from X coordinate - WITH 40dp PADDING
+    // Calculate seek position from X coordinate - WITH 100dp PADDING
     fun calculateSeekPosition(x: Float): Double {
         val screenWidth = context.resources.displayMetrics.widthPixels.toFloat()
-        val horizontalPadding = 40.dp.value * context.resources.displayMetrics.density
+        val horizontalPadding = 100.dp.value * context.resources.displayMetrics.density // Changed from 40dp to 100dp
         
-        // Calculate percentage within seekbar (with 40dp padding on both sides)
+        // Calculate percentage within seekbar (with 100dp padding on both sides)
         val availableWidth = screenWidth - (horizontalPadding * 2)
         val relativeX = (x - horizontalPadding).coerceIn(0f, availableWidth)
         val progressPercent = relativeX / availableWidth
@@ -193,7 +193,7 @@ fun PlayerOverlay(
         return progressPercent * videoDuration
     }
     
-    // PRECISE SLIDER SEEKING - Touch position matches exactly with 40dp padding
+    // PRECISE SLIDER SEEKING - Touch position matches exactly with 100dp padding
     fun handleSliderSeek(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -205,7 +205,7 @@ fun PlayerOverlay(
                 isSeeking = true
                 showSeekTime = true
                 
-                // Calculate position based on EXACT touch point within seekbar bounds (with 40dp padding)
+                // Calculate position based on EXACT touch point within seekbar bounds (with 100dp padding)
                 val targetPosition = calculateSeekPosition(event.x)
                 userSliderPosition = (targetPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
                 
@@ -222,7 +222,7 @@ fun PlayerOverlay(
             }
             MotionEvent.ACTION_MOVE -> {
                 if (isSeeking) {
-                    // Calculate target position using EXACT touch point within seekbar bounds (with 40dp padding)
+                    // Calculate target position using EXACT touch point within seekbar bounds (with 100dp padding)
                     val targetPosition = calculateSeekPosition(event.x)
                     userSliderPosition = (targetPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
                     
@@ -234,7 +234,7 @@ fun PlayerOverlay(
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (isSeeking) {
-                    // Final position using EXACT touch point within seekbar bounds (with 40dp padding)
+                    // Final position using EXACT touch point within seekbar bounds (with 100dp padding)
                     val targetPosition = calculateSeekPosition(event.x)
                     userSliderPosition = (targetPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
                     performRealTimeSeek(targetPosition)
@@ -449,7 +449,7 @@ fun PlayerOverlay(
                     .fillMaxWidth()
                     .fillMaxHeight(0.15f)
                     .align(Alignment.BottomStart)
-                    .padding(horizontal = 40.dp) // 40dp padding for the entire row
+                    .padding(horizontal = 60.dp) // Changed from 40dp to 60dp for time padding
             ) {
                 // Current time - left side
                 Text(
@@ -482,9 +482,10 @@ fun PlayerOverlay(
                 // SEEKBAR AREA - Between times, fills available space between time displays
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth() // Takes full available width between padding
+                        .fillMaxWidth() // Takes full available width between 60dp padding
                         .fillMaxHeight(0.4f)
                         .align(Alignment.Center)
+                        .padding(horizontal = 40.dp) // Additional 40dp padding for seekbar (60dp + 40dp = 100dp total from edge)
                         .pointerInteropFilter { event ->
                             handleSliderSeek(event)
                         }
