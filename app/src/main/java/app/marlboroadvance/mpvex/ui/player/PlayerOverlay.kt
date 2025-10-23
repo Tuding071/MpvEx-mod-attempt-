@@ -179,12 +179,12 @@ fun PlayerOverlay(
         }
     }
     
-    // Calculate seek position from X coordinate using precise percentage
+    // Calculate seek position from X coordinate - FIXED to use seekbar bounds
     fun calculateSeekPosition(x: Float): Double {
         val screenWidth = context.resources.displayMetrics.widthPixels.toFloat()
         val horizontalPadding = 64f // 64dp on each side
         
-        // Calculate percentage within seekbar (with padding)
+        // Calculate percentage within seekbar (with padding) - FIXED BOUNDS
         val availableWidth = screenWidth - (horizontalPadding * 2)
         val relativeX = (x - horizontalPadding).coerceIn(0f, availableWidth)
         val progressPercent = relativeX / availableWidth
@@ -193,15 +193,7 @@ fun PlayerOverlay(
         return progressPercent * videoDuration
     }
     
-    // Calculate thumb position for display
-    fun getThumbPosition(progress: Float): Float {
-        val screenWidth = context.resources.displayMetrics.widthPixels.toFloat()
-        val horizontalPadding = 64f
-        val availableWidth = screenWidth - (horizontalPadding * 2)
-        return (progress * availableWidth) + horizontalPadding
-    }
-    
-    // PRECISE SLIDER SEEKING - Touch position matches thumb position exactly
+    // PRECISE SLIDER SEEKING - Touch position matches exactly
     fun handleSliderSeek(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -213,7 +205,7 @@ fun PlayerOverlay(
                 isSeeking = true
                 showSeekTime = true
                 
-                // Calculate position based on EXACT touch point
+                // Calculate position based on EXACT touch point within seekbar bounds
                 val targetPosition = calculateSeekPosition(event.x)
                 userSliderPosition = (targetPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
                 
@@ -230,7 +222,7 @@ fun PlayerOverlay(
             }
             MotionEvent.ACTION_MOVE -> {
                 if (isSeeking) {
-                    // Calculate target position using EXACT touch point
+                    // Calculate target position using EXACT touch point within seekbar bounds
                     val targetPosition = calculateSeekPosition(event.x)
                     userSliderPosition = (targetPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
                     
@@ -242,7 +234,7 @@ fun PlayerOverlay(
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (isSeeking) {
-                    // Final position using EXACT touch point
+                    // Final position using EXACT touch point within seekbar bounds
                     val targetPosition = calculateSeekPosition(event.x)
                     userSliderPosition = (targetPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
                     performRealTimeSeek(targetPosition)
@@ -450,81 +442,98 @@ fun PlayerOverlay(
                 }
         )
         
-        // SEEKBAR AREA - Total 5% height with VISIBLE THUMB
+        // BOTTOM AREA - Times and Seekbar (all toggle together)
         if (showSeekbar) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(0.05f)
+                    .fillMaxHeight(0.15f)
                     .align(Alignment.BottomStart)
-                    .pointerInteropFilter { event ->
-                        handleSliderSeek(event)
-                    }
+                    .padding(horizontal = 16.dp) // Outer padding
             ) {
-                // Use animated progress for smooth visual feedback
-                val progressPercent = animatedProgress.coerceIn(0f, 1f)
-                val thumbPosition = getThumbPosition(progressPercent)
-                
-                // 1% Top transparent area
-                Box(
+                // Current time - left side
+                Text(
+                    text = currentTime,
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
+                    ),
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .fillMaxHeight(0.2f)
-                        .align(Alignment.TopStart)
+                        .align(Alignment.CenterStart)
+                        .background(Color.DarkGray.copy(alpha = 0.8f)) // Dark grey background
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
                 )
                 
-                // 3% Middle - Seekbar track and progress
+                // Total time - right side
+                Text(
+                    text = totalTime,
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
+                    ),
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .background(Color.DarkGray.copy(alpha = 0.8f)) // Dark grey background
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+                
+                // SEEKBAR AREA - Between times
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .fillMaxHeight(0.6f)
+                        .fillMaxWidth(0.7f)
+                        .fillMaxHeight(0.4f)
                         .align(Alignment.Center)
-                        .padding(horizontal = 64.dp)
+                        .pointerInteropFilter { event ->
+                            handleSliderSeek(event)
+                        }
                 ) {
-                    // Background track (grey)
+                    // Use animated progress for smooth visual feedback
+                    val progressPercent = animatedProgress.coerceIn(0f, 1f)
+                    
+                    // 20% Top transparent area
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .fillMaxHeight()
-                            .background(Color.Gray.copy(alpha = 0.6f))
-                            .clip(RectangleShape)
+                            .fillMaxHeight(0.2f)
+                            .align(Alignment.TopStart)
                     )
                     
-                    // Progress fill (white) - Goes UNDER the thumb
+                    // 60% Middle - Seekbar track and progress
                     Box(
                         modifier = Modifier
-                            .fillMaxWidth(progressPercent)
-                            .fillMaxHeight()
-                            .background(Color.White)
-                            .clip(RectangleShape)
-                    )
+                            .fillMaxWidth()
+                            .fillMaxHeight(0.6f)
+                            .align(Alignment.Center)
+                    ) {
+                        // Background track (grey)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .fillMaxHeight()
+                                .background(Color.Gray.copy(alpha = 0.6f))
+                                .clip(RectangleShape)
+                        )
+                        
+                        // Progress fill (white) - Clean progress bar
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(progressPercent)
+                                .fillMaxHeight()
+                                .background(Color.White)
+                                .clip(RectangleShape)
+                        )
+                    }
                     
-                    // DARK GREY THUMB at the tip of progress bar
+                    // 20% Bottom transparent area
                     Box(
                         modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .width(4.dp) // Thin thumb
-                            .fillMaxHeight()
-                            .background(Color.DarkGray)
+                            .fillMaxWidth()
+                            .fillMaxHeight(0.2f)
+                            .align(Alignment.BottomStart)
                     )
                 }
-                
-                // 1% Bottom transparent area
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .fillMaxHeight(0.2f)
-                        .align(Alignment.BottomStart)
-                )
-                
-                // INVISIBLE TOUCH AREA that follows thumb position (for easy grabbing)
-                Box(
-                    modifier = Modifier
-                        .offset(x = (thumbPosition - 64f - 16f).dp) // Center the touch area on thumb
-                        .width(32.dp) // 32px touch area around thumb
-                        .fillMaxHeight()
-                        .background(Color.Transparent)
-                )
             }
         }
         
@@ -558,37 +567,7 @@ fun PlayerOverlay(
                 .align(Alignment.TopStart)
         )
         
-        // Current time - bottom left
-        Text(
-            text = currentTime,
-            style = TextStyle(
-                color = Color.White,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium
-            ),
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = 16.dp, bottom = 60.dp)
-                .background(Color.Black.copy(alpha = 0.5f))
-                .padding(horizontal = 8.dp, vertical = 4.dp)
-        )
-        
-        // Total time - bottom right
-        Text(
-            text = totalTime,
-            style = TextStyle(
-                color = Color.White,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium
-            ),
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 60.dp)
-                .background(Color.Black.copy(alpha = 0.5f))
-                .padding(horizontal = 8.dp, vertical = 4.dp)
-        )
-        
-        // Center seek time - shows target position during seeking
+        // Center seek time - shows target position during seeking (DARK GREY BACKGROUND)
         if (showSeekTime) {
             Text(
                 text = seekTargetTime,
@@ -600,7 +579,7 @@ fun PlayerOverlay(
                 modifier = Modifier
                     .align(Alignment.Center)
                     .offset(y = (-40).dp)
-                    .background(Color.Black.copy(alpha = 0.7f))
+                    .background(Color.DarkGray.copy(alpha = 0.8f)) // Dark grey background
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
         }
