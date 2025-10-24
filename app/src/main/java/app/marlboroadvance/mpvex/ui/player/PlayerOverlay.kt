@@ -89,6 +89,9 @@ fun PlayerOverlay(
     // Auto-hide control
     var autoHideJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
+    // Video pause state
+    var isVideoPaused by remember { mutableStateOf(false) }
+    
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
     // Start auto-hide when seekbar is shown - FIXED: Don't auto-hide during seeking
@@ -110,6 +113,15 @@ fun PlayerOverlay(
             delay(100)
             MPVLib.setPropertyDouble("speed", 1.0)
             isSpeedingUp = false
+        }
+    }
+    
+    // Update video pause state
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            val paused = MPVLib.getPropertyBoolean("pause") ?: false
+            isVideoPaused = paused
+            delay(500) // Check every 500ms
         }
     }
     
@@ -235,8 +247,12 @@ fun PlayerOverlay(
     // Handle seekbar value change finished - FIXED: Smooth transition without blinking
     fun handleSeekbarValueChangeFinished() {
         if (isSeeking) {
-            // Clear user position and let it smoothly transition to actual position
-            userSeekPosition = null
+            // Don't clear user position immediately - let it sync with actual position first
+            // This prevents the blinking when releasing
+            coroutineScope.launch {
+                delay(50) // Small delay to let the position sync
+                userSeekPosition = null
+            }
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -460,31 +476,51 @@ fun PlayerOverlay(
                     .fillMaxWidth()
                     .height(70.dp)
                     .align(Alignment.BottomStart)
-                    .padding(horizontal = 40.dp) // Increased edge space from 32dp to 40dp
-                    .offset(y = (-14).dp) // Moved down by 2dp (from -16dp to -14dp)
+                    .padding(horizontal = 60.dp) // Increased edge space from 40dp to 60dp
+                    .offset(y = (-14).dp)
             ) {
                 Column(
                     modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp) // Increased gap from 2dp to 6dp
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    // Merged time display - current/total
+                    // Time display with pause indicator
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .wrapContentHeight()
                     ) {
-                        Text(
-                            text = "$currentTime / $totalTime",
-                            style = TextStyle(
-                                color = Color.White,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Medium
-                            ),
-                            modifier = Modifier
-                                .align(Alignment.CenterStart)
-                                .background(Color.DarkGray.copy(alpha = 0.8f))
-                                .padding(horizontal = 12.dp, vertical = 4.dp)
-                        )
+                        Row(
+                            modifier = Modifier.align(Alignment.CenterStart),
+                            horizontalArrangement = Arrangement.spacedBy(2.dp) // 2dp space between time and pause text
+                        ) {
+                            // Current time / total time
+                            Text(
+                                text = "$currentTime / $totalTime",
+                                style = TextStyle(
+                                    color = Color.White,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium
+                                ),
+                                modifier = Modifier
+                                    .background(Color.DarkGray.copy(alpha = 0.8f))
+                                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                            
+                            // Pause indicator (only shown when video is paused)
+                            if (isVideoPaused) {
+                                Text(
+                                    text = "Pause",
+                                    style = TextStyle(
+                                        color = Color.White,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Medium
+                                    ),
+                                    modifier = Modifier
+                                        .background(Color.DarkGray.copy(alpha = 0.8f))
+                                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
                     }
                     
                     // Seekbar
@@ -538,7 +574,25 @@ fun PlayerOverlay(
                 .align(Alignment.TopStart)
         )
         
+        // 2X Speed feedback - Top Center
+        if (isSpeedingUp) {
+            Text(
+                text = "2X",
+                style = TextStyle(
+                    color = Color.White,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold
+                ),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .offset(y = 40.dp) // Position at top center
+                    .background(Color.DarkGray.copy(alpha = 0.8f))
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+        }
+        
         // Center seek time - shows target position during seeking (DARK GREY BACKGROUND)
+        // Moved to same position as 2X feedback
         if (showSeekTime) {
             Text(
                 text = seekTargetTime,
@@ -548,8 +602,8 @@ fun PlayerOverlay(
                     fontWeight = FontWeight.Bold
                 ),
                 modifier = Modifier
-                    .align(Alignment.Center)
-                    .offset(y = (-40).dp)
+                    .align(Alignment.TopCenter)
+                    .offset(y = 40.dp) // Same position as 2X feedback
                     .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
@@ -579,7 +633,7 @@ fun CustomSeekbar(
             .let { (if (it.isNotEmpty() && it[0].start != 0f) persistentListOf(Segment("", 0f)) + it else it) + it },
         modifier = modifier,
         colors = SeekerDefaults.seekerColors(
-            progressColor = Color.White, // Always show white progress (don't hide during seeking)
+            progressColor = Color.White, // Always show white progress
             thumbColor = Color.White, // White thumb
             trackColor = Color.Gray.copy(alpha = 0.6f), // Grey semi-transparent track
             readAheadColor = Color.Gray, // Grey read ahead
