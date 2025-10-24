@@ -93,6 +93,11 @@ fun PlayerOverlay(
     var isVideoPaused by remember { mutableStateOf(false) }
     var refreshPauseState by remember { mutableStateOf(0) } // Counter to trigger refresh
     
+    // Video title state
+    var showVideoTitle by remember { mutableStateOf(true) }
+    var videoTitle by remember { mutableStateOf("Video") }
+    var videoTitleJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
     // Start auto-hide when seekbar is shown
@@ -105,6 +110,21 @@ fun PlayerOverlay(
                     showSeekbar = false
                 }
             }
+        }
+    }
+    
+    // Show video title at start and auto-hide after 4 seconds
+    LaunchedEffect(Unit) {
+        // Get video title from MPV
+        val title = MPVLib.getPropertyString("media-title") ?: "Video"
+        videoTitle = title
+        showVideoTitle = true
+        
+        // Auto-hide after 4 seconds
+        videoTitleJob?.cancel()
+        videoTitleJob = coroutineScope.launch {
+            delay(4000)
+            showVideoTitle = false
         }
     }
     
@@ -139,6 +159,19 @@ fun PlayerOverlay(
     // Function to trigger pause state refresh
     fun refreshPauseState() {
         refreshPauseState++ // Increment to trigger LaunchedEffect
+    }
+    
+    // Function to show/hide video title
+    fun toggleVideoTitle() {
+        showVideoTitle = !showVideoTitle
+        if (showVideoTitle) {
+            // Auto-hide after 4 seconds
+            videoTitleJob?.cancel()
+            videoTitleJob = coroutineScope.launch {
+                delay(4000)
+                showVideoTitle = false
+            }
+        }
     }
     
     // Aggressive software decoding optimization with large cache
@@ -448,31 +481,75 @@ fun PlayerOverlay(
     Box(
         modifier = modifier.fillMaxSize()
     ) {
-        // CENTER AREA - Tap for pause/resume
+        // TOP 5% - Video title area with toggle functionality
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.73f)
-                .fillMaxHeight(0.7f)
-                .align(Alignment.Center)
+                .fillMaxWidth()
+                .fillMaxHeight(0.05f)
+                .align(Alignment.TopStart)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
                     onClick = {
-                        val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
-                        isPausing = !currentPaused
-                        pendingPauseResume = true
-                        refreshPauseState() // Refresh pause state on center tap
+                        toggleVideoTitle()
                     }
                 )
         )
         
-        // BOTTOM 25% - Continuous drag seeking (above seekbar) - CHANGED: Full width and z-index priority
+        // CENTER 70% - Divided into 3 areas
         Box(
             modifier = Modifier
-                .fillMaxWidth() // Full width to overlap everything
+                .fillMaxWidth()
+                .fillMaxHeight(0.7f)
+                .align(Alignment.Center)
+        ) {
+            // LEFT 27% - Tap to show/hide seekbar, hold for 2x speed
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.27f)
+                    .fillMaxHeight()
+                    .align(Alignment.CenterStart)
+                    .pointerInteropFilter { event ->
+                        handleLeftAreaGesture(event)
+                    }
+            )
+            
+            // CENTER 46% - Tap for pause/resume
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.46f)
+                    .fillMaxHeight()
+                    .align(Alignment.Center)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {
+                            val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
+                            isPausing = !currentPaused
+                            pendingPauseResume = true
+                            refreshPauseState() // Refresh pause state on center tap
+                        }
+                    )
+            )
+            
+            // RIGHT 27% - Tap to show/hide seekbar, hold for 2x speed
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.27f)
+                    .fillMaxHeight()
+                    .align(Alignment.CenterEnd)
+                    .pointerInteropFilter { event ->
+                        handleRightAreaGesture(event)
+                    }
+            )
+        }
+        
+        // BOTTOM 25% - Horizontal drag seeking area
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
                 .fillMaxHeight(0.25f)
                 .align(Alignment.BottomStart)
-                .offset(y = (-20).dp)
                 .pointerInteropFilter { event ->
                     handleDragSeekGesture(event)
                 }
@@ -552,35 +629,22 @@ fun PlayerOverlay(
             }
         }
         
-        // LEFT 27% - Tap to show/hide seekbar, hold for 2x speed - CHANGED: Reduced height to avoid overlap
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(0.27f)
-                .fillMaxHeight(0.45f) // Reduced height to avoid bottom overlap
-                .align(Alignment.CenterStart)
-                .pointerInteropFilter { event ->
-                    handleLeftAreaGesture(event)
-                }
-        )
-        
-        // RIGHT 27% - Tap to show/hide seekbar, hold for 2x speed - CHANGED: Reduced height to avoid overlap
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(0.27f)
-                .fillMaxHeight(0.45f) // Reduced height to avoid bottom overlap
-                .align(Alignment.CenterEnd)
-                .pointerInteropFilter { event ->
-                    handleRightAreaGesture(event)
-                }
-        )
-        
-        // TOP 5% - Ignore area
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .fillMaxHeight(0.05f)
-                .align(Alignment.TopStart)
-        )
+        // VIDEO TITLE - Top Center (shows at start and can be toggled)
+        if (showVideoTitle) {
+            Text(
+                text = videoTitle,
+                style = TextStyle(
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium
+                ),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .offset(y = 20.dp)
+                    .background(Color.DarkGray.copy(alpha = 0.8f))
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+        }
         
         // 2X Speed feedback - Top Center
         if (isSpeedingUp) {
@@ -593,7 +657,7 @@ fun PlayerOverlay(
                 ),
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .offset(y = 40.dp)
+                    .offset(y = 60.dp) // Moved down to avoid title overlap
                     .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
@@ -610,7 +674,7 @@ fun PlayerOverlay(
                 ),
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .offset(y = 40.dp)
+                    .offset(y = 60.dp) // Moved down to avoid title overlap
                     .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
