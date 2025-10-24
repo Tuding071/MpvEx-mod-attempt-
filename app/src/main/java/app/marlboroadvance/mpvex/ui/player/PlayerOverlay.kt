@@ -105,6 +105,11 @@ fun PlayerOverlay(
     
     // ⚡ PERFORMANCE: Dedicated IO dispatcher for background operations
     val coroutineScope = remember { CoroutineScope(Dispatchers.IO) }
+
+    // Function to trigger pause state refresh - MOVED BEFORE FIRST USAGE
+    fun refreshPauseState() {
+        refreshPauseState++ // Increment to trigger LaunchedEffect
+    }
     
     // ⚡ VULKAN HARDWARE ACCELERATION - FULL IMPLEMENTATION
     LaunchedEffect(Unit) {
@@ -273,10 +278,6 @@ fun PlayerOverlay(
             delay(100)
             isVideoPaused = MPVLib.getPropertyBoolean("pause") ?: false
         }
-    }
-    
-    fun refreshPauseState() {
-        refreshPauseState++
     }
     
     fun toggleVideoInfo() {
