@@ -183,7 +183,7 @@ fun PlayerOverlay(
     
     // OPTIMIZED: Update time and progress every 500ms with smart updates
     LaunchedEffect(Unit) {
-        var lastSeconds by remember { mutableStateOf(-1) }
+        var lastSeconds = -1 // FIXED: Moved outside of remember
         
         while (isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
