@@ -88,13 +88,15 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // Start auto-hide when seekbar is shown
-    LaunchedEffect(showSeekbar) {
+    // Start auto-hide when seekbar is shown - FIXED: Don't auto-hide during seeking
+    LaunchedEffect(showSeekbar, isSeeking) {
         if (showSeekbar && !isSeeking) {
             autoHideJob?.cancel()
             autoHideJob = coroutineScope.launch {
                 delay(4000)
-                showSeekbar = false
+                if (!isSeeking) { // Double check we're not seeking
+                    showSeekbar = false
+                }
             }
         }
     }
@@ -128,20 +130,30 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("hr-seek-framedrop", "no")
     }
     
-    // Update time and progress every 100ms
+    // Update time and progress every 100ms - OPTIMIZED: Only update when needed
     LaunchedEffect(Unit) {
         while (isActive) {
-            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-            val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
-            
-            currentTime = formatTimeSimple(currentPos)
-            totalTime = formatTimeSimple(duration)
-            currentPosition = currentPos
-            videoDuration = duration
-            
-            // Update seekbar values
-            seekbarPosition = currentPos.toFloat()
-            seekbarDuration = duration.toFloat()
+            if (!isSeeking) { // Only update position if not seeking (to reduce lag)
+                val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+                val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
+                
+                currentTime = formatTimeSimple(currentPos)
+                totalTime = formatTimeSimple(duration)
+                currentPosition = currentPos
+                videoDuration = duration
+                
+                // Update seekbar values
+                seekbarPosition = currentPos.toFloat()
+                seekbarDuration = duration.toFloat()
+            } else {
+                // When seeking, only update duration if needed
+                val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
+                if (duration != videoDuration) {
+                    videoDuration = duration
+                    seekbarDuration = duration.toFloat()
+                    totalTime = formatTimeSimple(duration)
+                }
+            }
             
             delay(100)
         }
@@ -183,17 +195,22 @@ fun PlayerOverlay(
         if (!isSeeking) {
             autoHideJob = coroutineScope.launch {
                 delay(4000)
-                showSeekbar = false
+                if (!isSeeking) {
+                    showSeekbar = false
+                }
             }
         }
     }
     
-    // Handle seekbar value change
+    // Handle seekbar value change - FIXED: Cancel auto-hide immediately
     fun handleSeekbarValueChange(newPosition: Float) {
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
+            
+            // Cancel auto-hide immediately when seeking starts
+            autoHideJob?.cancel()
             
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
@@ -205,7 +222,7 @@ fun PlayerOverlay(
         seekTargetTime = formatTimeSimple(targetPosition)
     }
     
-    // Handle seekbar value change finished
+    // Handle seekbar value change finished - FIXED: Restart auto-hide properly
     fun handleSeekbarValueChangeFinished() {
         if (isSeeking) {
             if (wasPlayingBeforeSeek) {
@@ -219,10 +236,15 @@ fun PlayerOverlay(
             showSeekTime = false
             wasPlayingBeforeSeek = false
             
-            // Restart auto-hide after seeking ends
-            autoHideJob = coroutineScope.launch {
-                delay(4000)
-                showSeekbar = false
+            // Restart auto-hide after seeking ends with proper check
+            autoHideJob?.cancel()
+            if (showSeekbar) {
+                autoHideJob = coroutineScope.launch {
+                    delay(4000)
+                    if (!isSeeking) { // Double check we're not seeking again
+                        showSeekbar = false
+                    }
+                }
             }
         }
     }
@@ -236,6 +258,9 @@ fun PlayerOverlay(
                 wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
                 isSeeking = true
                 showSeekTime = true
+                
+                // Cancel auto-hide immediately
+                autoHideJob?.cancel()
                 
                 if (wasPlayingBeforeSeek) {
                     MPVLib.setPropertyBoolean("pause", true)
@@ -284,6 +309,14 @@ fun PlayerOverlay(
                     seekStartX = 0f
                     seekStartPosition = 0.0
                     wasPlayingBeforeSeek = false
+                    
+                    // Restart auto-hide
+                    autoHideJob = coroutineScope.launch {
+                        delay(4000)
+                        if (!isSeeking) {
+                            showSeekbar = false
+                        }
+                    }
                 }
                 return true
             }
@@ -410,20 +443,21 @@ fun PlayerOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(80.dp) // Increased height to accommodate time above seekbar
+                    .height(90.dp) // Slightly increased height for better spacing
                     .align(Alignment.BottomStart)
-                    .padding(horizontal = 16.dp)
-                    .offset(y = (-20).dp) // Move the entire container up
+                    .padding(horizontal = 24.dp) // Increased horizontal padding for edge spacing
+                    .offset(y = (-16).dp) // Moved up a bit more
             ) {
                 Column(
                     modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(4.dp) // Small gap between time and seekbar
+                    verticalArrangement = Arrangement.spacedBy(8.dp) // Increased gap between time and seekbar
                 ) {
                     // Merged time display - current/total
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .wrapContentHeight()
+                            .padding(bottom = 4.dp) // Extra bottom padding for time
                     ) {
                         Text(
                             text = "$currentTime / $totalTime",
@@ -443,7 +477,7 @@ fun PlayerOverlay(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(48.dp)
+                            .height(36.dp) // Reduced seekbar height for lighter feel
                     ) {
                         CustomSeekbar(
                             position = seekbarPosition,
