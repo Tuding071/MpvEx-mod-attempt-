@@ -5,16 +5,21 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -23,15 +28,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.vivvvek.seeker.Seeker
+import dev.vivvvek.seeker.SeekerDefaults
+import dev.vivvvek.seeker.Segment
+import kotlinx.collections.immutable.ImmutableList
+import kotlinx.collections.immutable.persistentListOf
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -55,22 +64,17 @@ fun PlayerOverlay(
     var isPausing by remember { mutableStateOf(false) }
     var showSeekbar by remember { mutableStateOf(true) }
     
+    // Video progress for seekbar
+    var currentPosition by remember { mutableStateOf(0.0) }
+    var videoDuration by remember { mutableStateOf(1.0) }
+    var seekbarPosition by remember { mutableStateOf(0f) }
+    var seekbarDuration by remember { mutableStateOf(1f) }
+    
     // Drag seeking variables
     var isSeeking by remember { mutableStateOf(false) }
     var seekStartX by remember { mutableStateOf(0f) }
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
-    
-    // Video progress for seekbar
-    var currentPosition by remember { mutableStateOf(0.0) }
-    var videoDuration by remember { mutableStateOf(1.0) }
-    
-    // Slider state
-    var userSliderPosition by remember { mutableStateOf(0f) }
-    val animatedProgress by animateFloatAsState(
-        targetValue = if (isSeeking) userSliderPosition else (currentPosition / videoDuration).coerceIn(0.0, 1.0).toFloat(),
-        label = "seekbar_animation"
-    )
     
     // Tap detection variables
     var leftTapStartTime by remember { mutableStateOf(0L) }
@@ -134,6 +138,10 @@ fun PlayerOverlay(
             currentPosition = currentPos
             videoDuration = duration
             
+            // Update seekbar values
+            seekbarPosition = currentPos.toFloat()
+            seekbarDuration = duration.toFloat()
+            
             delay(100)
         }
     }
@@ -179,89 +187,43 @@ fun PlayerOverlay(
         }
     }
     
-    // Calculate seek position from X coordinate - WITH 150dp PADDING
-    fun calculateSeekPosition(x: Float): Double {
-        val screenWidth = context.resources.displayMetrics.widthPixels.toFloat()
-        val horizontalPadding = 150.dp.value * context.resources.displayMetrics.density // Changed from 100dp to 150dp
-        
-        // Calculate percentage within seekbar (with 150dp padding on both sides)
-        val availableWidth = screenWidth - (horizontalPadding * 2)
-        val relativeX = (x - horizontalPadding).coerceIn(0f, availableWidth)
-        val progressPercent = relativeX / availableWidth
-        
-        // Convert percentage to video time
-        return progressPercent * videoDuration
-    }
-    
-    // PRECISE SLIDER SEEKING - Touch position matches exactly with 150dp padding
-    fun handleSliderSeek(event: MotionEvent): Boolean {
-        when (event.action) {
-            MotionEvent.ACTION_DOWN -> {
-                // Cancel auto-hide during seeking
-                autoHideJob?.cancel()
-                showSeekbar = true
-                
-                wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
-                isSeeking = true
-                showSeekTime = true
-                
-                // Calculate position based on EXACT touch point within seekbar bounds (with 150dp padding)
-                val targetPosition = calculateSeekPosition(event.x)
-                userSliderPosition = (targetPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
-                
-                // Perform initial seek
-                performRealTimeSeek(targetPosition)
-                seekTargetTime = formatTimeSimple(targetPosition)
-                
-                // Pause video when seeking starts
-                if (wasPlayingBeforeSeek) {
-                    MPVLib.setPropertyBoolean("pause", true)
-                }
-                
-                return true
-            }
-            MotionEvent.ACTION_MOVE -> {
-                if (isSeeking) {
-                    // Calculate target position using EXACT touch point within seekbar bounds (with 150dp padding)
-                    val targetPosition = calculateSeekPosition(event.x)
-                    userSliderPosition = (targetPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
-                    
-                    // Perform real-time seek
-                    performRealTimeSeek(targetPosition)
-                    seekTargetTime = formatTimeSimple(targetPosition)
-                }
-                return true
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (isSeeking) {
-                    // Final position using EXACT touch point within seekbar bounds (with 150dp padding)
-                    val targetPosition = calculateSeekPosition(event.x)
-                    userSliderPosition = (targetPosition / videoDuration).coerceIn(0.0, 1.0).toFloat()
-                    performRealTimeSeek(targetPosition)
-                    
-                    // Resume video if it was playing before seek
-                    if (wasPlayingBeforeSeek) {
-                        coroutineScope.launch {
-                            delay(100)
-                            MPVLib.setPropertyBoolean("pause", false)
-                        }
-                    }
-                    
-                    // Reset seeking state and restart auto-hide
-                    isSeeking = false
-                    showSeekTime = false
-                    wasPlayingBeforeSeek = false
-                    
-                    // Restart auto-hide after seeking ends
-                    autoHideJob = coroutineScope.launch {
-                        delay(4000)
-                        showSeekbar = false
-                    }
-                }
-                return true
+    // Handle seekbar value change
+    fun handleSeekbarValueChange(newPosition: Float) {
+        if (!isSeeking) {
+            isSeeking = true
+            wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
+            showSeekTime = true
+            
+            if (wasPlayingBeforeSeek) {
+                MPVLib.setPropertyBoolean("pause", true)
             }
         }
-        return false
+        
+        val targetPosition = newPosition.toDouble()
+        performRealTimeSeek(targetPosition)
+        seekTargetTime = formatTimeSimple(targetPosition)
+    }
+    
+    // Handle seekbar value change finished
+    fun handleSeekbarValueChangeFinished() {
+        if (isSeeking) {
+            if (wasPlayingBeforeSeek) {
+                coroutineScope.launch {
+                    delay(100)
+                    MPVLib.setPropertyBoolean("pause", false)
+                }
+            }
+            
+            isSeeking = false
+            showSeekTime = false
+            wasPlayingBeforeSeek = false
+            
+            // Restart auto-hide after seeking ends
+            autoHideJob = coroutineScope.launch {
+                delay(4000)
+                showSeekbar = false
+            }
+        }
     }
     
     // Continuous drag seeking gesture handler for bottom area
@@ -447,94 +409,22 @@ fun PlayerOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(0.15f)
+                    .fillMaxHeight(0.05f) // Reduced height to make it closer to seekbar
                     .align(Alignment.BottomStart)
-                    .padding(horizontal = 95.dp) // Changed from 60dp to 95dp for time padding
+                    .padding(horizontal = 16.dp) // Reduced padding for tighter layout
             ) {
-                // Current time - left side
-                Text(
-                    text = currentTime,
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium
-                    ),
-                    modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .background(Color.DarkGray.copy(alpha = 0.8f))
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                CustomSeekbarWithTimers(
+                    position = seekbarPosition,
+                    duration = seekbarDuration,
+                    readAheadValue = 0f, // You can adjust this if needed
+                    onValueChange = { handleSeekbarValueChange(it) },
+                    onValueChangeFinished = { handleSeekbarValueChangeFinished() },
+                    timersInverted = Pair(false, false),
+                    positionTimerOnClick = { /* Handle position timer click if needed */ },
+                    durationTimerOnClick = { /* Handle duration timer click if needed */ },
+                    chapters = persistentListOf(),
+                    modifier = Modifier.fillMaxSize()
                 )
-                
-                // Total time - right side
-                Text(
-                    text = totalTime,
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium
-                    ),
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .background(Color.DarkGray.copy(alpha = 0.8f))
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                )
-                
-                // SEEKBAR AREA - Between times, fills available space between time displays
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth() // Takes full available width between 95dp padding
-                        .fillMaxHeight(0.4f)
-                        .align(Alignment.Center)
-                        .padding(horizontal = 55.dp) // Additional 55dp padding for seekbar (95dp + 55dp = 150dp total from edge)
-                        .pointerInteropFilter { event ->
-                            handleSliderSeek(event)
-                        }
-                ) {
-                    // Use animated progress for smooth visual feedback
-                    val progressPercent = animatedProgress.coerceIn(0f, 1f)
-                    
-                    // 20% Top transparent area
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .fillMaxHeight(0.2f)
-                            .align(Alignment.TopStart)
-                    )
-                    
-                    // 60% Middle - Seekbar track and progress
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .fillMaxHeight(0.6f)
-                            .align(Alignment.Center)
-                    ) {
-                        // Background track (grey)
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .fillMaxHeight()
-                                .background(Color.Gray.copy(alpha = 0.6f))
-                                .clip(RectangleShape)
-                        )
-                        
-                        // Progress fill (white) - Clean progress bar
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth(progressPercent)
-                                .fillMaxHeight()
-                                .background(Color.White)
-                                .clip(RectangleShape)
-                        )
-                    }
-                    
-                    // 20% Bottom transparent area
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .fillMaxHeight(0.2f)
-                            .align(Alignment.BottomStart)
-                    )
-                }
             }
         }
         
@@ -585,6 +475,89 @@ fun PlayerOverlay(
             )
         }
     }
+}
+
+@Composable
+fun CustomSeekbarWithTimers(
+    position: Float,
+    duration: Float,
+    readAheadValue: Float,
+    onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit,
+    timersInverted: Pair<Boolean, Boolean>,
+    positionTimerOnClick: () -> Unit,
+    durationTimerOnClick: () -> Unit,
+    chapters: ImmutableList<Segment>,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.height(48.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp), // Reduced spacing for tighter layout
+    ) {
+        VideoTimer(
+            value = position,
+            isInverted = timersInverted.first,
+            onClick = {
+                positionTimerOnClick()
+            },
+            modifier = Modifier.width(60.dp), // Reduced width
+        )
+        Seeker(
+            value = position.coerceIn(0f, duration),
+            range = 0f..duration,
+            onValueChange = onValueChange,
+            onValueChangeFinished = onValueChangeFinished,
+            readAheadValue = readAheadValue,
+            segments = chapters
+                .filter { it.start in 0f..duration }
+                .let { (if (it.isNotEmpty() && it[0].start != 0f) persistentListOf(Segment("", 0f)) + it else it) + it },
+            modifier = Modifier.weight(1f),
+            colors = SeekerDefaults.seekerColors(
+                progressColor = Color.White, // White progress
+                thumbColor = Color.White, // White thumb
+                trackColor = Color.Gray.copy(alpha = 0.6f), // Grey semi-transparent track
+                readAheadColor = Color.Gray, // Grey read ahead
+            ),
+        )
+        VideoTimer(
+            value = if (timersInverted.second) position - duration else duration,
+            isInverted = timersInverted.second,
+            onClick = {
+                durationTimerOnClick()
+            },
+            modifier = Modifier.width(60.dp), // Reduced width
+        )
+    }
+}
+
+@Composable
+fun VideoTimer(
+    value: Float,
+    isInverted: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit = {},
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    Text(
+        modifier = modifier
+            .fillMaxHeight()
+            .clickable(
+                interactionSource = interactionSource,
+                indication = ripple(),
+                onClick = onClick,
+            )
+            .wrapContentHeight(Alignment.CenterVertically)
+            .background(Color.DarkGray.copy(alpha = 0.8f)) // Same background as center seek time
+            .padding(horizontal = 4.dp, vertical = 2.dp), // Reduced padding
+        text = formatTimeSimple(value.toDouble()),
+        color = Color.White,
+        textAlign = TextAlign.Center,
+        style = TextStyle(
+            fontSize = 12.sp, // Smaller font size
+            fontWeight = FontWeight.Medium
+        )
+    )
 }
 
 // Function to format time simply without milliseconds
