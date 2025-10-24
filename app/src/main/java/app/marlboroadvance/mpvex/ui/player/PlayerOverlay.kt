@@ -71,7 +71,7 @@ fun PlayerOverlay(
     var seekbarPosition by remember { mutableStateOf(0f) }
     var seekbarDuration by remember { mutableStateOf(1f) }
     
-    // For smooth seeking animation - FIXED: Completely forget timestamp during seeking
+    // For smooth seeking animation
     var userSeekPosition by remember { mutableStateOf<Float?>(null) }
     
     // Drag seeking variables
@@ -94,13 +94,13 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // Start auto-hide when seekbar is shown - FIXED: Don't auto-hide during seeking
+    // Start auto-hide when seekbar is shown
     LaunchedEffect(showSeekbar, isSeeking) {
         if (showSeekbar && !isSeeking) {
             autoHideJob?.cancel()
             autoHideJob = coroutineScope.launch {
                 delay(4000)
-                if (!isSeeking) { // Double check we're not seeking
+                if (!isSeeking) {
                     showSeekbar = false
                 }
             }
@@ -121,7 +121,7 @@ fun PlayerOverlay(
         while (isActive) {
             val paused = MPVLib.getPropertyBoolean("pause") ?: false
             isVideoPaused = paused
-            delay(500) // Check every 500ms
+            delay(500)
         }
     }
     
@@ -145,7 +145,7 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("hr-seek-framedrop", "no")
     }
     
-    // Update time and progress every 100ms - FIXED: Skip updates during seekbar seeking
+    // Update time and progress every 50ms (increased from 100ms)
     LaunchedEffect(Unit) {
         while (isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
@@ -155,25 +155,15 @@ fun PlayerOverlay(
             currentTime = formatTimeSimple(currentPos)
             totalTime = formatTimeSimple(duration)
             
-            // Only update position if not seeking with seekbar
-            // During seekbar seeking, we completely ignore the actual video position
-            if (!isSeeking) {
-                currentPosition = currentPos
-                videoDuration = duration
-                
-                // Update seekbar values
-                seekbarPosition = currentPos.toFloat()
-                seekbarDuration = duration.toFloat()
-            } else {
-                // When seeking, still update duration if needed
-                if (duration != videoDuration) {
-                    videoDuration = duration
-                    seekbarDuration = duration.toFloat()
-                    totalTime = formatTimeSimple(duration)
-                }
-            }
+            // Always update position (removed the seeking check for smoother updates)
+            currentPosition = currentPos
+            videoDuration = duration
             
-            delay(100)
+            // Update seekbar values
+            seekbarPosition = currentPos.toFloat()
+            seekbarDuration = duration.toFloat()
+            
+            delay(50) // Changed from 100ms to 50ms for smoother updates
         }
     }
     
@@ -220,7 +210,7 @@ fun PlayerOverlay(
         }
     }
     
-    // Handle seekbar value change - FIXED: Completely forget timestamp, only use user position
+    // Handle seekbar value change
     fun handleSeekbarValueChange(newPosition: Float) {
         if (!isSeeking) {
             isSeeking = true
@@ -235,7 +225,7 @@ fun PlayerOverlay(
             }
         }
         
-        // Completely forget about the actual video position - only use user position
+        // Update user position
         userSeekPosition = newPosition
         
         val targetPosition = newPosition.toDouble()
@@ -246,12 +236,11 @@ fun PlayerOverlay(
         currentTime = formatTimeSimple(targetPosition)
     }
     
-    // Handle seekbar value change finished - FIXED: No blinking - keep user position until video catches up
+    // Handle seekbar value change finished
     fun handleSeekbarValueChangeFinished() {
         if (isSeeking) {
-            // Don't clear user position at all - let the video catch up naturally
-            // The position will update automatically in the background
-            // This prevents any blinking
+            // Clear user position
+            userSeekPosition = null
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -264,15 +253,12 @@ fun PlayerOverlay(
             showSeekTime = false
             wasPlayingBeforeSeek = false
             
-            // The userSeekPosition will naturally be overridden by the actual position
-            // when the video updates in the background
-            
-            // Restart auto-hide after seeking ends with proper check
+            // Restart auto-hide after seeking ends
             autoHideJob?.cancel()
             if (showSeekbar) {
                 autoHideJob = coroutineScope.launch {
                     delay(4000)
-                    if (!isSeeking) { // Double check we're not seeking again
+                    if (!isSeeking) {
                         showSeekbar = false
                     }
                 }
@@ -525,14 +511,14 @@ fun PlayerOverlay(
                         }
                     }
                     
-                    // Seekbar - FIXED: No blinking - uses user position during seeking
+                    // Seekbar
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(24.dp)
                     ) {
                         CustomSeekbar(
-                            position = if (isSeeking && userSeekPosition != null) userSeekPosition!! else seekbarPosition,
+                            position = if (isSeeking) (userSeekPosition ?: seekbarPosition) else seekbarPosition,
                             duration = seekbarDuration,
                             readAheadValue = 0f,
                             onValueChange = { handleSeekbarValueChange(it) },
@@ -592,7 +578,7 @@ fun PlayerOverlay(
             )
         }
         
-        // Center seek time - shows target position during seeking (DARK GREY BACKGROUND)
+        // Center seek time - shows target position during seeking
         if (showSeekTime) {
             Text(
                 text = seekTargetTime,
