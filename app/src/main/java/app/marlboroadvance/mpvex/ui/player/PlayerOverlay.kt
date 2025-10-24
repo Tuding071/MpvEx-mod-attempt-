@@ -588,7 +588,7 @@ fun CustomSeekbar(
             trackColor = Color.Gray.copy(alpha = 0.6f), // Grey semi-transparent track
             readAheadColor = Color.Gray, // Grey read ahead
         ),
-        thumbSize = 16.dp, // Smaller thumb ball
+        // Removed thumbSize parameter as it doesn't exist in the Seeker component
     )
 }
 
