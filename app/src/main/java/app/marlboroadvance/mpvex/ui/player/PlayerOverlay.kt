@@ -71,12 +71,8 @@ fun PlayerOverlay(
     var seekbarPosition by remember { mutableStateOf(0f) }
     var seekbarDuration by remember { mutableStateOf(1f) }
     
-    // For smooth seeking animation
+    // For smooth seeking animation - FIXED: Use direct value without animation during seeking
     var userSeekPosition by remember { mutableStateOf<Float?>(null) }
-    val animatedSeekPosition by animateFloatAsState(
-        targetValue = userSeekPosition ?: seekbarPosition,
-        label = "seek_animation"
-    )
     
     // Drag seeking variables
     var isSeeking by remember { mutableStateOf(false) }
@@ -210,7 +206,7 @@ fun PlayerOverlay(
         }
     }
     
-    // Handle seekbar value change - FIXED: Use animation for smooth thumb movement
+    // Handle seekbar value change - FIXED: Use direct value without animation to prevent blinking
     fun handleSeekbarValueChange(newPosition: Float) {
         if (!isSeeking) {
             isSeeking = true
@@ -225,7 +221,7 @@ fun PlayerOverlay(
             }
         }
         
-        // Update animation position for smooth thumb movement
+        // Update user position directly (no animation during seeking to prevent blinking)
         userSeekPosition = newPosition
         
         val targetPosition = newPosition.toDouble()
@@ -236,10 +232,10 @@ fun PlayerOverlay(
         currentTime = formatTimeSimple(targetPosition)
     }
     
-    // Handle seekbar value change finished - FIXED: Reset animation
+    // Handle seekbar value change finished - FIXED: Smooth transition without blinking
     fun handleSeekbarValueChangeFinished() {
         if (isSeeking) {
-            // Reset animation position
+            // Clear user position and let it smoothly transition to actual position
             userSeekPosition = null
             
             if (wasPlayingBeforeSeek) {
@@ -462,14 +458,14 @@ fun PlayerOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(70.dp) // Reduced height since time and seekbar are closer
+                    .height(70.dp)
                     .align(Alignment.BottomStart)
-                    .padding(horizontal = 32.dp) // Increased horizontal padding for more edge space
-                    .offset(y = (-16).dp)
+                    .padding(horizontal = 40.dp) // Increased edge space from 32dp to 40dp
+                    .offset(y = (-14).dp) // Moved down by 2dp (from -16dp to -14dp)
             ) {
                 Column(
                     modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(2.dp) // Reduced gap to make them closer
+                    verticalArrangement = Arrangement.spacedBy(6.dp) // Increased gap from 2dp to 6dp
                 ) {
                     // Merged time display - current/total
                     Box(
@@ -487,7 +483,7 @@ fun PlayerOverlay(
                             modifier = Modifier
                                 .align(Alignment.CenterStart)
                                 .background(Color.DarkGray.copy(alpha = 0.8f))
-                                .padding(horizontal = 12.dp, vertical = 4.dp) // Reduced vertical padding
+                                .padding(horizontal = 12.dp, vertical = 4.dp)
                         )
                     }
                     
@@ -495,17 +491,17 @@ fun PlayerOverlay(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(24.dp) // Much thinner seekbar
+                            .height(24.dp)
                     ) {
                         CustomSeekbar(
-                            position = if (isSeeking) animatedSeekPosition else seekbarPosition,
+                            position = if (isSeeking) (userSeekPosition ?: seekbarPosition) else seekbarPosition,
                             duration = seekbarDuration,
                             readAheadValue = 0f,
                             onValueChange = { handleSeekbarValueChange(it) },
                             onValueChangeFinished = { handleSeekbarValueChangeFinished() },
                             chapters = persistentListOf(),
                             modifier = Modifier.fillMaxSize(),
-                            isSeeking = isSeeking // Pass seeking state to hide progress during seeking
+                            isSeeking = isSeeking
                         )
                     }
                 }
@@ -583,12 +579,11 @@ fun CustomSeekbar(
             .let { (if (it.isNotEmpty() && it[0].start != 0f) persistentListOf(Segment("", 0f)) + it else it) + it },
         modifier = modifier,
         colors = SeekerDefaults.seekerColors(
-            progressColor = if (isSeeking) Color.Transparent else Color.White, // Hide progress during seeking
+            progressColor = Color.White, // Always show white progress (don't hide during seeking)
             thumbColor = Color.White, // White thumb
             trackColor = Color.Gray.copy(alpha = 0.6f), // Grey semi-transparent track
             readAheadColor = Color.Gray, // Grey read ahead
         ),
-        // Removed thumbSize parameter as it doesn't exist in the Seeker component
     )
 }
 
