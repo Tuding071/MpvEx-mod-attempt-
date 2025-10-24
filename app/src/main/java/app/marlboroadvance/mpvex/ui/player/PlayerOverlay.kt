@@ -193,24 +193,57 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // Aggressive software decoding optimization with large cache
+    // EMPOWERED PURE SOFTWARE DECODING - 8 cores & 250MB cache
     LaunchedEffect(Unit) {
+        // PURE SOFTWARE DECODING (no GPU acceleration)
         MPVLib.setPropertyString("hwdec", "no")
-        MPVLib.setPropertyString("vo", "gpu")
+        MPVLib.setPropertyString("vo", "gpu") // Keep gpu for display, but decoding is software
         MPVLib.setPropertyString("profile", "fast")
         
-        // Large cache settings for smooth seeking
-        MPVLib.setPropertyString("cache", "yes")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 100 * 1024 * 1024)
-        MPVLib.setPropertyString("demuxer-readahead-secs", "60")
-        MPVLib.setPropertyString("cache-secs", "60")
-        MPVLib.setPropertyString("cache-pause", "no")
+        // EMPOWERED: 8 cores for software decoding
+        MPVLib.setPropertyString("vd-lavc-threads", "8") // Use 8 cores for video decoding
+        MPVLib.setPropertyString("audio-channels", "8") // Optimize audio processing
+        MPVLib.setPropertyString("demuxer-lavf-threads", "4") // Demuxer threads
         
-        // Frame-accurate seeking settings
+        // EMPOWERED: 250MB cache allocation (increased from 100MB)
+        MPVLib.setPropertyString("cache", "yes")
+        MPVLib.setPropertyInt("demuxer-max-bytes", 250 * 1024 * 1024) // 250MB cache
+        MPVLib.setPropertyString("demuxer-readahead-secs", "120") // Increased from 60 to 120 seconds
+        MPVLib.setPropertyString("cache-secs", "120") // Increased from 60 to 120 seconds
+        MPVLib.setPropertyString("cache-pause", "no")
+        MPVLib.setPropertyString("cache-initial", "0.5") // Start caching immediately
+        
+        // EMPOWERED: Software decoding optimizations
         MPVLib.setPropertyString("video-sync", "display-resample")
         MPVLib.setPropertyString("untimed", "yes")
         MPVLib.setPropertyString("hr-seek", "yes")
         MPVLib.setPropertyString("hr-seek-framedrop", "no")
+        
+        // EMPOWERED: Advanced software performance settings
+        MPVLib.setPropertyString("vd-lavc-fast", "yes") // Fast software decoding
+        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all") // Skip loop filter
+        MPVLib.setPropertyString("vd-lavc-skipidct", "all") // Skip IDCT
+        MPVLib.setPropertyString("vd-lavc-assemble", "yes") // Assemble h264 slices
+        
+        // EMPOWERED: Memory and buffer optimizations
+        MPVLib.setPropertyString("demuxer-max-back-bytes", "50M") // Backward cache
+        MPVLib.setPropertyString("demuxer-seekable-cache", "yes") // Cache seekable data
+        
+        // EMPOWERED: Software rendering optimizations
+        MPVLib.setPropertyString("gpu-dumb-mode", "yes") // Simpler GPU mode
+        MPVLib.setPropertyString("opengl-pbo", "yes") // Faster texture uploads
+        
+        // EMPOWERED: Network optimizations for high-demand streaming
+        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1")
+        MPVLib.setPropertyString("network-timeout", "30")
+        
+        // EMPOWERED: Audio processing
+        MPVLib.setPropertyString("audio-client-name", "MPVEx-Software-8Core")
+        MPVLib.setPropertyString("audio-samplerate", "auto")
+        
+        // Additional performance flags
+        MPVLib.setPropertyString("deband", "no") // Disable for performance
+        MPVLib.setPropertyString("video-aspect-override", "no")
     }
     
     // Update time and progress every 50ms
