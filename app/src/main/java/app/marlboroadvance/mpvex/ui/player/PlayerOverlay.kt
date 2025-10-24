@@ -93,10 +93,11 @@ fun PlayerOverlay(
     var isVideoPaused by remember { mutableStateOf(false) }
     var refreshPauseState by remember { mutableStateOf(0) } // Counter to trigger refresh
     
-    // Video title state
-    var showVideoTitle by remember { mutableStateOf(true) }
+    // Video title and filename state
+    var showVideoInfo by remember { mutableStateOf(0) } // 0=hide, 1=filename, 2=title
     var videoTitle by remember { mutableStateOf("Video") }
-    var videoTitleJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var fileName by remember { mutableStateOf("file.mp4") }
+    var videoInfoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
@@ -113,18 +114,24 @@ fun PlayerOverlay(
         }
     }
     
-    // Show video title at start and auto-hide after 4 seconds
+    // Get video title and filename at start and show filename
     LaunchedEffect(Unit) {
         // Get video title from MPV
         val title = MPVLib.getPropertyString("media-title") ?: "Video"
         videoTitle = title
-        showVideoTitle = true
+        
+        // Get filename from path
+        val path = MPVLib.getPropertyString("path") ?: "file.mp4"
+        fileName = path.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "file" }
+        
+        // Show filename at start
+        showVideoInfo = 1
         
         // Auto-hide after 4 seconds
-        videoTitleJob?.cancel()
-        videoTitleJob = coroutineScope.launch {
+        videoInfoJob?.cancel()
+        videoInfoJob = coroutineScope.launch {
             delay(4000)
-            showVideoTitle = false
+            showVideoInfo = 0
         }
     }
     
@@ -161,17 +168,29 @@ fun PlayerOverlay(
         refreshPauseState++ // Increment to trigger LaunchedEffect
     }
     
-    // Function to show/hide video title
-    fun toggleVideoTitle() {
-        showVideoTitle = !showVideoTitle
-        if (showVideoTitle) {
+    // Function to toggle video info (filename/title)
+    fun toggleVideoInfo() {
+        showVideoInfo = when (showVideoInfo) {
+            0 -> 1 // Show filename
+            1 -> 2 // Show title
+            else -> 0 // Hide
+        }
+        
+        if (showVideoInfo != 0) {
             // Auto-hide after 4 seconds
-            videoTitleJob?.cancel()
-            videoTitleJob = coroutineScope.launch {
+            videoInfoJob?.cancel()
+            videoInfoJob = coroutineScope.launch {
                 delay(4000)
-                showVideoTitle = false
+                showVideoInfo = 0
             }
         }
+    }
+    
+    // Get display text based on current state
+    val displayText = when (showVideoInfo) {
+        1 -> fileName
+        2 -> videoTitle
+        else -> ""
     }
     
     // Aggressive software decoding optimization with large cache
@@ -481,7 +500,7 @@ fun PlayerOverlay(
     Box(
         modifier = modifier.fillMaxSize()
     ) {
-        // TOP 5% - Video title area with toggle functionality
+        // TOP 5% - Video info toggle area
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -491,7 +510,7 @@ fun PlayerOverlay(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
                     onClick = {
-                        toggleVideoTitle()
+                        toggleVideoInfo()
                     }
                 )
         )
@@ -629,20 +648,20 @@ fun PlayerOverlay(
             }
         }
         
-        // VIDEO TITLE - Top Center (shows at start and can be toggled)
-        if (showVideoTitle) {
+        // VIDEO INFO - Top Center (filename/title toggle)
+        if (showVideoInfo != 0) {
             Text(
-                text = videoTitle,
+                text = displayText,
                 style = TextStyle(
                     color = Color.White,
-                    fontSize = 16.sp,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.Medium
                 ),
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .offset(y = 20.dp)
                     .background(Color.DarkGray.copy(alpha = 0.8f))
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
             )
         }
         
@@ -657,7 +676,7 @@ fun PlayerOverlay(
                 ),
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .offset(y = 60.dp) // Moved down to avoid title overlap
+                    .offset(y = 60.dp)
                     .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
@@ -674,7 +693,7 @@ fun PlayerOverlay(
                 ),
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .offset(y = 60.dp) // Moved down to avoid title overlap
+                    .offset(y = 60.dp)
                     .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
