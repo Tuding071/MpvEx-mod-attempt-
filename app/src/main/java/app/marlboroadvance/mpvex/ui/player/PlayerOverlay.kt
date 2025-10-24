@@ -80,6 +80,10 @@ fun PlayerOverlay(
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
+    // ⭐ DEBOUNCING: Track last seek time for both drag and seekbar seeking
+    var lastSeekTime by remember { mutableStateOf(0L) }
+    val seekDebounceMs = 16L // 16ms = ~60fps for buttery smooth seeking
+    
     // Tap detection variables
     var leftTapStartTime by remember { mutableStateOf(0L) }
     var rightTapStartTime by remember { mutableStateOf(0L) }
@@ -313,12 +317,13 @@ fun PlayerOverlay(
         }
     }
     
-    // Handle seekbar value change
+    // ⭐ DEBOUNCED: Handle seekbar value change with 16ms debouncing
     fun handleSeekbarValueChange(newPosition: Float) {
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
+            lastSeekTime = 0L // Reset debounce timer on new seek
             
             // Cancel auto-hide immediately when seeking starts
             autoHideJob?.cancel()
@@ -332,10 +337,16 @@ fun PlayerOverlay(
         userSeekPosition = newPosition
         
         val targetPosition = newPosition.toDouble()
-        performRealTimeSeek(targetPosition)
-        seekTargetTime = formatTimeSimple(targetPosition)
         
-        // Update current time during seeking
+        // ⭐ DEBOUNCING: Only perform seek if 16ms has passed since last seek
+        val now = System.currentTimeMillis()
+        if (now - lastSeekTime >= seekDebounceMs) {
+            performRealTimeSeek(targetPosition)
+            lastSeekTime = now
+        }
+        
+        // Always update UI (these are cheap operations)
+        seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
     }
     
@@ -369,7 +380,7 @@ fun PlayerOverlay(
         }
     }
     
-    // Continuous drag seeking gesture handler for bottom area
+    // ⭐ DEBOUNCED: Continuous drag seeking gesture handler with 16ms debouncing
     fun handleDragSeekGesture(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -378,6 +389,7 @@ fun PlayerOverlay(
                 wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
                 isSeeking = true
                 showSeekTime = true
+                lastSeekTime = 0L // Reset debounce timer on new seek
                 
                 // Cancel auto-hide immediately
                 autoHideJob?.cancel()
@@ -400,9 +412,15 @@ fun PlayerOverlay(
                     val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
                     val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
                     
-                    performRealTimeSeek(clampedPosition)
+                    // ⭐ DEBOUNCING: Only perform seek if 16ms has passed since last seek
+                    val now = System.currentTimeMillis()
+                    if (now - lastSeekTime >= seekDebounceMs) {
+                        performRealTimeSeek(clampedPosition)
+                        lastSeekTime = now
+                    }
+                    
+                    // Always update UI (these are cheap operations)
                     seekTargetTime = formatTimeSimple(clampedPosition)
-                    // Update current time during horizontal seeking
                     currentTime = formatTimeSimple(clampedPosition)
                 }
                 return true
@@ -417,6 +435,7 @@ fun PlayerOverlay(
                     val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
                     val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
                     
+                    // Final seek on release (always perform this one)
                     performRealTimeSeek(clampedPosition)
                     
                     if (wasPlayingBeforeSeek) {
