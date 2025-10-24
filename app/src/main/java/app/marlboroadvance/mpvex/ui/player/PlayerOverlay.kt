@@ -80,9 +80,9 @@ fun PlayerOverlay(
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
-    // ⚡ OPTIMIZED FOR 60FPS: 16ms debounce for buttery smooth seeking
+    // ⭐ DEBOUNCING: Track last seek time for both drag and seekbar seeking
     var lastSeekTime by remember { mutableStateOf(0L) }
-    val seekDebounceMs = 16L // 16ms = perfect 60fps seeking
+    val seekDebounceMs = 16L // 16ms = ~60fps for buttery smooth seeking
     
     // Tap detection variables
     var leftTapStartTime by remember { mutableStateOf(0L) }
@@ -90,182 +90,153 @@ fun PlayerOverlay(
     var leftIsHolding by remember { mutableStateOf(false) }
     var rightIsHolding by remember { mutableStateOf(false) }
     
-    // Auto-hide control
-    var autoHideJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    
-    // Video pause state with optimized refresh
-    var isVideoPaused by remember { mutableStateOf(false) }
-    var refreshPauseState by remember { mutableStateOf(0) }
-    
     // Video title and filename state
-    var showVideoInfo by remember { mutableStateOf(0) }
+    var showVideoInfo by remember { mutableStateOf(0) } // 0=hide, 1=filename, 2=title
     var videoTitle by remember { mutableStateOf("Video") }
     var fileName by remember { mutableStateOf("file.mp4") }
     var videoInfoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    // ⚡ PERFORMANCE: Dedicated IO dispatcher for background operations
-    val coroutineScope = remember { CoroutineScope(Dispatchers.IO) }
-
-    // Function to trigger pause state refresh - MOVED BEFORE FIRST USAGE
-    fun refreshPauseState() {
-        refreshPauseState++ // Increment to trigger LaunchedEffect
-    }
+    val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // ⚡ PURE SPEED OPTIMIZATION - REMOVE ALL QUALITY FEATURES
+    // Get video title and filename at start and show filename
     LaunchedEffect(Unit) {
-        // MAXIMUM HARDWARE ACCELERATION - VULKAN
-        MPVLib.setPropertyString("hwdec", "vulkan")
-        MPVLib.setPropertyString("gpu-api", "vulkan")
-        MPVLib.setPropertyString("vo", "gpu")
-        
-        // ⚡ DISABLE ALL POST-PROCESSING FOR MAXIMUM SPEED
-        MPVLib.setPropertyString("scale", "bilinear") // Fastest scaling
-        MPVLib.setPropertyString("dscale", "bilinear") // Fastest downscaling
-        MPVLib.setPropertyString("cscale", "bilinear") // Fastest chroma scaling
-        MPVLib.setPropertyString("tscale", "box") // Fastest interpolation
-        
-        // ⚡ DISABLE ALL QUALITY ENHANCEMENTS
-        MPVLib.setPropertyString("deband", "no")
-        MPVLib.setPropertyString("deband-iterations", "0")
-        MPVLib.setPropertyString("deband-threshold", "0")
-        MPVLib.setPropertyString("deband-range", "0")
-        MPVLib.setPropertyString("deband-grain", "0")
-        
-        // ⚡ DISABLE COLOR MANAGEMENT AND HDR PROCESSING
-        MPVLib.setPropertyString("target-colorspace-hint", "no")
-        MPVLib.setPropertyString("hdr-compute-peak", "no")
-        MPVLib.setPropertyString("tone-mapping", "no")
-        MPVLib.setPropertyString("gamut-mapping-mode", "no")
-        
-        // ⚡ MAXIMUM PERFORMANCE DECODING
-        MPVLib.setPropertyString("vd-lavc-dr", "yes") // Direct rendering
-        MPVLib.setPropertyString("vd-lavc-threads", "8") // Optimized thread count
-        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all") // Skip all filters
-        MPVLib.setPropertyString("vd-lavc-skipidct", "all") // Skip IDCT
-        MPVLib.setPropertyString("vd-lavc-fast", "yes")
-        MPVLib.setPropertyString("vd-lavc-assemble", "yes") // Fast h264 assembly
-        
-        // ⚡ MINIMAL VIDEO PROCESSING
-        MPVLib.setPropertyString("video-threads", "2") // Minimal video threads
-        MPVLib.setPropertyString("demuxer-lavf-threads", "2") // Minimal demux threads
-        
-        // ⚡ OPTIMIZED CACHE FOR SPEED
-        MPVLib.setPropertyString("cache", "yes")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 256 * 1024 * 1024) // 256MB cache
-        MPVLib.setPropertyString("demuxer-readahead-secs", "60")
-        MPVLib.setPropertyString("cache-secs", "60")
-        
-        // ⚡ DISABLE GPU SHADER CACHE AND COMPLEX FEATURES
-        MPVLib.setPropertyString("gpu-shader-cache", "no")
-        MPVLib.setPropertyString("gpu-early-flush", "no")
-        MPVLib.setPropertyString("opengl-pbo", "no") // Disable for Vulkan
-        
-        // ⚡ SIMPLE AUDIO PROCESSING
-        MPVLib.setPropertyString("audio-client-name", "MPVEx-Speed")
-        MPVLib.setPropertyString("audio-channels", "stereo") // Simple stereo
-        MPVLib.setPropertyString("audio-samplerate", "48000") // Standard quality
-        MPVLib.setPropertyString("audio-buffer", "0.1") // Minimal latency
-        
-        // ⚡ NETWORK OPTIMIZATIONS
-        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1")
-        MPVLib.setPropertyString("network-timeout", "5") // Very aggressive timeout
-        
-        // ⚡ PERFORMANCE PROFILE
-        MPVLib.setPropertyString("profile", "fast")
-        MPVLib.setPropertyString("msg-level", "all=error") // Reduce logging overhead
-        
-        // ⚡ DISABLE UNNECESSARY FEATURES
-        MPVLib.setPropertyString("sub-auto", "no") // No subtitles
-        MPVLib.setPropertyString("audio-display", "no") // No cover art
-        MPVLib.setPropertyString("cover-art-auto", "no") // No cover art
-        
-        // Get video info
+        // Get video title from MPV
         val title = MPVLib.getPropertyString("media-title") ?: "Video"
         videoTitle = title
         
+        // Get filename from path
         val path = MPVLib.getPropertyString("path") ?: "file.mp4"
         fileName = path.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "file" }
         
+        // Show filename at start
         showVideoInfo = 1
+        
+        // Auto-hide after 4 seconds
         videoInfoJob?.cancel()
         videoInfoJob = coroutineScope.launch {
             delay(4000)
             showVideoInfo = 0
         }
     }
-
-    // Start auto-hide when seekbar is shown
-    LaunchedEffect(showSeekbar, isSeeking) {
-        if (showSeekbar && !isSeeking) {
-            autoHideJob?.cancel()
-            autoHideJob = coroutineScope.launch {
-                delay(3000) // Shorter delay for performance
-                if (!isSeeking) {
-                    showSeekbar = false
-                }
-            }
-        }
-    }
     
     // Handle speed reset when not holding
     LaunchedEffect(leftIsHolding, rightIsHolding) {
         if (!leftIsHolding && !rightIsHolding && isSpeedingUp) {
-            delay(50) // Faster reset
+            delay(100)
             MPVLib.setPropertyDouble("speed", 1.0)
             isSpeedingUp = false
         }
     }
     
-    // ⚡ OPTIMIZED: High-frequency state updates with reduced overhead
+    // OPTIMIZED SOFTWARE DECODING - 4 cores & 150MB cache
     LaunchedEffect(Unit) {
+        // PURE SOFTWARE DECODING (no GPU acceleration)
+        MPVLib.setPropertyString("hwdec", "no")
+        MPVLib.setPropertyString("vo", "gpu")
+        MPVLib.setPropertyString("profile", "fast")
+        
+        // OPTIMIZED: 4 cores for software decoding (reduced from 8)
+        MPVLib.setPropertyString("vd-lavc-threads", "4")
+        MPVLib.setPropertyString("audio-channels", "auto") // OPTIMIZED: Auto-detect instead of 8 channels
+        MPVLib.setPropertyString("demuxer-lavf-threads", "4")
+        
+        // OPTIMIZED: 150MB cache allocation (reduced from 250MB)
+        MPVLib.setPropertyString("cache", "yes")
+        MPVLib.setPropertyInt("demuxer-max-bytes", 150 * 1024 * 1024)
+        MPVLib.setPropertyString("demuxer-readahead-secs", "60") // Reduced from 120 to 60 seconds
+        MPVLib.setPropertyString("cache-secs", "60")
+        MPVLib.setPropertyString("cache-pause", "no")
+        MPVLib.setPropertyString("cache-initial", "0.5")
+        
+        // OPTIMIZED: Software decoding optimizations with quality reduction
+        MPVLib.setPropertyString("video-sync", "display-resample")
+        MPVLib.setPropertyString("untimed", "yes")
+        MPVLib.setPropertyString("hr-seek", "yes")
+        MPVLib.setPropertyString("hr-seek-framedrop", "no")
+        
+        // QUALITY REDUCTION FOR SPEED (as requested)
+        MPVLib.setPropertyString("vd-lavc-fast", "yes")
+        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all") // Skip loop filter
+        MPVLib.setPropertyString("vd-lavc-skipidct", "all") // Skip IDCT
+        MPVLib.setPropertyString("vd-lavc-assemble", "yes")
+        
+        // Memory and buffer optimizations
+        MPVLib.setPropertyString("demuxer-max-back-bytes", "50M")
+        MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
+        
+        // Software rendering optimizations
+        MPVLib.setPropertyString("gpu-dumb-mode", "yes")
+        MPVLib.setPropertyString("opengl-pbo", "yes")
+        
+        // Network optimizations
+        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1")
+        MPVLib.setPropertyString("network-timeout", "30")
+        
+        // Audio processing
+        MPVLib.setPropertyString("audio-client-name", "MPVEx-Software-4Core")
+        MPVLib.setPropertyString("audio-samplerate", "auto")
+        
+        // Additional performance flags
+        MPVLib.setPropertyString("deband", "no")
+        MPVLib.setPropertyString("video-aspect-override", "no")
+    }
+    
+    // OPTIMIZED: Update time and progress every 500ms with smart updates
+    LaunchedEffect(Unit) {
+        var lastSeconds by remember { mutableStateOf(-1) }
+        
         while (isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
             val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
+            val currentSeconds = currentPos.toInt()
             
-            currentTime = formatTimeSimple(currentPos)
-            totalTime = formatTimeSimple(duration)
+            if (isSeeking) {
+                // During seeking: show seek target in bottom left
+                currentTime = seekTargetTime
+                totalTime = formatTimeSimple(duration)
+            } else {
+                // Normal playback: only update when seconds actually change
+                if (currentSeconds != lastSeconds) {
+                    currentTime = formatTimeSimple(currentPos)
+                    totalTime = formatTimeSimple(duration)
+                    lastSeconds = currentSeconds
+                }
+            }
             
+            // OPTIMIZED: Only update seekbar position when seekbar is visible
+            if (showSeekbar && !isSeeking) {
+                seekbarPosition = currentPos.toFloat()
+                seekbarDuration = duration.toFloat()
+            }
+            
+            // Always update these for internal logic (they're cheap)
             currentPosition = currentPos
             videoDuration = duration
             
-            seekbarPosition = currentPos.toFloat()
-            seekbarDuration = duration.toFloat()
-            
-            // ⚡ OPTIMIZED: Adaptive update rate based on seeking state
-            delay(if (isSeeking) 16L else 33L) // 60fps when seeking, 30fps otherwise
+            delay(500) // OPTIMIZED: Reduced from 50ms to 500ms
         }
     }
     
-    // ⚡ OPTIMIZED: Faster speed transitions
+    // Handle speed transitions with 100ms delay
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
-            delay(50) // Faster speed activation
+            delay(100)
             MPVLib.setPropertyDouble("speed", 2.0)
         } else {
-            delay(50)
+            delay(100)
             MPVLib.setPropertyDouble("speed", 1.0)
         }
     }
     
-    // ⚡ OPTIMIZED: Faster pause/resume handling
+    // OPTIMIZED: Handle pause/resume WITHOUT delays
     LaunchedEffect(pendingPauseResume) {
         if (pendingPauseResume) {
-            delay(25) // Minimal delay
-            viewModel.pauseUnpause()
+            viewModel.pauseUnpause() // No delays - instant response
             pendingPauseResume = false
-            refreshPauseState()
         }
     }
     
-    // Optimized pause state refresh
-    LaunchedEffect(refreshPauseState) {
-        if (refreshPauseState > 0) {
-            isVideoPaused = MPVLib.getPropertyBoolean("pause") ?: false
-            delay(100)
-            isVideoPaused = MPVLib.getPropertyBoolean("pause") ?: false
-        }
-    }
-    
+    // Function to toggle video info (filename/title)
     fun toggleVideoInfo() {
         showVideoInfo = when (showVideoInfo) {
             0 -> 1
@@ -276,7 +247,7 @@ fun PlayerOverlay(
         if (showVideoInfo != 0) {
             videoInfoJob?.cancel()
             videoInfoJob = coroutineScope.launch {
-                delay(3000)
+                delay(4000)
                 showVideoInfo = 0
             }
         }
@@ -288,34 +259,23 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // ⚡ ULTRA PERFORMANCE SEEKING: Direct hardware-accelerated seeking
+    // Simple real-time seeking function
     fun performRealTimeSeek(targetPosition: Double) {
-        // Use exact seeking with hardware acceleration
         MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
     }
     
-    fun showSeekbarWithAutoHide() {
+    // Function to show seekbar (no auto-hide)
+    fun showSeekbar() {
         showSeekbar = true
-        autoHideJob?.cancel()
-        if (!isSeeking) {
-            autoHideJob = coroutineScope.launch {
-                delay(3000)
-                if (!isSeeking) {
-                    showSeekbar = false
-                }
-            }
-        }
     }
     
-    // ⚡ ULTRA-RESPONSIVE: 16ms debounced seeking for 60fps
+    // ⭐ DEBOUNCED: Handle seekbar value change with 16ms debouncing
     fun handleSeekbarValueChange(newPosition: Float) {
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
             lastSeekTime = 0L
-            
-            autoHideJob?.cancel()
             
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
@@ -335,13 +295,14 @@ fun PlayerOverlay(
         currentTime = formatTimeSimple(targetPosition)
     }
     
+    // Handle seekbar value change finished
     fun handleSeekbarValueChangeFinished() {
         if (isSeeking) {
             userSeekPosition = null
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
-                    delay(50) // Faster resume
+                    delay(100)
                     MPVLib.setPropertyBoolean("pause", false)
                 }
             }
@@ -349,20 +310,10 @@ fun PlayerOverlay(
             isSeeking = false
             showSeekTime = false
             wasPlayingBeforeSeek = false
-            
-            autoHideJob?.cancel()
-            if (showSeekbar) {
-                autoHideJob = coroutineScope.launch {
-                    delay(3000)
-                    if (!isSeeking) {
-                        showSeekbar = false
-                    }
-                }
-            }
         }
     }
     
-    // ⚡ HIGH-PRECISION DRAG SEEKING: 16ms debounce for 60fps
+    // ⭐ DEBOUNCED: Continuous drag seeking gesture handler with 16ms debouncing
     fun handleDragSeekGesture(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -372,8 +323,6 @@ fun PlayerOverlay(
                 isSeeking = true
                 showSeekTime = true
                 lastSeekTime = 0L
-                
-                autoHideJob?.cancel()
                 
                 if (wasPlayingBeforeSeek) {
                     MPVLib.setPropertyBoolean("pause", true)
@@ -386,8 +335,7 @@ fun PlayerOverlay(
                     val currentX = event.x
                     val deltaX = currentX - seekStartX
                     
-                    // ⚡ 60FPS OPTIMIZED: Perfect precision for 60fps
-                    val pixelsPerSecond = 3f / 0.033f // Optimized for 60fps
+                    val pixelsPerSecond = 3f / 0.033f
                     val timeDeltaSeconds = deltaX / pixelsPerSecond
                     
                     val newPositionSeconds = seekStartPosition + timeDeltaSeconds
@@ -409,7 +357,7 @@ fun PlayerOverlay(
                 if (isSeeking) {
                     val currentX = event.x
                     val deltaX = currentX - seekStartX
-                    val pixelsPerSecond = 3f / 0.033f // 60fps optimized
+                    val pixelsPerSecond = 3f / 0.033f
                     val timeDeltaSeconds = deltaX / pixelsPerSecond
                     val newPositionSeconds = seekStartPosition + timeDeltaSeconds
                     val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
@@ -419,7 +367,7 @@ fun PlayerOverlay(
                     
                     if (wasPlayingBeforeSeek) {
                         coroutineScope.launch {
-                            delay(50) // Faster resume
+                            delay(100)
                             MPVLib.setPropertyBoolean("pause", false)
                         }
                     }
@@ -429,13 +377,6 @@ fun PlayerOverlay(
                     seekStartX = 0f
                     seekStartPosition = 0.0
                     wasPlayingBeforeSeek = false
-                    
-                    autoHideJob = coroutineScope.launch {
-                        delay(3000)
-                        if (!isSeeking) {
-                            showSeekbar = false
-                        }
-                    }
                 }
                 return true
             }
@@ -443,16 +384,18 @@ fun PlayerOverlay(
         return false
     }
     
-    // ⚡ OPTIMIZED: Faster gesture detection
+    // Left area gesture handler with proper tap/hold detection
     fun handleLeftAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 leftTapStartTime = System.currentTimeMillis()
                 leftIsHolding = true
                 
+                // Start checking for long press after 300ms
                 coroutineScope.launch {
-                    delay(250) // Faster long-press detection
+                    delay(300)
                     if (leftIsHolding) {
+                        // Long press detected - activate 2x speed
                         isSpeedingUp = true
                     }
                 }
@@ -462,15 +405,15 @@ fun PlayerOverlay(
                 val tapDuration = System.currentTimeMillis() - leftTapStartTime
                 leftIsHolding = false
                 
-                if (tapDuration < 150) { // Faster tap detection
-                    refreshPauseState()
+                if (tapDuration < 200) {
+                    // Short tap - toggle seekbar
                     if (showSeekbar) {
                         showSeekbar = false
-                        autoHideJob?.cancel()
                     } else {
-                        showSeekbarWithAutoHide()
+                        showSeekbar()
                     }
                 }
+                // Long press speed will auto-reset via LaunchedEffect
                 true
             }
             MotionEvent.ACTION_CANCEL -> {
@@ -481,15 +424,18 @@ fun PlayerOverlay(
         }
     }
     
+    // Right area gesture handler with proper tap/hold detection
     fun handleRightAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 rightTapStartTime = System.currentTimeMillis()
                 rightIsHolding = true
                 
+                // Start checking for long press after 300ms
                 coroutineScope.launch {
-                    delay(250)
+                    delay(300)
                     if (rightIsHolding) {
+                        // Long press detected - activate 2x speed
                         isSpeedingUp = true
                     }
                 }
@@ -499,15 +445,15 @@ fun PlayerOverlay(
                 val tapDuration = System.currentTimeMillis() - rightTapStartTime
                 rightIsHolding = false
                 
-                if (tapDuration < 150) {
-                    refreshPauseState()
+                if (tapDuration < 200) {
+                    // Short tap - toggle seekbar
                     if (showSeekbar) {
                         showSeekbar = false
-                        autoHideJob?.cancel()
                     } else {
-                        showSeekbarWithAutoHide()
+                        showSeekbar()
                     }
                 }
+                // Long press speed will auto-reset via LaunchedEffect
                 true
             }
             MotionEvent.ACTION_CANCEL -> {
@@ -567,7 +513,6 @@ fun PlayerOverlay(
                             val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
                             isPausing = !currentPaused
                             pendingPauseResume = true
-                            refreshPauseState()
                         }
                     )
             )
@@ -609,7 +554,7 @@ fun PlayerOverlay(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    // Time display with pause indicator
+                    // Time display
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -619,6 +564,7 @@ fun PlayerOverlay(
                             modifier = Modifier.align(Alignment.CenterStart),
                             horizontalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
+                            // Current time / total time
                             Text(
                                 text = "$currentTime / $totalTime",
                                 style = TextStyle(
@@ -630,20 +576,6 @@ fun PlayerOverlay(
                                     .background(Color.DarkGray.copy(alpha = 0.8f))
                                     .padding(horizontal = 12.dp, vertical = 4.dp)
                             )
-                            
-                            if (isVideoPaused) {
-                                Text(
-                                    text = "Pause",
-                                    style = TextStyle(
-                                        color = Color.White,
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Medium
-                                    ),
-                                    modifier = Modifier
-                                        .background(Color.DarkGray.copy(alpha = 0.8f))
-                                        .padding(horizontal = 12.dp, vertical = 4.dp)
-                                )
-                            }
                         }
                     }
                     
@@ -689,14 +621,14 @@ fun PlayerOverlay(
             Text(
                 text = "2X",
                 style = TextStyle(
-                    color = Color.Yellow, // More visible color
+                    color = Color.White,
                     fontSize = 24.sp,
                     fontWeight = FontWeight.Bold
                 ),
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .offset(y = 60.dp)
-                    .background(Color.DarkGray.copy(alpha = 0.9f))
+                    .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
         }
@@ -713,25 +645,10 @@ fun PlayerOverlay(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .offset(y = 60.dp)
-                    .background(Color.DarkGray.copy(alpha = 0.9f))
+                    .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
         }
-        
-        // ⚡ PERFORMANCE INDICATOR - Shows when speed mode is active
-        Text(
-            text = "SPEED",
-            style = TextStyle(
-                color = Color.Green,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold
-            ),
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .offset(x = (-8).dp, y = 8.dp)
-                .background(Color.Black.copy(alpha = 0.7f))
-                .padding(horizontal = 6.dp, vertical = 2.dp)
-        )
     }
 }
 
@@ -756,7 +673,7 @@ fun CustomSeekbar(
             .let { (if (it.isNotEmpty() && it[0].start != 0f) persistentListOf(Segment("", 0f)) + it else it) + it },
         modifier = modifier,
         colors = SeekerDefaults.seekerColors(
-            progressColor = Color.Yellow, // High visibility
+            progressColor = Color.White,
             thumbColor = Color.White,
             trackColor = Color.Gray.copy(alpha = 0.6f),
             readAheadColor = Color.Gray,
@@ -764,6 +681,7 @@ fun CustomSeekbar(
     )
 }
 
+// Function to format time simply without milliseconds
 private fun formatTimeSimple(seconds: Double): String {
     val totalSeconds = seconds.toInt()
     
