@@ -80,9 +80,9 @@ fun PlayerOverlay(
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
-    // ⚡ ULTRA PERFORMANCE: Reduced debounce for maximum responsiveness
+    // ⚡ OPTIMIZED FOR 60FPS: 16ms debounce for buttery smooth seeking
     var lastSeekTime by remember { mutableStateOf(0L) }
-    val seekDebounceMs = 8L // 8ms = ~120fps for ultra-smooth seeking
+    val seekDebounceMs = 16L // 16ms = perfect 60fps seeking
     
     // Tap detection variables
     var leftTapStartTime by remember { mutableStateOf(0L) }
@@ -111,87 +111,73 @@ fun PlayerOverlay(
         refreshPauseState++ // Increment to trigger LaunchedEffect
     }
     
-    // ⚡ VULKAN HARDWARE ACCELERATION - FULL IMPLEMENTATION
+    // ⚡ PURE SPEED OPTIMIZATION - REMOVE ALL QUALITY FEATURES
     LaunchedEffect(Unit) {
-        // ULTIMATE HARDWARE ACCELERATION - VULKAN PRIORITY
+        // MAXIMUM HARDWARE ACCELERATION - VULKAN
         MPVLib.setPropertyString("hwdec", "vulkan")
         MPVLib.setPropertyString("gpu-api", "vulkan")
         MPVLib.setPropertyString("vo", "gpu")
-        MPVLib.setPropertyString("gpu-context", "android")
         
-        // ⚡ VULKAN SPECIFIC OPTIMIZATIONS
-        MPVLib.setPropertyString("vulkan-queue-count", "4") // Multiple Vulkan queues
-        MPVLib.setPropertyString("vulkan-async-transfer", "yes")
-        MPVLib.setPropertyString("vulkan-async-compute", "yes")
-        MPVLib.setPropertyString("vulkan-swap-mode", "fifo") // VSync enabled
+        // ⚡ DISABLE ALL POST-PROCESSING FOR MAXIMUM SPEED
+        MPVLib.setPropertyString("scale", "bilinear") // Fastest scaling
+        MPVLib.setPropertyString("dscale", "bilinear") // Fastest downscaling
+        MPVLib.setPropertyString("cscale", "bilinear") // Fastest chroma scaling
+        MPVLib.setPropertyString("tscale", "box") // Fastest interpolation
         
-        // ⚡ AGGRESSIVE GPU OPTIMIZATIONS
-        MPVLib.setPropertyString("gpu-early-flush", "yes")
-        MPVLib.setPropertyString("gpu-dumb-mode", "no") // Enable smart GPU mode
-        MPVLib.setPropertyString("opengl-pbo", "yes")
-        MPVLib.setPropertyString("gpu-shader-cache", "yes")
-        MPVLib.setPropertyString("gpu-shader-cache-dir", "/sdcard/mpv_shaders")
+        // ⚡ DISABLE ALL QUALITY ENHANCEMENTS
+        MPVLib.setPropertyString("deband", "no")
+        MPVLib.setPropertyString("deband-iterations", "0")
+        MPVLib.setPropertyString("deband-threshold", "0")
+        MPVLib.setPropertyString("deband-range", "0")
+        MPVLib.setPropertyString("deband-grain", "0")
         
-        // ⚡ ULTRA PERFORMANCE DECODING - HARDWARE ACCELERATED
+        // ⚡ DISABLE COLOR MANAGEMENT AND HDR PROCESSING
+        MPVLib.setPropertyString("target-colorspace-hint", "no")
+        MPVLib.setPropertyString("hdr-compute-peak", "no")
+        MPVLib.setPropertyString("tone-mapping", "no")
+        MPVLib.setPropertyString("gamut-mapping-mode", "no")
+        
+        // ⚡ MAXIMUM PERFORMANCE DECODING
         MPVLib.setPropertyString("vd-lavc-dr", "yes") // Direct rendering
-        MPVLib.setPropertyString("vd-lavc-threads", "16") // Max threads for hardware decode
-        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "nonkey") // Skip only non-keyframes
+        MPVLib.setPropertyString("vd-lavc-threads", "8") // Optimized thread count
+        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all") // Skip all filters
+        MPVLib.setPropertyString("vd-lavc-skipidct", "all") // Skip IDCT
         MPVLib.setPropertyString("vd-lavc-fast", "yes")
+        MPVLib.setPropertyString("vd-lavc-assemble", "yes") // Fast h264 assembly
         
-        // ⚡ MULTI-THREADED VIDEO PROCESSING PIPELINE
-        MPVLib.setPropertyString("video-threads", "8")
-        MPVLib.setPropertyString("demuxer-lavf-threads", "8")
-        MPVLib.setPropertyString("demuxer-lavf-o", "threads=8")
+        // ⚡ MINIMAL VIDEO PROCESSING
+        MPVLib.setPropertyString("video-threads", "2") // Minimal video threads
+        MPVLib.setPropertyString("demuxer-lavf-threads", "2") // Minimal demux threads
         
-        // ⚡ MEMORY AND CACHE OPTIMIZATIONS FOR HIGH BITRATE
+        // ⚡ OPTIMIZED CACHE FOR SPEED
         MPVLib.setPropertyString("cache", "yes")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 512 * 1024 * 1024) // 512MB cache
-        MPVLib.setPropertyString("demuxer-readahead-secs", "180")
-        MPVLib.setPropertyString("cache-secs", "180")
-        MPVLib.setPropertyString("cache-backbuffer", "50M")
+        MPVLib.setPropertyInt("demuxer-max-bytes", 256 * 1024 * 1024) // 256MB cache
+        MPVLib.setPropertyString("demuxer-readahead-secs", "60")
+        MPVLib.setPropertyString("cache-secs", "60")
         
-        // ⚡ ULTRA HIGH QUALITY RENDERING
-        MPVLib.setPropertyString("scale", "ewa_lanczossharp")
-        MPVLib.setPropertyString("dscale", "mitchell")
-        MPVLib.setPropertyString("cscale", "spline36")
-        MPVLib.setPropertyString("tscale", "oversample")
-        MPVLib.setPropertyString("tscale-blur", "0.981")
-        MPVLib.setPropertyString("tscale-wblur", "0.981")
-        MPVLib.setPropertyString("tscale-clamp", "0.0")
+        // ⚡ DISABLE GPU SHADER CACHE AND COMPLEX FEATURES
+        MPVLib.setPropertyString("gpu-shader-cache", "no")
+        MPVLib.setPropertyString("gpu-early-flush", "no")
+        MPVLib.setPropertyString("opengl-pbo", "no") // Disable for Vulkan
         
-        // ⚡ HARDWARE DEINTERLACING AND POST-PROCESSING
-        MPVLib.setPropertyString("deband", "yes")
-        MPVLib.setPropertyString("deband-iterations", "4")
-        MPVLib.setPropertyString("deband-threshold", "35")
-        MPVLib.setPropertyString("deband-range", "16")
-        MPVLib.setPropertyString("deband-grain", "32")
+        // ⚡ SIMPLE AUDIO PROCESSING
+        MPVLib.setPropertyString("audio-client-name", "MPVEx-Speed")
+        MPVLib.setPropertyString("audio-channels", "stereo") // Simple stereo
+        MPVLib.setPropertyString("audio-samplerate", "48000") // Standard quality
+        MPVLib.setPropertyString("audio-buffer", "0.1") // Minimal latency
         
-        // ⚡ COLOR MANAGEMENT AND HDR
-        MPVLib.setPropertyString("target-colorspace-hint", "yes")
-        MPVLib.setPropertyString("hdr-compute-peak", "yes")
-        MPVLib.setPropertyString("tone-mapping", "hable")
-        MPVLib.setPropertyString("tone-mapping-param", "default")
-        MPVLib.setPropertyString("gamut-mapping-mode", "relative")
+        // ⚡ NETWORK OPTIMIZATIONS
+        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1")
+        MPVLib.setPropertyString("network-timeout", "5") // Very aggressive timeout
         
-        // ⚡ AUDIO PERFORMANCE
-        MPVLib.setPropertyString("audio-client-name", "MPVEx-Vulkan-Ultra")
-        MPVLib.setPropertyString("audio-channels", "auto")
-        MPVLib.setPropertyString("audio-samplerate", "192000") // High-res audio
-        MPVLib.setPropertyString("audio-buffer", "0.2") // Low latency
-        
-        // ⚡ NETWORK OPTIMIZATIONS FOR 8K STREAMING
-        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1:user_agent=MPVEx-Vulkan")
-        MPVLib.setPropertyString("network-timeout", "10") // Aggressive timeout
-        MPVLib.setPropertyString("http-header-fields", "Range: bytes=0-")
-        
-        // ⚡ PERFORMANCE MONITORING AND METRICS
-        MPVLib.setPropertyString("msg-level", "all=v")
+        // ⚡ PERFORMANCE PROFILE
         MPVLib.setPropertyString("profile", "fast")
-        MPVLib.setPropertyString("reset-on-next-file", "all")
+        MPVLib.setPropertyString("msg-level", "all=error") // Reduce logging overhead
         
-        // ⚡ ADDITIONAL VULKAN TUNING
-        MPVLib.setPropertyString("vulkan-disable-events", "no")
-        MPVLib.setPropertyString("vulkan-force-dedicated", "yes") // Force discrete GPU if available
+        // ⚡ DISABLE UNNECESSARY FEATURES
+        MPVLib.setPropertyString("sub-auto", "no") // No subtitles
+        MPVLib.setPropertyString("audio-display", "no") // No cover art
+        MPVLib.setPropertyString("cover-art-auto", "no") // No cover art
         
         // Get video info
         val title = MPVLib.getPropertyString("media-title") ?: "Video"
@@ -321,7 +307,7 @@ fun PlayerOverlay(
         }
     }
     
-    // ⚡ ULTRA-RESPONSIVE: 8ms debounced seeking
+    // ⚡ ULTRA-RESPONSIVE: 16ms debounced seeking for 60fps
     fun handleSeekbarValueChange(newPosition: Float) {
         if (!isSeeking) {
             isSeeking = true
@@ -376,7 +362,7 @@ fun PlayerOverlay(
         }
     }
     
-    // ⚡ HIGH-PRECISION DRAG SEEKING: 8ms debounce with pixel-perfect accuracy
+    // ⚡ HIGH-PRECISION DRAG SEEKING: 16ms debounce for 60fps
     fun handleDragSeekGesture(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -400,8 +386,8 @@ fun PlayerOverlay(
                     val currentX = event.x
                     val deltaX = currentX - seekStartX
                     
-                    // ⚡ HIGH PRECISION: More sensitive seeking (2x faster response)
-                    val pixelsPerSecond = 3f / 0.016f // Higher precision
+                    // ⚡ 60FPS OPTIMIZED: Perfect precision for 60fps
+                    val pixelsPerSecond = 3f / 0.033f // Optimized for 60fps
                     val timeDeltaSeconds = deltaX / pixelsPerSecond
                     
                     val newPositionSeconds = seekStartPosition + timeDeltaSeconds
@@ -423,7 +409,7 @@ fun PlayerOverlay(
                 if (isSeeking) {
                     val currentX = event.x
                     val deltaX = currentX - seekStartX
-                    val pixelsPerSecond = 3f / 0.016f
+                    val pixelsPerSecond = 3f / 0.033f // 60fps optimized
                     val timeDeltaSeconds = deltaX / pixelsPerSecond
                     val newPositionSeconds = seekStartPosition + timeDeltaSeconds
                     val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
@@ -732,9 +718,9 @@ fun PlayerOverlay(
             )
         }
         
-        // ⚡ PERFORMANCE INDICATOR - Shows when Vulkan hardware acceleration is active
+        // ⚡ PERFORMANCE INDICATOR - Shows when speed mode is active
         Text(
-            text = "VULKAN",
+            text = "SPEED",
             style = TextStyle(
                 color = Color.Green,
                 fontSize = 10.sp,
