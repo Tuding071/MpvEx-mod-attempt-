@@ -116,12 +116,12 @@ fun PlayerOverlay(
         }
     }
     
-    // Update video pause state
+    // Update video pause state - CHANGED: 250ms refresh
     LaunchedEffect(Unit) {
         while (isActive) {
             val paused = MPVLib.getPropertyBoolean("pause") ?: false
             isVideoPaused = paused
-            delay(500)
+            delay(250) // CHANGED: Reduced from 500ms to 250ms
         }
     }
     
@@ -145,7 +145,7 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("hr-seek-framedrop", "no")
     }
     
-    // Update time and progress every 50ms (increased from 100ms)
+    // Update time and progress every 50ms
     LaunchedEffect(Unit) {
         while (isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
@@ -155,7 +155,7 @@ fun PlayerOverlay(
             currentTime = formatTimeSimple(currentPos)
             totalTime = formatTimeSimple(duration)
             
-            // Always update position (removed the seeking check for smoother updates)
+            // Always update position
             currentPosition = currentPos
             videoDuration = duration
             
@@ -163,7 +163,7 @@ fun PlayerOverlay(
             seekbarPosition = currentPos.toFloat()
             seekbarDuration = duration.toFloat()
             
-            delay(50) // Changed from 100ms to 50ms for smoother updates
+            delay(50)
         }
     }
     
@@ -445,7 +445,7 @@ fun PlayerOverlay(
                 )
         )
         
-        // BOTTOM 25% - Continuous drag seeking (above seekbar)
+        // BOTTOM 25% - Continuous drag seeking (above seekbar) - CHANGED: Now has exclusive area
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -531,22 +531,22 @@ fun PlayerOverlay(
             }
         }
         
-        // LEFT 27% - Tap to show/hide seekbar, hold for 2x speed
+        // LEFT 27% - Tap to show/hide seekbar, hold for 2x speed - CHANGED: Reduced height to avoid bottom area
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.27f)
-                .fillMaxHeight(0.7f)
+                .fillMaxHeight(0.45f) // CHANGED: Reduced from 0.7f to 0.45f to avoid bottom area
                 .align(Alignment.CenterStart)
                 .pointerInteropFilter { event ->
                     handleLeftAreaGesture(event)
                 }
         )
         
-        // RIGHT 27% - Tap to show/hide seekbar, hold for 2x speed
+        // RIGHT 27% - Tap to show/hide seekbar, hold for 2x speed - CHANGED: Reduced height to avoid bottom area
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.27f)
-                .fillMaxHeight(0.7f)
+                .fillMaxHeight(0.45f) // CHANGED: Reduced from 0.7f to 0.45f to avoid bottom area
                 .align(Alignment.CenterEnd)
                 .pointerInteropFilter { event ->
                     handleRightAreaGesture(event)
