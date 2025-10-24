@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -409,22 +410,52 @@ fun PlayerOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(0.05f) // Reduced height to make it closer to seekbar
+                    .height(80.dp) // Increased height to accommodate time above seekbar
                     .align(Alignment.BottomStart)
-                    .padding(horizontal = 16.dp) // Reduced padding for tighter layout
+                    .padding(horizontal = 16.dp)
+                    .offset(y = (-20).dp) // Move the entire container up
             ) {
-                CustomSeekbarWithTimers(
-                    position = seekbarPosition,
-                    duration = seekbarDuration,
-                    readAheadValue = 0f, // You can adjust this if needed
-                    onValueChange = { handleSeekbarValueChange(it) },
-                    onValueChangeFinished = { handleSeekbarValueChangeFinished() },
-                    timersInverted = Pair(false, false),
-                    positionTimerOnClick = { /* Handle position timer click if needed */ },
-                    durationTimerOnClick = { /* Handle duration timer click if needed */ },
-                    chapters = persistentListOf(),
-                    modifier = Modifier.fillMaxSize()
-                )
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp) // Small gap between time and seekbar
+                ) {
+                    // Merged time display - current/total
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .wrapContentHeight()
+                    ) {
+                        Text(
+                            text = "$currentTime / $totalTime",
+                            style = TextStyle(
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .background(Color.DarkGray.copy(alpha = 0.8f))
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                        )
+                    }
+                    
+                    // Seekbar
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                    ) {
+                        CustomSeekbar(
+                            position = seekbarPosition,
+                            duration = seekbarDuration,
+                            readAheadValue = 0f,
+                            onValueChange = { handleSeekbarValueChange(it) },
+                            onValueChangeFinished = { handleSeekbarValueChangeFinished() },
+                            chapters = persistentListOf(),
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
             }
         }
         
@@ -478,85 +509,31 @@ fun PlayerOverlay(
 }
 
 @Composable
-fun CustomSeekbarWithTimers(
+fun CustomSeekbar(
     position: Float,
     duration: Float,
     readAheadValue: Float,
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: () -> Unit,
-    timersInverted: Pair<Boolean, Boolean>,
-    positionTimerOnClick: () -> Unit,
-    durationTimerOnClick: () -> Unit,
     chapters: ImmutableList<Segment>,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = modifier.height(48.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp), // Reduced spacing for tighter layout
-    ) {
-        VideoTimer(
-            value = position,
-            isInverted = timersInverted.first,
-            onClick = {
-                positionTimerOnClick()
-            },
-            modifier = Modifier.width(60.dp), // Reduced width
-        )
-        Seeker(
-            value = position.coerceIn(0f, duration),
-            range = 0f..duration,
-            onValueChange = onValueChange,
-            onValueChangeFinished = onValueChangeFinished,
-            readAheadValue = readAheadValue,
-            segments = chapters
-                .filter { it.start in 0f..duration }
-                .let { (if (it.isNotEmpty() && it[0].start != 0f) persistentListOf(Segment("", 0f)) + it else it) + it },
-            modifier = Modifier.weight(1f),
-            colors = SeekerDefaults.seekerColors(
-                progressColor = Color.White, // White progress
-                thumbColor = Color.White, // White thumb
-                trackColor = Color.Gray.copy(alpha = 0.6f), // Grey semi-transparent track
-                readAheadColor = Color.Gray, // Grey read ahead
-            ),
-        )
-        VideoTimer(
-            value = if (timersInverted.second) position - duration else duration,
-            isInverted = timersInverted.second,
-            onClick = {
-                durationTimerOnClick()
-            },
-            modifier = Modifier.width(60.dp), // Reduced width
-        )
-    }
-}
-
-@Composable
-fun VideoTimer(
-    value: Float,
-    isInverted: Boolean,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit = {},
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    Text(
-        modifier = modifier
-            .fillMaxHeight()
-            .clickable(
-                interactionSource = interactionSource,
-                indication = ripple(),
-                onClick = onClick,
-            )
-            .wrapContentHeight(Alignment.CenterVertically)
-            .background(Color.DarkGray.copy(alpha = 0.8f)) // Same background as center seek time
-            .padding(horizontal = 4.dp, vertical = 2.dp), // Reduced padding
-        text = formatTimeSimple(value.toDouble()),
-        color = Color.White,
-        textAlign = TextAlign.Center,
-        style = TextStyle(
-            fontSize = 12.sp, // Smaller font size
-            fontWeight = FontWeight.Medium
-        )
+    Seeker(
+        value = position.coerceIn(0f, duration),
+        range = 0f..duration,
+        onValueChange = onValueChange,
+        onValueChangeFinished = onValueChangeFinished,
+        readAheadValue = readAheadValue,
+        segments = chapters
+            .filter { it.start in 0f..duration }
+            .let { (if (it.isNotEmpty() && it[0].start != 0f) persistentListOf(Segment("", 0f)) + it else it) + it },
+        modifier = modifier,
+        colors = SeekerDefaults.seekerColors(
+            progressColor = Color.White, // White progress
+            thumbColor = Color.White, // White thumb
+            trackColor = Color.Gray.copy(alpha = 0.6f), // Grey semi-transparent track
+            readAheadColor = Color.Gray, // Grey read ahead
+        ),
     )
 }
 
