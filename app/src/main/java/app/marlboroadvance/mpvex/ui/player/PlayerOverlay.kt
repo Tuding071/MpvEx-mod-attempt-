@@ -2,6 +2,7 @@ package app.marlboroadvance.mpvex.ui.player
 
 import android.view.MotionEvent
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -71,6 +72,11 @@ fun PlayerOverlay(
     var seekbarPosition by remember { mutableStateOf(0f) }
     var seekbarDuration by remember { mutableStateOf(1f) }
     
+    // ⭐ DETACHED BALL ANIMATION: Separate states for ball vs progress bar
+    var visualProgressPosition by remember { mutableStateOf(0f) } // White progress bar position
+    var ballPosition by remember { mutableStateOf(0f) } // White ball position
+    var isDragging by remember { mutableStateOf(false) } // Track if ball is being dragged
+    
     // For smooth seeking animation
     var userSeekPosition by remember { mutableStateOf<Float?>(null) }
     
@@ -97,6 +103,17 @@ fun PlayerOverlay(
     var videoInfoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
+    
+    // ⭐ ANIMATED PROGRESS POSITION: Smooth animation for progress bar
+    val animatedProgressPosition by animateFloatAsState(
+        targetValue = if (isDragging) visualProgressPosition else seekbarPosition,
+        animationSpec = if (isDragging) {
+            tween(durationMillis = 0) // Instant freeze during dragging
+        } else {
+            tween(durationMillis = 200) // Smooth catch-up after release
+        },
+        label = "progressAnimation"
+    )
     
     // Get video title and filename at start and show filename
     LaunchedEffect(Unit) {
@@ -183,7 +200,7 @@ fun PlayerOverlay(
     
     // OPTIMIZED: Update time and progress every 500ms with smart updates
     LaunchedEffect(Unit) {
-        var lastSeconds = -1 // FIXED: Moved outside of remember
+        var lastSeconds = -1
         
         while (isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
@@ -203,8 +220,8 @@ fun PlayerOverlay(
                 }
             }
             
-            // OPTIMIZED: Only update seekbar position when seekbar is visible
-            if (showSeekbar && !isSeeking) {
+            // OPTIMIZED: Only update seekbar position when NOT seeking AND seekbar is visible
+            if (showSeekbar && !isSeeking && !isDragging) {
                 seekbarPosition = currentPos.toFloat()
                 seekbarDuration = duration.toFloat()
             }
@@ -282,7 +299,15 @@ fun PlayerOverlay(
             }
         }
         
+        // ⭐ DETACHED BALL: Set up dragging state
+        if (!isDragging) {
+            isDragging = true
+            visualProgressPosition = seekbarPosition // Freeze progress bar at current position
+        }
+        
         userSeekPosition = newPosition
+        ballPosition = newPosition // Only ball moves during dragging
+        
         val targetPosition = newPosition.toDouble()
         
         val now = System.currentTimeMillis()
@@ -299,6 +324,10 @@ fun PlayerOverlay(
     fun handleSeekbarValueChangeFinished() {
         if (isSeeking) {
             userSeekPosition = null
+            
+            // ⭐ DETACHED BALL: End dragging and let progress bar catch up
+            isDragging = false
+            visualProgressPosition = ballPosition // Progress bar catches up to ball position
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -586,7 +615,8 @@ fun PlayerOverlay(
                             .height(24.dp)
                     ) {
                         CustomSeekbar(
-                            position = if (isSeeking) (userSeekPosition ?: seekbarPosition) else seekbarPosition,
+                            // ⭐ DETACHED BALL: Use animated position for smooth progress bar
+                            position = animatedProgressPosition,
                             duration = seekbarDuration,
                             readAheadValue = 0f,
                             onValueChange = { handleSeekbarValueChange(it) },
