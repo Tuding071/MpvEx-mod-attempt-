@@ -89,9 +89,6 @@ fun PlayerOverlay(
     // Auto-hide control
     var autoHideJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    // Video pause state
-    var isVideoPaused by remember { mutableStateOf(false) }
-    
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
     // Start auto-hide when seekbar is shown
@@ -113,15 +110,6 @@ fun PlayerOverlay(
             delay(100)
             MPVLib.setPropertyDouble("speed", 1.0)
             isSpeedingUp = false
-        }
-    }
-    
-    // Update video pause state - CHANGED: 250ms refresh
-    LaunchedEffect(Unit) {
-        while (isActive) {
-            val paused = MPVLib.getPropertyBoolean("pause") ?: false
-            isVideoPaused = paused
-            delay(250) // CHANGED: Reduced from 500ms to 250ms
         }
     }
     
@@ -445,10 +433,10 @@ fun PlayerOverlay(
                 )
         )
         
-        // BOTTOM 25% - Continuous drag seeking (above seekbar) - CHANGED: Now has exclusive area
+        // BOTTOM 25% - Continuous drag seeking (above seekbar) - CHANGED: Now overlaps left/right areas
         Box(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth() // CHANGED: Full width to overlap left/right areas
                 .fillMaxHeight(0.25f)
                 .align(Alignment.BottomStart)
                 .offset(y = (-20).dp)
@@ -471,44 +459,24 @@ fun PlayerOverlay(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    // Time display with pause indicator
+                    // Time display - REMOVED: Pause text
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .wrapContentHeight()
                     ) {
-                        Row(
-                            modifier = Modifier.align(Alignment.CenterStart),
-                            horizontalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            // Current time / total time
-                            Text(
-                                text = "$currentTime / $totalTime",
-                                style = TextStyle(
-                                    color = Color.White,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Medium
-                                ),
-                                modifier = Modifier
-                                    .background(Color.DarkGray.copy(alpha = 0.8f))
-                                    .padding(horizontal = 12.dp, vertical = 4.dp)
-                            )
-                            
-                            // Pause indicator (only shown when video is paused)
-                            if (isVideoPaused) {
-                                Text(
-                                    text = "Pause",
-                                    style = TextStyle(
-                                        color = Color.White,
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Medium
-                                    ),
-                                    modifier = Modifier
-                                        .background(Color.DarkGray.copy(alpha = 0.8f))
-                                        .padding(horizontal = 12.dp, vertical = 4.dp)
-                                )
-                            }
-                        }
+                        Text(
+                            text = "$currentTime / $totalTime",
+                            style = TextStyle(
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .background(Color.DarkGray.copy(alpha = 0.8f))
+                                .padding(horizontal = 12.dp, vertical = 4.dp)
+                        )
                     }
                     
                     // Seekbar
@@ -531,22 +499,22 @@ fun PlayerOverlay(
             }
         }
         
-        // LEFT 27% - Tap to show/hide seekbar, hold for 2x speed - CHANGED: Reduced height to avoid bottom area
+        // LEFT 27% - Tap to show/hide seekbar, hold for 2x speed
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.27f)
-                .fillMaxHeight(0.45f) // CHANGED: Reduced from 0.7f to 0.45f to avoid bottom area
+                .fillMaxHeight(0.7f) // CHANGED: Back to full height
                 .align(Alignment.CenterStart)
                 .pointerInteropFilter { event ->
                     handleLeftAreaGesture(event)
                 }
         )
         
-        // RIGHT 27% - Tap to show/hide seekbar, hold for 2x speed - CHANGED: Reduced height to avoid bottom area
+        // RIGHT 27% - Tap to show/hide seekbar, hold for 2x speed
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.27f)
-                .fillMaxHeight(0.45f) // CHANGED: Reduced from 0.7f to 0.45f to avoid bottom area
+                .fillMaxHeight(0.7f) // CHANGED: Back to full height
                 .align(Alignment.CenterEnd)
                 .pointerInteropFilter { event ->
                     handleRightAreaGesture(event)
