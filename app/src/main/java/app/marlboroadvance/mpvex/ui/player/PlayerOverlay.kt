@@ -86,6 +86,10 @@ fun PlayerOverlay(
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
+    // ⭐ HORIZONTAL SEEKING for left/right areas
+    var leftSeekStartX by remember { mutableStateOf(0f) }
+    var rightSeekStartX by remember { mutableStateOf(0f) }
+    
     // ⭐ DEBOUNCING: Track last seek time for both drag and seekbar seeking
     var lastSeekTime by remember { mutableStateOf(0L) }
     val seekDebounceMs = 16L // 16ms = ~60fps for buttery smooth seeking
@@ -95,10 +99,6 @@ fun PlayerOverlay(
     var rightTapStartTime by remember { mutableStateOf(0L) }
     var leftIsHolding by remember { mutableStateOf(false) }
     var rightIsHolding by remember { mutableStateOf(false) }
-    
-    // ⭐ SWIPE GESTURE VARIABLES
-    var leftStartY by remember { mutableStateOf(0f) }
-    var rightStartY by remember { mutableStateOf(0f) }
     
     // ⭐ 5-SECOND SEEK FEEDBACK
     var showSeekFeedback by remember { mutableStateOf(false) }
@@ -447,13 +447,13 @@ fun PlayerOverlay(
         return false
     }
     
-    // ⭐ UPDATED: Left area gesture handler with swipe support
+    // ⭐ UPDATED: Left area gesture handler - HORIZONTAL SEEKING only
     fun handleLeftAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 leftTapStartTime = System.currentTimeMillis()
                 leftIsHolding = true
-                leftStartY = event.y // Store start Y for swipe detection
+                leftSeekStartX = event.x
                 
                 // Start checking for long press after 300ms
                 coroutineScope.launch {
@@ -466,35 +466,34 @@ fun PlayerOverlay(
                 true
             }
             MotionEvent.ACTION_MOVE -> {
-                // Swipe detection
                 if (leftIsHolding) {
-                    val currentY = event.y
-                    val deltaY = currentY - leftStartY
+                    val currentX = event.x
+                    val deltaX = currentX - leftSeekStartX
                     
-                    // Detect swipe (min 50px movement)
-                    if (Math.abs(deltaY) > 50) {
-                        leftIsHolding = false // Cancel long press if swiping
-                        isSpeedingUp = false // Cancel speed boost
+                    // Horizontal seeking (same logic as bottom area)
+                    val pixelsPerSecond = 3f / 0.033f
+                    val timeDeltaSeconds = deltaX / pixelsPerSecond
+                    val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+                    val newPositionSeconds = currentPos + timeDeltaSeconds
+                    val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+                    val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
+                    
+                    val now = System.currentTimeMillis()
+                    if (now - lastSeekTime >= seekDebounceMs) {
+                        performRealTimeSeek(clampedPosition)
+                        lastSeekTime = now
                     }
+                    
+                    seekTargetTime = formatTimeSimple(clampedPosition)
+                    currentTime = formatTimeSimple(clampedPosition)
                 }
                 true
             }
             MotionEvent.ACTION_UP -> {
                 val tapDuration = System.currentTimeMillis() - leftTapStartTime
-                val currentY = event.y
-                val deltaY = currentY - leftStartY
                 leftIsHolding = false
                 
-                // Check for swipe gestures first
-                if (Math.abs(deltaY) > 50) {
-                    if (deltaY < 0) {
-                        // Swipe UP - seek forward 5 seconds
-                        seekBySeconds(5)
-                    } else {
-                        // Swipe DOWN - seek backward 5 seconds  
-                        seekBySeconds(-5)
-                    }
-                } else if (tapDuration < 200) {
+                if (tapDuration < 200) {
                     // Short tap - toggle seekbar
                     if (showSeekbar) {
                         showSeekbar = false
@@ -513,13 +512,13 @@ fun PlayerOverlay(
         }
     }
     
-    // ⭐ UPDATED: Right area gesture handler with swipe support
+    // ⭐ UPDATED: Right area gesture handler - HORIZONTAL SEEKING only
     fun handleRightAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 rightTapStartTime = System.currentTimeMillis()
                 rightIsHolding = true
-                rightStartY = event.y // Store start Y for swipe detection
+                rightSeekStartX = event.x
                 
                 // Start checking for long press after 300ms
                 coroutineScope.launch {
@@ -532,35 +531,34 @@ fun PlayerOverlay(
                 true
             }
             MotionEvent.ACTION_MOVE -> {
-                // Swipe detection
                 if (rightIsHolding) {
-                    val currentY = event.y
-                    val deltaY = currentY - rightStartY
+                    val currentX = event.x
+                    val deltaX = currentX - rightSeekStartX
                     
-                    // Detect swipe (min 50px movement)
-                    if (Math.abs(deltaY) > 50) {
-                        rightIsHolding = false // Cancel long press if swiping
-                        isSpeedingUp = false // Cancel speed boost
+                    // Horizontal seeking (same logic as bottom area)
+                    val pixelsPerSecond = 3f / 0.033f
+                    val timeDeltaSeconds = deltaX / pixelsPerSecond
+                    val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+                    val newPositionSeconds = currentPos + timeDeltaSeconds
+                    val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+                    val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
+                    
+                    val now = System.currentTimeMillis()
+                    if (now - lastSeekTime >= seekDebounceMs) {
+                        performRealTimeSeek(clampedPosition)
+                        lastSeekTime = now
                     }
+                    
+                    seekTargetTime = formatTimeSimple(clampedPosition)
+                    currentTime = formatTimeSimple(clampedPosition)
                 }
                 true
             }
             MotionEvent.ACTION_UP -> {
                 val tapDuration = System.currentTimeMillis() - rightTapStartTime
-                val currentY = event.y
-                val deltaY = currentY - rightStartY
                 rightIsHolding = false
                 
-                // Check for swipe gestures first
-                if (Math.abs(deltaY) > 50) {
-                    if (deltaY < 0) {
-                        // Swipe UP - seek forward 5 seconds
-                        seekBySeconds(5)
-                    } else {
-                        // Swipe DOWN - seek backward 5 seconds  
-                        seekBySeconds(-5)
-                    }
-                } else if (tapDuration < 200) {
+                if (tapDuration < 200) {
                     // Short tap - toggle seekbar
                     if (showSeekbar) {
                         showSeekbar = false
@@ -582,7 +580,23 @@ fun PlayerOverlay(
     Box(
         modifier = modifier.fillMaxSize()
     ) {
-        // TOP 5% - Video name toggle area
+        // ⭐ 50dp VERTICAL INVISIBLE PADDING - Left side
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(50.dp)
+                .align(Alignment.CenterStart)
+        )
+        
+        // ⭐ 50dp VERTICAL INVISIBLE PADDING - Right side  
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(50.dp)
+                .align(Alignment.CenterEnd)
+        )
+        
+        // TOP 5% - Video name toggle area WITH title on left
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -595,7 +609,79 @@ fun PlayerOverlay(
                         toggleVideoName()
                     }
                 )
-        )
+        ) {
+            // ⭐ Video title on left side INSIDE the toggle area
+            if (showVideoName && displayName.isNotEmpty()) {
+                Text(
+                    text = displayName,
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 14.sp, // Same size as time display
+                        fontWeight = FontWeight.Medium
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 16.dp) // Padding from left edge
+                        .background(Color.DarkGray.copy(alpha = 0.8f))
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+            }
+        }
+        
+        // ⭐ ALL FEEDBACK INDICATORS under top 5% area (centered)
+        Column(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .offset(y = 30.dp), // Position below top 5% area
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // 5-SECOND SEEK FEEDBACK (+5s / -5s)
+            if (showSeekFeedback) {
+                Text(
+                    text = seekFeedbackText,
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 14.sp, // Same as time display
+                        fontWeight = FontWeight.Medium
+                    ),
+                    modifier = Modifier
+                        .background(Color.DarkGray.copy(alpha = 0.8f))
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+            }
+            
+            // 2X Speed feedback
+            if (isSpeedingUp) {
+                Text(
+                    text = "2X",
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 14.sp, // Same as time display
+                        fontWeight = FontWeight.Medium
+                    ),
+                    modifier = Modifier
+                        .background(Color.DarkGray.copy(alpha = 0.8f))
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+            }
+            
+            // Center seek time - shows target position during seeking
+            if (showSeekTime) {
+                Text(
+                    text = seekTargetTime,
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 14.sp, // Same as time display
+                        fontWeight = FontWeight.Medium
+                    ),
+                    modifier = Modifier
+                        .background(Color.DarkGray.copy(alpha = 0.8f))
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+            }
+        }
         
         // CENTER 70% - Divided into 3 areas
         Box(
@@ -604,7 +690,7 @@ fun PlayerOverlay(
                 .fillMaxHeight(0.7f)
                 .align(Alignment.Center)
         ) {
-            // LEFT 27% - Tap to show/hide seekbar, hold for 2x speed, swipe for 5s seek
+            // LEFT 27% - Tap to show/hide seekbar, hold for 2x speed, HORIZONTAL SEEKING
             Box(
                 modifier = Modifier
                     .fillMaxWidth(0.27f)
@@ -632,7 +718,7 @@ fun PlayerOverlay(
                     )
             )
             
-            // RIGHT 27% - Tap to show/hide seekbar, hold for 2x speed, swipe for 5s seek
+            // RIGHT 27% - Tap to show/hide seekbar, hold for 2x speed, HORIZONTAL SEEKING
             Box(
                 modifier = Modifier
                     .fillMaxWidth(0.27f)
@@ -713,76 +799,6 @@ fun PlayerOverlay(
                     }
                 }
             }
-        }
-        
-        // ⭐ SIMPLIFIED: Video name display (from URI/URL)
-        if (showVideoName && displayName.isNotEmpty()) {
-            Text(
-                text = displayName,
-                style = TextStyle(
-                    color = Color.White,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Medium
-                ),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .offset(y = 20.dp)
-                    .background(Color.DarkGray.copy(alpha = 0.8f))
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
-            )
-        }
-        
-        // ⭐ 5-SECOND SEEK FEEDBACK (+5s / -5s)
-        if (showSeekFeedback) {
-            Text(
-                text = seekFeedbackText,
-                style = TextStyle(
-                    color = Color.White,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold
-                ),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .offset(y = 60.dp)
-                    .background(Color.DarkGray.copy(alpha = 0.8f))
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-            )
-        }
-        
-        // 2X Speed feedback - Top Center
-        if (isSpeedingUp) {
-            Text(
-                text = "2X",
-                style = TextStyle(
-                    color = Color.White,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold
-                ),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .offset(y = 100.dp)
-                    .background(Color.DarkGray.copy(alpha = 0.8f))
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-            )
-        }
-        
-        // Center seek time - shows target position during seeking
-        if (showSeekTime) {
-            Text(
-                text = seekTargetTime,
-                style = TextStyle(
-                    color = Color.White,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold
-                ),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .offset(y = 140.dp)
-                    .background(Color.DarkGray.copy(alpha = 0.8f))
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-            )
         }
     }
 }
