@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
@@ -35,7 +36,8 @@ import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.vivvvek.seeker.Seeker
@@ -639,15 +641,15 @@ fun PlayerOverlay(
                         
                         // ⭐ CLONE BALL OVERLAY (visible during dragging)
                         if (showCloneBall) {
-                            // This creates a visual clone ball that moves independently
-                            // Note: This is a simplified representation - you might need custom drawing
-                            // for perfect visual alignment with the Seeker component
+                            // Calculate ball position as percentage of seekbar width
+                            val ballOffset = (ballPosition / seekbarDuration.coerceAtLeast(1f)) * (LocalContext.current.resources.displayMetrics.widthPixels - 120.dp.toPx()).toFloat()
+                            
                             Box(
                                 modifier = Modifier
                                     .align(Alignment.CenterStart)
-                                    .offset(x = (ballPosition / seekbarDuration) * (LocalContext.current.resources.displayMetrics.widthPixels - 120).dp)
+                                    .offset(x = ballOffset.dp)
                                     .size(24.dp)
-                                    .background(Color.White, androidx.compose.foundation.shape.CircleShape)
+                                    .background(Color.White, CircleShape)
                             )
                         }
                     }
@@ -708,6 +710,11 @@ fun PlayerOverlay(
             )
         }
     }
+}
+
+// Extension function to convert Dp to Px
+private fun Dp.toPx(): Float {
+    return this.value * (android.content.res.Resources.getSystem().displayMetrics.density)
 }
 
 // ⭐ UPDATED CustomSeekbar with thumb visibility control
