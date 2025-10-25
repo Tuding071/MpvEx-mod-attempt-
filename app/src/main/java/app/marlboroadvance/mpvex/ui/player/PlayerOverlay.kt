@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
@@ -37,7 +36,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.vivvvek.seeker.Seeker
@@ -74,12 +72,9 @@ fun PlayerOverlay(
     var seekbarPosition by remember { mutableStateOf(0f) }
     var seekbarDuration by remember { mutableStateOf(1f) }
     
-    // ⭐ BALL SWITCHING ANIMATION: Separate states for ball visibility
+    // ⭐ SIMPLIFIED: Only keep progress bar freezing
     var visualProgressPosition by remember { mutableStateOf(0f) } // Progress bar position
-    var ballPosition by remember { mutableStateOf(0f) } // Ball position
     var isDragging by remember { mutableStateOf(false) } // Track if ball is being dragged
-    var showCloneBall by remember { mutableStateOf(false) } // Show clone ball during drag
-    var realBallVisible by remember { mutableStateOf(true) } // Show real ball normally
     
     // For smooth seeking animation
     var userSeekPosition by remember { mutableStateOf<Float?>(null) }
@@ -100,10 +95,10 @@ fun PlayerOverlay(
     var leftIsHolding by remember { mutableStateOf(false) }
     var rightIsHolding by remember { mutableStateOf(false) }
     
-    // Video title and filename state
+    // Video title and filename state - FIXED: Use different approach
     var showVideoInfo by remember { mutableStateOf(0) } // 0=hide, 1=filename, 2=title
-    var videoTitle by remember { mutableStateOf("Video") }
-    var fileName by remember { mutableStateOf("file.mp4") }
+    var videoTitle by remember { mutableStateOf("") }
+    var fileName by remember { mutableStateOf("") }
     var videoInfoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
@@ -119,18 +114,33 @@ fun PlayerOverlay(
         label = "progressAnimation"
     )
     
-    // Get video title and filename at start and show filename
+    // FIXED: Get video title and filename with better approach
     LaunchedEffect(Unit) {
-        // Get video title from MPV - FIXED: Use proper property names
-        val title = MPVLib.getPropertyString("media-title") ?: "Video"
-        videoTitle = title.trim()
+        // Try multiple properties to get proper title/filename
+        val mediaTitle = MPVLib.getPropertyString("media-title") ?: ""
+        val path = MPVLib.getPropertyString("path") ?: ""
+        val filename = MPVLib.getPropertyString("filename") ?: ""
         
-        // Get filename from path - FIXED: Better path parsing
-        val path = MPVLib.getPropertyString("path") ?: "file.mp4"
-        fileName = if (path.contains("/")) {
-            path.substringAfterLast("/").substringBeforeLast(".").takeIf { it.isNotEmpty() } ?: "file"
-        } else {
-            path.substringBeforeLast(".").takeIf { it.isNotEmpty() } ?: "file"
+        // Set video title - prefer media-title, fallback to filename
+        videoTitle = when {
+            mediaTitle.isNotEmpty() && mediaTitle != "null" -> mediaTitle.trim()
+            filename.isNotEmpty() && filename != "null" -> filename.trim()
+            else -> "Video"
+        }
+        
+        // Set file name - extract from path or use filename
+        fileName = when {
+            path.isNotEmpty() && path != "null" -> {
+                if (path.contains("/")) {
+                    path.substringAfterLast("/").substringBeforeLast(".").takeIf { it.isNotEmpty() } ?: "file"
+                } else {
+                    path.substringBeforeLast(".").takeIf { it.isNotEmpty() } ?: "file"
+                }
+            }
+            filename.isNotEmpty() && filename != "null" -> {
+                filename.substringBeforeLast(".").takeIf { it.isNotEmpty() } ?: "file"
+            }
+            else -> "file"
         }
         
         // Show filename at start
@@ -279,8 +289,8 @@ fun PlayerOverlay(
     }
     
     val displayText = when (showVideoInfo) {
-        1 -> fileName
-        2 -> videoTitle
+        1 -> if (fileName.isNotEmpty()) fileName else "File"
+        2 -> if (videoTitle.isNotEmpty()) videoTitle else "Video"
         else -> ""
     }
     
@@ -307,17 +317,13 @@ fun PlayerOverlay(
             }
         }
         
-        // ⭐ BALL SWITCHING: Set up dragging state and switch balls
+        // ⭐ SIMPLIFIED: Just freeze progress bar during dragging
         if (!isDragging) {
             isDragging = true
             visualProgressPosition = seekbarPosition // Freeze progress bar at current position
-            realBallVisible = false // Hide real ball instantly
-            showCloneBall = true // Show clone ball
-            ballPosition = newPosition // Set initial clone ball position
         }
         
         userSeekPosition = newPosition
-        ballPosition = newPosition // Move clone ball during dragging
         
         val targetPosition = newPosition.toDouble()
         
@@ -336,11 +342,9 @@ fun PlayerOverlay(
         if (isSeeking) {
             userSeekPosition = null
             
-            // ⭐ BALL SWITCHING: End dragging and switch back to real ball
+            // ⭐ SIMPLIFIED: End dragging and let progress bar catch up
             isDragging = false
-            visualProgressPosition = ballPosition // Progress bar catches up to ball position
-            showCloneBall = false // Hide clone ball instantly
-            realBallVisible = true // Show real ball at new position
+            visualProgressPosition = userSeekPosition?.toFloat() ?: seekbarPosition
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -621,37 +625,22 @@ fun PlayerOverlay(
                         }
                     }
                     
-                    // Seekbar Container
+                    // Seekbar
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(24.dp)
                     ) {
-                        // ⭐ MAIN SEEKBAR with controlled ball visibility
                         CustomSeekbar(
+                            // ⭐ Use animated position for smooth progress bar
                             position = animatedProgressPosition,
                             duration = seekbarDuration,
                             readAheadValue = 0f,
                             onValueChange = { handleSeekbarValueChange(it) },
                             onValueChangeFinished = { handleSeekbarValueChangeFinished() },
                             chapters = persistentListOf(),
-                            modifier = Modifier.fillMaxSize(),
-                            thumbVisible = realBallVisible // Control real ball visibility
+                            modifier = Modifier.fillMaxSize()
                         )
-                        
-                        // ⭐ CLONE BALL OVERLAY (visible during dragging)
-                        if (showCloneBall) {
-                            // Calculate ball position as percentage of seekbar width
-                            val ballOffset = (ballPosition / seekbarDuration.coerceAtLeast(1f)) * (LocalContext.current.resources.displayMetrics.widthPixels - 120.dp.toPx()).toFloat()
-                            
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.CenterStart)
-                                    .offset(x = ballOffset.dp)
-                                    .size(24.dp)
-                                    .background(Color.White, CircleShape)
-                            )
-                        }
                     }
                 }
             }
@@ -712,12 +701,6 @@ fun PlayerOverlay(
     }
 }
 
-// Extension function to convert Dp to Px
-private fun Dp.toPx(): Float {
-    return this.value * (android.content.res.Resources.getSystem().displayMetrics.density)
-}
-
-// ⭐ UPDATED CustomSeekbar with thumb visibility control
 @Composable
 fun CustomSeekbar(
     position: Float,
@@ -726,12 +709,8 @@ fun CustomSeekbar(
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: () -> Unit,
     chapters: ImmutableList<Segment>,
-    thumbVisible: Boolean = true, // New parameter to control thumb visibility
     modifier: Modifier = Modifier
 ) {
-    // Note: The Seeker component might need modification to support thumb visibility
-    // This is a simplified approach - you might need to fork the Seeker library
-    // for perfect thumb visibility control
     Seeker(
         value = position.coerceIn(0f, duration),
         range = 0f..duration,
@@ -744,7 +723,7 @@ fun CustomSeekbar(
         modifier = modifier,
         colors = SeekerDefaults.seekerColors(
             progressColor = Color.White,
-            thumbColor = if (thumbVisible) Color.White else Color.Transparent, // Control thumb visibility
+            thumbColor = Color.White,
             trackColor = Color.Gray.copy(alpha = 0.6f),
             readAheadColor = Color.Gray,
         ),
