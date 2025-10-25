@@ -96,6 +96,15 @@ fun PlayerOverlay(
     var leftIsHolding by remember { mutableStateOf(false) }
     var rightIsHolding by remember { mutableStateOf(false) }
     
+    // ⭐ SWIPE GESTURE VARIABLES
+    var leftStartY by remember { mutableStateOf(0f) }
+    var rightStartY by remember { mutableStateOf(0f) }
+    
+    // ⭐ 5-SECOND SEEK FEEDBACK
+    var showSeekFeedback by remember { mutableStateOf(false) }
+    var seekFeedbackText by remember { mutableStateOf("") }
+    var seekFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    
     // ⭐ SIMPLIFIED: Video name state from URI/URL
     var showVideoName by remember { mutableStateOf(false) } // Show/hide video name
     var displayName by remember { mutableStateOf("") } // Extracted from URI
@@ -113,6 +122,29 @@ fun PlayerOverlay(
         },
         label = "progressAnimation"
     )
+    
+    // ⭐ FUNCTION: Show seek feedback (+5s / -5s)
+    fun showSeekFeedback(text: String) {
+        seekFeedbackText = text
+        showSeekFeedback = true
+        seekFeedbackJob?.cancel()
+        seekFeedbackJob = coroutineScope.launch {
+            delay(500) // Show for 500ms
+            showSeekFeedback = false
+        }
+    }
+    
+    // ⭐ FUNCTION: Seek by seconds
+    fun seekBySeconds(seconds: Int) {
+        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+        val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
+        val newPos = (currentPos + seconds).coerceIn(0.0, duration)
+        MPVLib.command("seek", newPos.toString(), "absolute", "exact")
+        
+        // Show feedback
+        val feedbackText = if (seconds > 0) "+${seconds}s" else "${seconds}s"
+        showSeekFeedback(feedbackText)
+    }
     
     // ⭐ SIMPLIFIED: Get display name from URI/URL path
     LaunchedEffect(Unit) {
@@ -415,12 +447,13 @@ fun PlayerOverlay(
         return false
     }
     
-    // Left area gesture handler with proper tap/hold detection
+    // ⭐ UPDATED: Left area gesture handler with swipe support
     fun handleLeftAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 leftTapStartTime = System.currentTimeMillis()
                 leftIsHolding = true
+                leftStartY = event.y // Store start Y for swipe detection
                 
                 // Start checking for long press after 300ms
                 coroutineScope.launch {
@@ -432,11 +465,36 @@ fun PlayerOverlay(
                 }
                 true
             }
+            MotionEvent.ACTION_MOVE -> {
+                // Swipe detection
+                if (leftIsHolding) {
+                    val currentY = event.y
+                    val deltaY = currentY - leftStartY
+                    
+                    // Detect swipe (min 50px movement)
+                    if (Math.abs(deltaY) > 50) {
+                        leftIsHolding = false // Cancel long press if swiping
+                        isSpeedingUp = false // Cancel speed boost
+                    }
+                }
+                true
+            }
             MotionEvent.ACTION_UP -> {
                 val tapDuration = System.currentTimeMillis() - leftTapStartTime
+                val currentY = event.y
+                val deltaY = currentY - leftStartY
                 leftIsHolding = false
                 
-                if (tapDuration < 200) {
+                // Check for swipe gestures first
+                if (Math.abs(deltaY) > 50) {
+                    if (deltaY < 0) {
+                        // Swipe UP - seek forward 5 seconds
+                        seekBySeconds(5)
+                    } else {
+                        // Swipe DOWN - seek backward 5 seconds  
+                        seekBySeconds(-5)
+                    }
+                } else if (tapDuration < 200) {
                     // Short tap - toggle seekbar
                     if (showSeekbar) {
                         showSeekbar = false
@@ -455,12 +513,13 @@ fun PlayerOverlay(
         }
     }
     
-    // Right area gesture handler with proper tap/hold detection
+    // ⭐ UPDATED: Right area gesture handler with swipe support
     fun handleRightAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 rightTapStartTime = System.currentTimeMillis()
                 rightIsHolding = true
+                rightStartY = event.y // Store start Y for swipe detection
                 
                 // Start checking for long press after 300ms
                 coroutineScope.launch {
@@ -472,11 +531,36 @@ fun PlayerOverlay(
                 }
                 true
             }
+            MotionEvent.ACTION_MOVE -> {
+                // Swipe detection
+                if (rightIsHolding) {
+                    val currentY = event.y
+                    val deltaY = currentY - rightStartY
+                    
+                    // Detect swipe (min 50px movement)
+                    if (Math.abs(deltaY) > 50) {
+                        rightIsHolding = false // Cancel long press if swiping
+                        isSpeedingUp = false // Cancel speed boost
+                    }
+                }
+                true
+            }
             MotionEvent.ACTION_UP -> {
                 val tapDuration = System.currentTimeMillis() - rightTapStartTime
+                val currentY = event.y
+                val deltaY = currentY - rightStartY
                 rightIsHolding = false
                 
-                if (tapDuration < 200) {
+                // Check for swipe gestures first
+                if (Math.abs(deltaY) > 50) {
+                    if (deltaY < 0) {
+                        // Swipe UP - seek forward 5 seconds
+                        seekBySeconds(5)
+                    } else {
+                        // Swipe DOWN - seek backward 5 seconds  
+                        seekBySeconds(-5)
+                    }
+                } else if (tapDuration < 200) {
                     // Short tap - toggle seekbar
                     if (showSeekbar) {
                         showSeekbar = false
@@ -520,7 +604,7 @@ fun PlayerOverlay(
                 .fillMaxHeight(0.7f)
                 .align(Alignment.Center)
         ) {
-            // LEFT 27% - Tap to show/hide seekbar, hold for 2x speed
+            // LEFT 27% - Tap to show/hide seekbar, hold for 2x speed, swipe for 5s seek
             Box(
                 modifier = Modifier
                     .fillMaxWidth(0.27f)
@@ -548,7 +632,7 @@ fun PlayerOverlay(
                     )
             )
             
-            // RIGHT 27% - Tap to show/hide seekbar, hold for 2x speed
+            // RIGHT 27% - Tap to show/hide seekbar, hold for 2x speed, swipe for 5s seek
             Box(
                 modifier = Modifier
                     .fillMaxWidth(0.27f)
@@ -650,6 +734,23 @@ fun PlayerOverlay(
             )
         }
         
+        // ⭐ 5-SECOND SEEK FEEDBACK (+5s / -5s)
+        if (showSeekFeedback) {
+            Text(
+                text = seekFeedbackText,
+                style = TextStyle(
+                    color = Color.White,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold
+                ),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .offset(y = 60.dp)
+                    .background(Color.DarkGray.copy(alpha = 0.8f))
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+        }
+        
         // 2X Speed feedback - Top Center
         if (isSpeedingUp) {
             Text(
@@ -661,7 +762,7 @@ fun PlayerOverlay(
                 ),
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .offset(y = 60.dp)
+                    .offset(y = 100.dp)
                     .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
@@ -678,7 +779,7 @@ fun PlayerOverlay(
                 ),
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .offset(y = 60.dp)
+                    .offset(y = 140.dp)
                     .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
