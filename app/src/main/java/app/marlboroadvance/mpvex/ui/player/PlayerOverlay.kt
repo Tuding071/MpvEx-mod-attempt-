@@ -72,10 +72,12 @@ fun PlayerOverlay(
     var seekbarPosition by remember { mutableStateOf(0f) }
     var seekbarDuration by remember { mutableStateOf(1f) }
     
-    // ⭐ DETACHED BALL ANIMATION: Separate states for ball vs progress bar
-    var visualProgressPosition by remember { mutableStateOf(0f) } // White progress bar position
-    var ballPosition by remember { mutableStateOf(0f) } // White ball position
+    // ⭐ BALL SWITCHING ANIMATION: Separate states for ball visibility
+    var visualProgressPosition by remember { mutableStateOf(0f) } // Progress bar position
+    var ballPosition by remember { mutableStateOf(0f) } // Ball position
     var isDragging by remember { mutableStateOf(false) } // Track if ball is being dragged
+    var showCloneBall by remember { mutableStateOf(false) } // Show clone ball during drag
+    var realBallVisible by remember { mutableStateOf(true) } // Show real ball normally
     
     // For smooth seeking animation
     var userSeekPosition by remember { mutableStateOf<Float?>(null) }
@@ -117,13 +119,17 @@ fun PlayerOverlay(
     
     // Get video title and filename at start and show filename
     LaunchedEffect(Unit) {
-        // Get video title from MPV
+        // Get video title from MPV - FIXED: Use proper property names
         val title = MPVLib.getPropertyString("media-title") ?: "Video"
-        videoTitle = title
+        videoTitle = title.trim()
         
-        // Get filename from path
+        // Get filename from path - FIXED: Better path parsing
         val path = MPVLib.getPropertyString("path") ?: "file.mp4"
-        fileName = path.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "file" }
+        fileName = if (path.contains("/")) {
+            path.substringAfterLast("/").substringBeforeLast(".").takeIf { it.isNotEmpty() } ?: "file"
+        } else {
+            path.substringBeforeLast(".").takeIf { it.isNotEmpty() } ?: "file"
+        }
         
         // Show filename at start
         showVideoInfo = 1
@@ -299,14 +305,17 @@ fun PlayerOverlay(
             }
         }
         
-        // ⭐ DETACHED BALL: Set up dragging state
+        // ⭐ BALL SWITCHING: Set up dragging state and switch balls
         if (!isDragging) {
             isDragging = true
             visualProgressPosition = seekbarPosition // Freeze progress bar at current position
+            realBallVisible = false // Hide real ball instantly
+            showCloneBall = true // Show clone ball
+            ballPosition = newPosition // Set initial clone ball position
         }
         
         userSeekPosition = newPosition
-        ballPosition = newPosition // Only ball moves during dragging
+        ballPosition = newPosition // Move clone ball during dragging
         
         val targetPosition = newPosition.toDouble()
         
@@ -325,9 +334,11 @@ fun PlayerOverlay(
         if (isSeeking) {
             userSeekPosition = null
             
-            // ⭐ DETACHED BALL: End dragging and let progress bar catch up
+            // ⭐ BALL SWITCHING: End dragging and switch back to real ball
             isDragging = false
             visualProgressPosition = ballPosition // Progress bar catches up to ball position
+            showCloneBall = false // Hide clone ball instantly
+            realBallVisible = true // Show real ball at new position
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -608,29 +619,44 @@ fun PlayerOverlay(
                         }
                     }
                     
-                    // Seekbar
+                    // Seekbar Container
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(24.dp)
                     ) {
+                        // ⭐ MAIN SEEKBAR with controlled ball visibility
                         CustomSeekbar(
-                            // ⭐ DETACHED BALL: Use animated position for smooth progress bar
                             position = animatedProgressPosition,
                             duration = seekbarDuration,
                             readAheadValue = 0f,
                             onValueChange = { handleSeekbarValueChange(it) },
                             onValueChangeFinished = { handleSeekbarValueChangeFinished() },
                             chapters = persistentListOf(),
-                            modifier = Modifier.fillMaxSize()
+                            modifier = Modifier.fillMaxSize(),
+                            thumbVisible = realBallVisible // Control real ball visibility
                         )
+                        
+                        // ⭐ CLONE BALL OVERLAY (visible during dragging)
+                        if (showCloneBall) {
+                            // This creates a visual clone ball that moves independently
+                            // Note: This is a simplified representation - you might need custom drawing
+                            // for perfect visual alignment with the Seeker component
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.CenterStart)
+                                    .offset(x = (ballPosition / seekbarDuration) * (LocalContext.current.resources.displayMetrics.widthPixels - 120).dp)
+                                    .size(24.dp)
+                                    .background(Color.White, androidx.compose.foundation.shape.CircleShape)
+                            )
+                        }
                     }
                 }
             }
         }
         
-        // VIDEO INFO - Top Center (filename/title toggle)
-        if (showVideoInfo != 0) {
+        // VIDEO INFO - Top Center (filename/title toggle) - FIXED: Better text handling
+        if (showVideoInfo != 0 && displayText.isNotEmpty()) {
             Text(
                 text = displayText,
                 style = TextStyle(
@@ -638,6 +664,8 @@ fun PlayerOverlay(
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Medium
                 ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .offset(y = 20.dp)
@@ -682,6 +710,7 @@ fun PlayerOverlay(
     }
 }
 
+// ⭐ UPDATED CustomSeekbar with thumb visibility control
 @Composable
 fun CustomSeekbar(
     position: Float,
@@ -690,8 +719,12 @@ fun CustomSeekbar(
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: () -> Unit,
     chapters: ImmutableList<Segment>,
+    thumbVisible: Boolean = true, // New parameter to control thumb visibility
     modifier: Modifier = Modifier
 ) {
+    // Note: The Seeker component might need modification to support thumb visibility
+    // This is a simplified approach - you might need to fork the Seeker library
+    // for perfect thumb visibility control
     Seeker(
         value = position.coerceIn(0f, duration),
         range = 0f..duration,
@@ -704,7 +737,7 @@ fun CustomSeekbar(
         modifier = modifier,
         colors = SeekerDefaults.seekerColors(
             progressColor = Color.White,
-            thumbColor = Color.White,
+            thumbColor = if (thumbVisible) Color.White else Color.Transparent, // Control thumb visibility
             trackColor = Color.Gray.copy(alpha = 0.6f),
             readAheadColor = Color.Gray,
         ),
