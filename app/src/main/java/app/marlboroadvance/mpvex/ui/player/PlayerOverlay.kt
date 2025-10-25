@@ -35,7 +35,7 @@ import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.vivvvek.seeker.Seeker
@@ -50,7 +50,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.Utils
-import kotlin.text.Regex
 
 @Composable
 fun PlayerOverlay(
@@ -97,11 +96,10 @@ fun PlayerOverlay(
     var leftIsHolding by remember { mutableStateOf(false) }
     var rightIsHolding by remember { mutableStateOf(false) }
     
-    // Video title and filename state
-    var showVideoInfo by remember { mutableStateOf(0) } // 0=hide, 1=filename, 2=title
-    var videoTitle by remember { mutableStateOf("Video") }
-    var fileName by remember { mutableStateOf("file.mp4") }
-    var videoInfoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    // ⭐ SIMPLIFIED: Video name state from URI/URL
+    var showVideoName by remember { mutableStateOf(false) } // Show/hide video name
+    var displayName by remember { mutableStateOf("") } // Extracted from URI
+    var videoNameJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
@@ -116,53 +114,33 @@ fun PlayerOverlay(
         label = "progressAnimation"
     )
     
-    // Get video title and filename at start and show filename - FIXED VERSION
+    // ⭐ SIMPLIFIED: Get display name from URI/URL path
     LaunchedEffect(Unit) {
-        // FIXED: Better approach to get video info
-        val mediaTitle = MPVLib.getPropertyString("media-title") ?: ""
+        // Get the path/URI from MPV
         val path = MPVLib.getPropertyString("path") ?: ""
-        val filename = MPVLib.getPropertyString("filename") ?: ""
         
-        // Debug: Print what MPV is returning
-        println("MPV Debug - media-title: '$mediaTitle', path: '$path', filename: '$filename'")
-        
-        // Set video title - try multiple sources and filter out numbers/empty values
-        videoTitle = when {
-            mediaTitle.isNotEmpty() && mediaTitle != "null" && !mediaTitle.matches(Regex("^[0-9]+$")) -> 
-                mediaTitle.trim()
-            filename.isNotEmpty() && filename != "null" && !filename.matches(Regex("^[0-9]+$")) -> 
-                filename.trim()
+        // Extract clean filename from URI/URL path
+        displayName = when {
+            path.isNotEmpty() && path != "null" -> {
+                // Extract filename from path/URI
+                val fileName = if (path.contains("/")) {
+                    path.substringAfterLast("/")
+                } else {
+                    path
+                }
+                // Remove file extension and clean up
+                val cleanName = fileName.substringBeforeLast(".").trim()
+                if (cleanName.isNotEmpty()) cleanName else "Video"
+            }
             else -> "Video"
         }
         
-        // Set file name - extract from path or use filename
-        fileName = when {
-            path.isNotEmpty() && path != "null" -> {
-                val extractedName = if (path.contains("/")) {
-                    path.substringAfterLast("/").substringBeforeLast(".")
-                } else {
-                    path.substringBeforeLast(".")
-                }
-                if (extractedName.isNotEmpty() && !extractedName.matches(Regex("^[0-9]+$"))) {
-                    extractedName
-                } else {
-                    "file"
-                }
-            }
-            filename.isNotEmpty() && filename != "null" && !filename.matches(Regex("^[0-9]+$")) -> {
-                filename.substringBeforeLast(".").takeIf { it.isNotEmpty() } ?: "file"
-            }
-            else -> "file"
-        }
-        
-        // Show filename at start
-        showVideoInfo = 1
-        
-        // Auto-hide after 4 seconds
-        videoInfoJob?.cancel()
-        videoInfoJob = coroutineScope.launch {
+        // Show briefly at start (4 seconds)
+        showVideoName = true
+        videoNameJob?.cancel()
+        videoNameJob = coroutineScope.launch {
             delay(4000)
-            showVideoInfo = 0
+            showVideoName = false
         }
     }
     
@@ -283,27 +261,21 @@ fun PlayerOverlay(
         }
     }
     
-    // Function to toggle video info (filename/title)
-    fun toggleVideoInfo() {
-        showVideoInfo = when (showVideoInfo) {
-            0 -> 1
-            1 -> 2
-            else -> 0
-        }
+    // ⭐ SIMPLIFIED: Toggle video name (show/hide)
+    fun toggleVideoName() {
+        showVideoName = !showVideoName
         
-        if (showVideoInfo != 0) {
-            videoInfoJob?.cancel()
-            videoInfoJob = coroutineScope.launch {
+        if (showVideoName) {
+            // Auto-hide after 4 seconds when shown
+            videoNameJob?.cancel()
+            videoNameJob = coroutineScope.launch {
                 delay(4000)
-                showVideoInfo = 0
+                showVideoName = false
             }
+        } else {
+            // Cancel auto-hide when manually hidden
+            videoNameJob?.cancel()
         }
-    }
-    
-    val displayText = when (showVideoInfo) {
-        1 -> fileName
-        2 -> videoTitle
-        else -> ""
     }
     
     // Simple real-time seeking function
@@ -526,7 +498,7 @@ fun PlayerOverlay(
     Box(
         modifier = modifier.fillMaxSize()
     ) {
-        // TOP 5% - Video info toggle area
+        // TOP 5% - Video name toggle area
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -536,7 +508,7 @@ fun PlayerOverlay(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
                     onClick = {
-                        toggleVideoInfo()
+                        toggleVideoName()
                     }
                 )
         )
@@ -659,15 +631,17 @@ fun PlayerOverlay(
             }
         }
         
-        // VIDEO INFO - Top Center (filename/title toggle)
-        if (showVideoInfo != 0) {
+        // ⭐ SIMPLIFIED: Video name display (from URI/URL)
+        if (showVideoName && displayName.isNotEmpty()) {
             Text(
-                text = displayText,
+                text = displayName,
                 style = TextStyle(
                     color = Color.White,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Medium
                 ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .offset(y = 20.dp)
