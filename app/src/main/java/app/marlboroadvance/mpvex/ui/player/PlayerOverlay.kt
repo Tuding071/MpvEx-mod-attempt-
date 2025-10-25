@@ -35,7 +35,7 @@ import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.vivvvek.seeker.Seeker
@@ -50,6 +50,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.Utils
+import kotlin.text.Regex
 
 @Composable
 fun PlayerOverlay(
@@ -72,8 +73,9 @@ fun PlayerOverlay(
     var seekbarPosition by remember { mutableStateOf(0f) }
     var seekbarDuration by remember { mutableStateOf(1f) }
     
-    // ⭐ SIMPLIFIED: Only keep progress bar freezing
-    var visualProgressPosition by remember { mutableStateOf(0f) } // Progress bar position
+    // ⭐ DETACHED BALL ANIMATION: Separate states for ball vs progress bar
+    var visualProgressPosition by remember { mutableStateOf(0f) } // White progress bar position
+    var ballPosition by remember { mutableStateOf(0f) } // White ball position
     var isDragging by remember { mutableStateOf(false) } // Track if ball is being dragged
     
     // For smooth seeking animation
@@ -95,10 +97,10 @@ fun PlayerOverlay(
     var leftIsHolding by remember { mutableStateOf(false) }
     var rightIsHolding by remember { mutableStateOf(false) }
     
-    // Video title and filename state - FIXED: Use different approach
+    // Video title and filename state
     var showVideoInfo by remember { mutableStateOf(0) } // 0=hide, 1=filename, 2=title
-    var videoTitle by remember { mutableStateOf("") }
-    var fileName by remember { mutableStateOf("") }
+    var videoTitle by remember { mutableStateOf("Video") }
+    var fileName by remember { mutableStateOf("file.mp4") }
     var videoInfoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
@@ -114,30 +116,40 @@ fun PlayerOverlay(
         label = "progressAnimation"
     )
     
-    // FIXED: Get video title and filename with better approach
+    // Get video title and filename at start and show filename - FIXED VERSION
     LaunchedEffect(Unit) {
-        // Try multiple properties to get proper title/filename
+        // FIXED: Better approach to get video info
         val mediaTitle = MPVLib.getPropertyString("media-title") ?: ""
         val path = MPVLib.getPropertyString("path") ?: ""
         val filename = MPVLib.getPropertyString("filename") ?: ""
         
-        // Set video title - prefer media-title, fallback to filename
+        // Debug: Print what MPV is returning
+        println("MPV Debug - media-title: '$mediaTitle', path: '$path', filename: '$filename'")
+        
+        // Set video title - try multiple sources and filter out numbers/empty values
         videoTitle = when {
-            mediaTitle.isNotEmpty() && mediaTitle != "null" -> mediaTitle.trim()
-            filename.isNotEmpty() && filename != "null" -> filename.trim()
+            mediaTitle.isNotEmpty() && mediaTitle != "null" && !mediaTitle.matches(Regex("^[0-9]+$")) -> 
+                mediaTitle.trim()
+            filename.isNotEmpty() && filename != "null" && !filename.matches(Regex("^[0-9]+$")) -> 
+                filename.trim()
             else -> "Video"
         }
         
         // Set file name - extract from path or use filename
         fileName = when {
             path.isNotEmpty() && path != "null" -> {
-                if (path.contains("/")) {
-                    path.substringAfterLast("/").substringBeforeLast(".").takeIf { it.isNotEmpty() } ?: "file"
+                val extractedName = if (path.contains("/")) {
+                    path.substringAfterLast("/").substringBeforeLast(".")
                 } else {
-                    path.substringBeforeLast(".").takeIf { it.isNotEmpty() } ?: "file"
+                    path.substringBeforeLast(".")
+                }
+                if (extractedName.isNotEmpty() && !extractedName.matches(Regex("^[0-9]+$"))) {
+                    extractedName
+                } else {
+                    "file"
                 }
             }
-            filename.isNotEmpty() && filename != "null" -> {
+            filename.isNotEmpty() && filename != "null" && !filename.matches(Regex("^[0-9]+$")) -> {
                 filename.substringBeforeLast(".").takeIf { it.isNotEmpty() } ?: "file"
             }
             else -> "file"
@@ -289,8 +301,8 @@ fun PlayerOverlay(
     }
     
     val displayText = when (showVideoInfo) {
-        1 -> if (fileName.isNotEmpty()) fileName else "File"
-        2 -> if (videoTitle.isNotEmpty()) videoTitle else "Video"
+        1 -> fileName
+        2 -> videoTitle
         else -> ""
     }
     
@@ -317,13 +329,14 @@ fun PlayerOverlay(
             }
         }
         
-        // ⭐ SIMPLIFIED: Just freeze progress bar during dragging
+        // ⭐ DETACHED BALL: Set up dragging state
         if (!isDragging) {
             isDragging = true
             visualProgressPosition = seekbarPosition // Freeze progress bar at current position
         }
         
         userSeekPosition = newPosition
+        ballPosition = newPosition // Only ball moves during dragging
         
         val targetPosition = newPosition.toDouble()
         
@@ -342,9 +355,9 @@ fun PlayerOverlay(
         if (isSeeking) {
             userSeekPosition = null
             
-            // ⭐ SIMPLIFIED: End dragging and let progress bar catch up
+            // ⭐ DETACHED BALL: End dragging and let progress bar catch up
             isDragging = false
-            visualProgressPosition = userSeekPosition?.toFloat() ?: seekbarPosition
+            visualProgressPosition = ballPosition // Progress bar catches up to ball position
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -632,7 +645,7 @@ fun PlayerOverlay(
                             .height(24.dp)
                     ) {
                         CustomSeekbar(
-                            // ⭐ Use animated position for smooth progress bar
+                            // ⭐ DETACHED BALL: Use animated position for smooth progress bar
                             position = animatedProgressPosition,
                             duration = seekbarDuration,
                             readAheadValue = 0f,
@@ -646,8 +659,8 @@ fun PlayerOverlay(
             }
         }
         
-        // VIDEO INFO - Top Center (filename/title toggle) - FIXED: Better text handling
-        if (showVideoInfo != 0 && displayText.isNotEmpty()) {
+        // VIDEO INFO - Top Center (filename/title toggle)
+        if (showVideoInfo != 0) {
             Text(
                 text = displayText,
                 style = TextStyle(
@@ -655,8 +668,6 @@ fun PlayerOverlay(
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Medium
                 ),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .offset(y = 20.dp)
