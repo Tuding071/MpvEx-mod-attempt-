@@ -397,7 +397,7 @@ fun PlayerOverlay(
         return false
     }
     
-    // Left area gesture handler with proper tap/hold detection
+    // Left area gesture handler with smooth speed ramping
     fun handleLeftAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -408,10 +408,21 @@ fun PlayerOverlay(
                 coroutineScope.launch {
                     delay(300)
                     if (leftIsHolding) {
-                        // Add 100ms buffer delay before speed-up
-                        delay(100)
+                        // Smooth speed ramp-up over 200ms (40ms per step)
+                        val steps = listOf(1.2, 1.4, 1.6, 1.8, 2.0)
+                        val stepDelay = 40L // 40ms per step
+                        
+                        for (speed in steps) {
+                            if (!leftIsHolding) {
+                                MPVLib.setPropertyDouble("speed", 1.0)
+                                return@launch
+                            }
+                            MPVLib.setPropertyDouble("speed", speed)
+                            delay(stepDelay)
+                        }
+                        
+                        // Only set final state after successful ramp
                         if (leftIsHolding) {
-                            // Long press detected - activate 2x speed
                             isSpeedingUp = true
                         }
                     }
@@ -441,7 +452,7 @@ fun PlayerOverlay(
         }
     }
     
-    // Right area gesture handler with proper tap/hold detection
+    // Right area gesture handler with smooth speed ramping
     fun handleRightAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -452,10 +463,21 @@ fun PlayerOverlay(
                 coroutineScope.launch {
                     delay(300)
                     if (rightIsHolding) {
-                        // Add 100ms buffer delay before speed-up
-                        delay(100)
+                        // Smooth speed ramp-up over 200ms (40ms per step)
+                        val steps = listOf(1.2, 1.4, 1.6, 1.8, 2.0)
+                        val stepDelay = 40L // 40ms per step
+                        
+                        for (speed in steps) {
+                            if (!rightIsHolding) {
+                                MPVLib.setPropertyDouble("speed", 1.0)
+                                return@launch
+                            }
+                            MPVLib.setPropertyDouble("speed", speed)
+                            delay(stepDelay)
+                        }
+                        
+                        // Only set final state after successful ramp
                         if (rightIsHolding) {
-                            // Long press detected - activate 2x speed
                             isSpeedingUp = true
                         }
                     }
@@ -643,7 +665,7 @@ fun PlayerOverlay(
                 ),
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .offset(x = 60.dp, y = 20.dp) // Changed from 30.dp to 20.dp
+                    .offset(x = 60.dp, y = 20.dp)
                     .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 6.dp)
             )
