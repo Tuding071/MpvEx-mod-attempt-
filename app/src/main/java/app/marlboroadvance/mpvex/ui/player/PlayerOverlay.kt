@@ -50,6 +50,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.Utils
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 
 @Composable
 fun PlayerOverlay(
@@ -72,13 +74,8 @@ fun PlayerOverlay(
     var seekbarPosition by remember { mutableStateOf(0f) }
     var seekbarDuration by remember { mutableStateOf(1f) }
     
-    // ⭐ DETACHED BALL ANIMATION: Separate states for ball vs progress bar
-    var visualProgressPosition by remember { mutableStateOf(0f) } // White progress bar position
-    var ballPosition by remember { mutableStateOf(0f) } // White ball position
-    var isDragging by remember { mutableStateOf(false) } // Track if ball is being dragged
-    
-    // For smooth seeking animation
-    var userSeekPosition by remember { mutableStateOf<Float?>(null) }
+    // Simple draggable progress bar
+    var isDragging by remember { mutableStateOf(false) } // Track if user is dragging
     
     // Drag seeking variables
     var isSeeking by remember { mutableStateOf(false) }
@@ -103,17 +100,6 @@ fun PlayerOverlay(
     var videoInfoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
-    
-    // ⭐ ANIMATED PROGRESS POSITION: Smooth animation for progress bar
-    val animatedProgressPosition by animateFloatAsState(
-        targetValue = if (isDragging) visualProgressPosition else seekbarPosition,
-        animationSpec = if (isDragging) {
-            tween(durationMillis = 0) // Instant freeze during dragging
-        } else {
-            tween(durationMillis = 200) // Smooth catch-up after release
-        },
-        label = "progressAnimation"
-    )
     
     // Get video title and filename at start and show filename
     LaunchedEffect(Unit) {
@@ -228,8 +214,8 @@ fun PlayerOverlay(
                 }
             }
             
-            // OPTIMIZED: Only update seekbar position when NOT seeking AND seekbar is visible
-            if (showSeekbar && !isSeeking && !isDragging) {
+            // OPTIMIZED: Only update seekbar position when NOT dragging
+            if (!isDragging) {
                 seekbarPosition = currentPos.toFloat()
                 seekbarDuration = duration.toFloat()
             }
@@ -270,8 +256,8 @@ fun PlayerOverlay(
         showSeekbar = true
     }
     
-    // ⭐ DEBOUNCED: Handle seekbar value change with 16ms debouncing
-    fun handleSeekbarValueChange(newPosition: Float) {
+    // Simple draggable progress bar handler
+    fun handleProgressBarDrag(newPosition: Float) {
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
@@ -283,14 +269,8 @@ fun PlayerOverlay(
             }
         }
         
-        // ⭐ DETACHED BALL: Set up dragging state
-        if (!isDragging) {
-            isDragging = true
-            visualProgressPosition = seekbarPosition // Freeze progress bar at current position
-        }
-        
-        userSeekPosition = newPosition
-        ballPosition = newPosition // Only ball moves during dragging
+        isDragging = true
+        seekbarPosition = newPosition // Progress bar moves directly with finger
         
         val targetPosition = newPosition.toDouble()
         
@@ -304,26 +284,20 @@ fun PlayerOverlay(
         currentTime = formatTimeSimple(targetPosition)
     }
     
-    // Handle seekbar value change finished
-    fun handleSeekbarValueChangeFinished() {
-        if (isSeeking) {
-            userSeekPosition = null
-            
-            // ⭐ DETACHED BALL: End dragging and let progress bar catch up
-            isDragging = false
-            visualProgressPosition = ballPosition // Progress bar catches up to ball position
-            
-            if (wasPlayingBeforeSeek) {
-                coroutineScope.launch {
-                    delay(100)
-                    MPVLib.setPropertyBoolean("pause", false)
-                }
+    // Handle drag finished
+    fun handleDragFinished() {
+        isDragging = false
+        
+        if (wasPlayingBeforeSeek) {
+            coroutineScope.launch {
+                delay(100)
+                MPVLib.setPropertyBoolean("pause", false)
             }
-            
-            isSeeking = false
-            showSeekTime = false
-            wasPlayingBeforeSeek = false
         }
+        
+        isSeeking = false
+        showSeekTime = false
+        wasPlayingBeforeSeek = false
     }
     
     // ⭐ DEBOUNCED: Continuous drag seeking gesture handler with 16ms debouncing
@@ -572,7 +546,7 @@ fun PlayerOverlay(
                 }
         )
         
-        // BOTTOM AREA - Times and Seekbar (all toggle together)
+        // BOTTOM AREA - Times and Seekbar (all toggle together) - LOWERED POSITION
         if (showSeekbar) {
             Box(
                 modifier = Modifier
@@ -580,7 +554,7 @@ fun PlayerOverlay(
                     .height(70.dp)
                     .align(Alignment.BottomStart)
                     .padding(horizontal = 60.dp)
-                    .offset(y = (-14).dp)
+                    .offset(y = (-30).dp) // LOWERED from -14.dp to -30.dp
             ) {
                 Column(
                     modifier = Modifier.fillMaxSize(),
@@ -611,20 +585,17 @@ fun PlayerOverlay(
                         }
                     }
                     
-                    // Seekbar
+                    // Simple Draggable Progress Bar
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(24.dp)
                     ) {
-                        CustomSeekbar(
-                            // ⭐ DETACHED BALL: Use animated position for smooth progress bar
-                            position = animatedProgressPosition,
+                        SimpleDraggableProgressBar(
+                            position = seekbarPosition,
                             duration = seekbarDuration,
-                            readAheadValue = 0f,
-                            onValueChange = { handleSeekbarValueChange(it) },
-                            onValueChangeFinished = { handleSeekbarValueChangeFinished() },
-                            chapters = persistentListOf(),
+                            onValueChange = { handleProgressBarDrag(it) },
+                            onValueChangeFinished = { handleDragFinished() },
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -643,7 +614,7 @@ fun PlayerOverlay(
                 ),
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .offset(x = 60.dp, y = 20.dp) // Changed from 30.dp to 20.dp
+                    .offset(x = 60.dp, y = 20.dp)
                     .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 6.dp)
             )
@@ -689,33 +660,59 @@ fun PlayerOverlay(
 }
 
 @Composable
-fun CustomSeekbar(
+fun SimpleDraggableProgressBar(
     position: Float,
     duration: Float,
-    readAheadValue: Float,
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: () -> Unit,
-    chapters: ImmutableList<Segment>,
     modifier: Modifier = Modifier
 ) {
-    Seeker(
-        value = position.coerceIn(0f, duration),
-        range = 0f..duration,
-        onValueChange = onValueChange,
-        onValueChangeFinished = onValueChangeFinished,
-        readAheadValue = readAheadValue,
-        segments = chapters
-            .filter { it.start in 0f..duration }
-            .let { (if (it.isNotEmpty() && it[0].start != 0f) persistentListOf(Segment("", 0f)) + it else it) + it },
-        modifier = modifier,
-        colors = SeekerDefaults.seekerColors(
-            // YouTube-style colors with specified opacities
-            progressColor = Color.White,                    // Progress bar: White 100%
-            thumbColor = Color.White,                       // Thumb ball: White 100%
-            trackColor = Color.Gray.copy(alpha = 0.2f),    // Background track: Grey 20%
-            readAheadColor = Color.Gray.copy(alpha = 0.4f) // Buffered: Grey 40%
-        ),
-    )
+    Box(
+        modifier = modifier
+            .height(24.dp)
+    ) {
+        // Background track
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+                .align(Alignment.CenterStart)
+                .background(Color.Gray.copy(alpha = 0.6f))
+        )
+        
+        // White progress bar - moves directly with finger during drag
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f)
+                .height(4.dp)
+                .align(Alignment.CenterStart)
+                .background(Color.White)
+        )
+        
+        // Invisible draggable area - NO VISIBLE THUMB
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(24.dp)
+                .align(Alignment.CenterStart)
+                .pointerInput(Unit) {
+                    detectDragGestures(
+                        onDragStart = { offset ->
+                            val newPosition = (offset.x / size.width) * duration
+                            onValueChange(newPosition.coerceIn(0f, duration))
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            val newPosition = (change.position.x / size.width) * duration
+                            onValueChange(newPosition.coerceIn(0f, duration))
+                        },
+                        onDragEnd = {
+                            onValueChangeFinished()
+                        }
+                    )
+                }
+        )
+    }
 }
 
 // Function to format time simply without milliseconds
