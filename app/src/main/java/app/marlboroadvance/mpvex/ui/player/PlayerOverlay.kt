@@ -99,7 +99,31 @@ fun PlayerOverlay(
     var fileName by remember { mutableStateOf("file.mp4") }
     var videoInfoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
+    // Speed control
+    var speedRampJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
+    
+    // Smooth speed ramp effect
+    LaunchedEffect(isSpeedingUp) {
+        if (isSpeedingUp) {
+            // 6-step speed ramp with 80ms between steps
+            MPVLib.setPropertyDouble("speed", 1.1)
+            delay(80)
+            MPVLib.setPropertyDouble("speed", 1.3)
+            delay(80)
+            MPVLib.setPropertyDouble("speed", 1.6)
+            delay(80)
+            MPVLib.setPropertyDouble("speed", 1.9)
+            delay(80)
+            MPVLib.setPropertyDouble("speed", 2.1)
+            delay(80)
+            MPVLib.setPropertyDouble("speed", 2.0) // Final correction
+        } else {
+            // Immediate return to normal speed
+            MPVLib.setPropertyDouble("speed", 1.0)
+        }
+    }
     
     // Get video title and filename at start and show filename
     LaunchedEffect(Unit) {
@@ -119,23 +143,6 @@ fun PlayerOverlay(
         videoInfoJob = coroutineScope.launch {
             delay(4000)
             showVideoInfo = 0
-        }
-    }
-    
-    // Handle speed reset when not holding
-    LaunchedEffect(leftIsHolding, rightIsHolding) {
-        if (!leftIsHolding && !rightIsHolding && isSpeedingUp) {
-            MPVLib.setPropertyDouble("speed", 1.0)
-            isSpeedingUp = false
-        }
-    }
-    
-    // Handle speed transitions IMMEDIATELY (no delays)
-    LaunchedEffect(isSpeedingUp) {
-        if (isSpeedingUp) {
-            MPVLib.setPropertyDouble("speed", 2.0) // Immediate
-        } else {
-            MPVLib.setPropertyDouble("speed", 1.0) // Immediate
         }
     }
     
@@ -371,7 +378,7 @@ fun PlayerOverlay(
         return false
     }
     
-    // Left area gesture handler with proper tap/hold detection
+    // Left area gesture handler with 880ms total speed ramp
     fun handleLeftAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -379,13 +386,14 @@ fun PlayerOverlay(
                 leftIsHolding = true
                 
                 // Start checking for long press after 300ms
-                coroutineScope.launch {
+                speedRampJob?.cancel()
+                speedRampJob = coroutineScope.launch {
                     delay(300)
                     if (leftIsHolding) {
-                        // Add 100ms buffer delay before speed-up
+                        // Add 100ms buffer delay before starting speed ramp
                         delay(100)
                         if (leftIsHolding) {
-                            // Long press detected - activate 2x speed
+                            // Long press detected - activate smooth speed ramp to 2x
                             isSpeedingUp = true
                         }
                     }
@@ -395,6 +403,7 @@ fun PlayerOverlay(
             MotionEvent.ACTION_UP -> {
                 val tapDuration = System.currentTimeMillis() - leftTapStartTime
                 leftIsHolding = false
+                speedRampJob?.cancel()
                 
                 if (tapDuration < 200) {
                     // Short tap - toggle seekbar
@@ -404,18 +413,25 @@ fun PlayerOverlay(
                         showSeekbar()
                     }
                 }
-                // Long press speed will auto-reset via LaunchedEffect
+                // Speed will auto-reset via LaunchedEffect when isSpeedingUp becomes false
+                if (isSpeedingUp) {
+                    isSpeedingUp = false
+                }
                 true
             }
             MotionEvent.ACTION_CANCEL -> {
                 leftIsHolding = false
+                speedRampJob?.cancel()
+                if (isSpeedingUp) {
+                    isSpeedingUp = false
+                }
                 true
             }
             else -> false
         }
     }
     
-    // Right area gesture handler with proper tap/hold detection
+    // Right area gesture handler with 880ms total speed ramp
     fun handleRightAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -423,13 +439,14 @@ fun PlayerOverlay(
                 rightIsHolding = true
                 
                 // Start checking for long press after 300ms
-                coroutineScope.launch {
+                speedRampJob?.cancel()
+                speedRampJob = coroutineScope.launch {
                     delay(300)
                     if (rightIsHolding) {
-                        // Add 100ms buffer delay before speed-up
+                        // Add 100ms buffer delay before starting speed ramp
                         delay(100)
                         if (rightIsHolding) {
-                            // Long press detected - activate 2x speed
+                            // Long press detected - activate smooth speed ramp to 2x
                             isSpeedingUp = true
                         }
                     }
@@ -439,6 +456,7 @@ fun PlayerOverlay(
             MotionEvent.ACTION_UP -> {
                 val tapDuration = System.currentTimeMillis() - rightTapStartTime
                 rightIsHolding = false
+                speedRampJob?.cancel()
                 
                 if (tapDuration < 200) {
                     // Short tap - toggle seekbar
@@ -448,11 +466,18 @@ fun PlayerOverlay(
                         showSeekbar()
                     }
                 }
-                // Long press speed will auto-reset via LaunchedEffect
+                // Speed will auto-reset via LaunchedEffect when isSpeedingUp becomes false
+                if (isSpeedingUp) {
+                    isSpeedingUp = false
+                }
                 true
             }
             MotionEvent.ACTION_CANCEL -> {
                 rightIsHolding = false
+                speedRampJob?.cancel()
+                if (isSpeedingUp) {
+                    isSpeedingUp = false
+                }
                 true
             }
             else -> false
@@ -546,7 +571,7 @@ fun PlayerOverlay(
                 }
         )
         
-        // BOTTOM AREA - Times and Seekbar (all toggle together) - LOWERED POSITION
+        // BOTTOM AREA - Times and Seekbar (all toggle together) - MOVED FURTHER DOWN
         if (showSeekbar) {
             Box(
                 modifier = Modifier
@@ -554,7 +579,7 @@ fun PlayerOverlay(
                     .height(70.dp)
                     .align(Alignment.BottomStart)
                     .padding(horizontal = 60.dp)
-                    .offset(y = (-30).dp) // LOWERED from -14.dp to -30.dp
+                    .offset(y = (-50).dp) // MOVED FURTHER DOWN from -30.dp to -50.dp
             ) {
                 Column(
                     modifier = Modifier.fillMaxSize(),
