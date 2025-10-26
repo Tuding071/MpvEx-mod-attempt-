@@ -50,8 +50,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.Utils
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.ui.input.pointer.pointerInput
 
 @Composable
 fun PlayerOverlay(
@@ -75,8 +73,8 @@ fun PlayerOverlay(
     var seekbarDuration by remember { mutableStateOf(1f) }
     
     // ⭐ DETACHED BALL ANIMATION: Separate states for ball vs progress bar
-    var visualProgressPosition by remember { mutableStateOf(0f) } // White progress bar position (frozen during drag)
-    var ballPosition by remember { mutableStateOf(0f) } // White ball position (freely draggable)
+    var visualProgressPosition by remember { mutableStateOf(0f) } // White progress bar position
+    var ballPosition by remember { mutableStateOf(0f) } // White ball position
     var isDragging by remember { mutableStateOf(false) } // Track if ball is being dragged
     
     // For smooth seeking animation
@@ -230,12 +228,10 @@ fun PlayerOverlay(
                 }
             }
             
-            // OPTIMIZED: Only update positions when NOT dragging
-            if (!isDragging) {
+            // OPTIMIZED: Only update seekbar position when NOT seeking AND seekbar is visible
+            if (showSeekbar && !isSeeking && !isDragging) {
                 seekbarPosition = currentPos.toFloat()
                 seekbarDuration = duration.toFloat()
-                visualProgressPosition = currentPos.toFloat() // Update visual progress
-                ballPosition = currentPos.toFloat() // Sync ball with actual position
             }
             
             // Always update these for internal logic (they're cheap)
@@ -622,11 +618,13 @@ fun PlayerOverlay(
                             .height(24.dp)
                     ) {
                         CustomSeekbar(
-                            visualProgressPosition = visualProgressPosition, // Frozen white bar
-                            ballPosition = ballPosition, // Movable thumb
+                            // ⭐ DETACHED BALL: Use animated position for smooth progress bar
+                            position = animatedProgressPosition,
                             duration = seekbarDuration,
+                            readAheadValue = 0f,
                             onValueChange = { handleSeekbarValueChange(it) },
                             onValueChangeFinished = { handleSeekbarValueChangeFinished() },
+                            chapters = persistentListOf(),
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -692,59 +690,32 @@ fun PlayerOverlay(
 
 @Composable
 fun CustomSeekbar(
-    visualProgressPosition: Float,
-    ballPosition: Float,
+    position: Float,
     duration: Float,
+    readAheadValue: Float,
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: () -> Unit,
+    chapters: ImmutableList<Segment>,
     modifier: Modifier = Modifier
 ) {
-    Box(
-        modifier = modifier
-            .height(24.dp)
-    ) {
-        // Background track
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(4.dp)
-                .align(Alignment.CenterStart)
-                .background(Color.Gray.copy(alpha = 0.6f))
-        )
-        
-        // White progress bar (frozen during drag)
-        Box(
-            modifier = Modifier
-                .width(if (duration > 0) (visualProgressPosition / duration).coerceIn(0f, 1f) * modifier.fillMaxWidth().toDp() else 0.dp)
-                .height(4.dp)
-                .align(Alignment.CenterStart)
-                .background(Color.White)
-        )
-        
-        // Draggable thumb
-        Box(
-            modifier = Modifier
-                .offset(x = if (duration > 0) (ballPosition / duration).coerceIn(0f, 1f) * modifier.fillMaxWidth().toDp() - 12.dp else 0.dp)
-                .size(24.dp)
-                .background(Color.White, shape = MaterialTheme.shapes.small)
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = { offset ->
-                            val newPosition = (offset.x / size.width) * duration
-                            onValueChange(newPosition.coerceIn(0f, duration))
-                        },
-                        onDrag = { change, dragAmount ->
-                            change.consume()
-                            val newPosition = ballPosition + (dragAmount.x / size.width) * duration
-                            onValueChange(newPosition.coerceIn(0f, duration))
-                        },
-                        onDragEnd = {
-                            onValueChangeFinished()
-                        }
-                    )
-                }
-        )
-    }
+    Seeker(
+        value = position.coerceIn(0f, duration),
+        range = 0f..duration,
+        onValueChange = onValueChange,
+        onValueChangeFinished = onValueChangeFinished,
+        readAheadValue = readAheadValue,
+        segments = chapters
+            .filter { it.start in 0f..duration }
+            .let { (if (it.isNotEmpty() && it[0].start != 0f) persistentListOf(Segment("", 0f)) + it else it) + it },
+        modifier = modifier,
+        colors = SeekerDefaults.seekerColors(
+            // YouTube-style colors with specified opacities
+            progressColor = Color.White,                    // Progress bar: White 100%
+            thumbColor = Color.White,                       // Thumb ball: White 100%
+            trackColor = Color.Gray.copy(alpha = 0.2f),    // Background track: Grey 20%
+            readAheadColor = Color.Gray.copy(alpha = 0.4f) // Buffered: Grey 40%
+        ),
+    )
 }
 
 // Function to format time simply without milliseconds
