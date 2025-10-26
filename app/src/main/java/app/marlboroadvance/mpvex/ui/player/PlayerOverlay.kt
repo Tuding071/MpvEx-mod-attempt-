@@ -1,5 +1,6 @@
 package app.marlboroadvance.mpvex.ui.player
 
+import android.util.Log
 import android.view.MotionEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -58,25 +59,27 @@ fun PlayerOverlay(
     var isPausing by remember { mutableStateOf(false) }
     var showSeekbar by remember { mutableStateOf(true) }
     
+    // ⭐ NEW: Speed transition state
+    var isSpeedTransition by remember { mutableStateOf(false) }
+    
     // Video progress for seekbar
     var currentPosition by remember { mutableStateOf(0.0) }
     var videoDuration by remember { mutableStateOf(1.0) }
     var seekbarPosition by remember { mutableStateOf(0f) }
     var seekbarDuration by remember { mutableStateOf(1f) }
     
-    // ⭐ TWO-SEEKBAR YOUTUBE-STYLE STATES
+    // TWO-SEEKBAR YOUTUBE-STYLE STATES
     var isSeeking by remember { mutableStateOf(false) }
     var frozenProgressPosition by remember { mutableStateOf(0f) } // Bottom layer - frozen progress
     var thumbPosition by remember { mutableStateOf(0f) } // Top layer - moving thumb
     var isThumbVisible by remember { mutableStateOf(true) } // Hide thumb after release
-    var showThumbDuringDrag by remember { mutableStateOf(true) } // Hide thumb during horizontal drag
     
     // Drag seeking variables
     var seekStartX by remember { mutableStateOf(0f) }
     var dragSeekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
-    // ⭐ DEBOUNCING: Track last seek time for both drag and seekbar seeking
+    // DEBOUNCING: Track last seek time for both drag and seekbar seeking
     var lastSeekTime by remember { mutableStateOf(0L) }
     val seekDebounceMs = 16L // 16ms = ~60fps for buttery smooth seeking
     
@@ -115,20 +118,25 @@ fun PlayerOverlay(
         }
     }
     
-    // Handle speed reset when not holding
+    // ⭐ UNIFIED SPEED CONTROL with transition state
     LaunchedEffect(leftIsHolding, rightIsHolding) {
-        if (!leftIsHolding && !rightIsHolding && isSpeedingUp) {
+        val shouldSpeedUp = leftIsHolding || rightIsHolding
+        
+        if (shouldSpeedUp && !isSpeedingUp) {
+            // Transition to 2x
+            isSpeedTransition = true
+            MPVLib.setPropertyDouble("speed", 2.0)
+            isSpeedingUp = true
+            delay(100) // Allow transition to stabilize
+            isSpeedTransition = false
+            
+        } else if (!shouldSpeedUp && isSpeedingUp) {
+            // Transition back to normal
+            isSpeedTransition = true
             MPVLib.setPropertyDouble("speed", 1.0)
             isSpeedingUp = false
-        }
-    }
-    
-    // Handle speed transitions IMMEDIATELY (no delays)
-    LaunchedEffect(isSpeedingUp) {
-        if (isSpeedingUp) {
-            MPVLib.setPropertyDouble("speed", 2.0) // Immediate
-        } else {
-            MPVLib.setPropertyDouble("speed", 1.0) // Immediate
+            delay(150) // Longer for 2x→normal
+            isSpeedTransition = false
         }
     }
     
@@ -157,9 +165,13 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
         MPVLib.setPropertyString("vd-lavc-skipidct", "all")
         MPVLib.setPropertyString("vd-lavc-assemble", "yes")
+        
+        // SMOOTHER SPEED TRANSITIONS
+        MPVLib.setPropertyString("video-sync", "display-resample")
+        MPVLib.setPropertyString("audio-pitch-correction", "yes")
     }
     
-    // OPTIMIZED: Update time and progress every 500ms with smart updates
+    // OPTIMIZED: Update time and progress with speed transition support
     LaunchedEffect(Unit) {
         var lastSeconds = -1
         
@@ -185,7 +197,11 @@ fun PlayerOverlay(
                     seekbarPosition = currentPos.toFloat()
                     seekbarDuration = duration.toFloat()
                     thumbPosition = currentPos.toFloat() // Keep thumb in sync
-                    frozenProgressPosition = currentPos.toFloat() // Keep progress in sync
+                    
+                    // ⭐ CRITICAL: Only update frozen progress when NOT in speed transition
+                    if (!isSpeedTransition) {
+                        frozenProgressPosition = currentPos.toFloat()
+                    }
                 }
             }
             
@@ -225,7 +241,7 @@ fun PlayerOverlay(
         showSeekbar = true
     }
     
-    // ⭐ YOUTUBE-STYLE: Handle seekbar value change with two-layer approach
+    // YOUTUBE-STYLE: Handle seekbar value change with two-layer approach
     fun handleSeekbarValueChange(newPosition: Float) {
         if (!isSeeking) {
             isSeeking = true
@@ -233,9 +249,6 @@ fun PlayerOverlay(
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
             lastSeekTime = 0L
-            
-            // ⭐ KEEP THUMB VISIBLE during seekbar ball dragging
-            showThumbDuringDrag = true
             
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
@@ -288,7 +301,7 @@ fun PlayerOverlay(
         }
     }
     
-    // ⭐ DEBOUNCED: Continuous drag seeking gesture handler
+    // DEBOUNCED: Continuous drag seeking gesture handler
     fun handleDragSeekGesture(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -298,9 +311,6 @@ fun PlayerOverlay(
                 isSeeking = true
                 showSeekTime = true
                 lastSeekTime = 0L
-                
-                // ⭐ HIDE THUMB during horizontal drag seeking
-                showThumbDuringDrag = false
                 
                 if (wasPlayingBeforeSeek) {
                     MPVLib.setPropertyBoolean("pause", true)
@@ -343,9 +353,6 @@ fun PlayerOverlay(
                     
                     performRealTimeSeek(clampedPosition)
                     
-                    // ⭐ SHOW THUMB again after horizontal drag seeking
-                    showThumbDuringDrag = true
-                    
                     if (wasPlayingBeforeSeek) {
                         coroutineScope.launch {
                             delay(100)
@@ -377,7 +384,7 @@ fun PlayerOverlay(
                     if (leftIsHolding) {
                         delay(100)
                         if (leftIsHolding) {
-                            isSpeedingUp = true
+                            // Speed up will be handled by the unified LaunchedEffect
                         }
                     }
                 }
@@ -416,7 +423,7 @@ fun PlayerOverlay(
                     if (rightIsHolding) {
                         delay(100)
                         if (rightIsHolding) {
-                            isSpeedingUp = true
+                            // Speed up will be handled by the unified LaunchedEffect
                         }
                     }
                 }
@@ -558,22 +565,22 @@ fun PlayerOverlay(
                         }
                     }
                     
-                    // ⭐ TWO-LAYER SEEKBAR CONTAINER
+                    // TWO-LAYER SEEKBAR CONTAINER
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(24.dp)
                     ) {
-                        // LAYER 1: BOTTOM - Frozen Progress Bar (Non-interactive)
+                        // LAYER 1: BOTTOM - Frozen Progress Bar (FREEZES during speed transitions)
                         FrozenProgressSeekbar(
                             position = if (isSeeking) frozenProgressPosition else seekbarPosition,
                             duration = seekbarDuration,
+                            isSpeedTransition = isSpeedTransition, // ⭐ PASS THE STATE
                             modifier = Modifier.fillMaxSize()
                         )
                         
                         // LAYER 2: TOP - Interactive Thumb Only
-                        // ⭐ SHOW THUMB only when: thumb is visible AND we're not in horizontal drag seeking
-                        if (isThumbVisible && showThumbDuringDrag) {
+                        if (isThumbVisible) {
                             ThumbOnlySeekbar(
                                 position = thumbPosition,
                                 duration = seekbarDuration,
@@ -641,15 +648,26 @@ fun PlayerOverlay(
     }
 }
 
-// ⭐ LAYER 1: Bottom - Frozen Progress Bar (Non-interactive)
+// LAYER 1: Bottom - Frozen Progress Bar (FREEZES during speed transitions)
 @Composable
 fun FrozenProgressSeekbar(
     position: Float,
     duration: Float,
+    isSpeedTransition: Boolean, // ⭐ NEW PARAM
     modifier: Modifier = Modifier
 ) {
+    // ⭐ FREEZE position during speed transitions
+    val frozenPosition = remember(position, isSpeedTransition) {
+        if (isSpeedTransition) {
+            // Keep the last known position during speed transitions
+            position
+        } else {
+            position
+        }
+    }
+    
     Seeker(
-        value = position.coerceIn(0f, duration),
+        value = frozenPosition.coerceIn(0f, duration),
         range = 0f..duration,
         onValueChange = { }, // Non-interactive
         onValueChangeFinished = { }, // Non-interactive
@@ -658,14 +676,14 @@ fun FrozenProgressSeekbar(
         modifier = modifier,
         colors = SeekerDefaults.seekerColors(
             progressColor = Color.White,
-            thumbColor = Color.Transparent, // ❌ HIDDEN - No thumb
+            thumbColor = Color.Transparent, // HIDDEN - No thumb
             trackColor = Color.Gray.copy(alpha = 0.6f),
             readAheadColor = Color.Gray,
         ),
     )
 }
 
-// ⭐ LAYER 2: Top - Interactive Thumb Only
+// LAYER 2: Top - Interactive Thumb Only
 @Composable
 fun ThumbOnlySeekbar(
     position: Float,
@@ -683,10 +701,10 @@ fun ThumbOnlySeekbar(
         segments = persistentListOf(),
         modifier = modifier,
         colors = SeekerDefaults.seekerColors(
-            progressColor = Color.Transparent, // ❌ HIDDEN - No progress
-            thumbColor = Color.White, // ✅ VISIBLE - Only thumb
-            trackColor = Color.Transparent, // ❌ HIDDEN - No track
-            readAheadColor = Color.Transparent, // ❌ HIDDEN
+            progressColor = Color.Transparent, // HIDDEN - No progress
+            thumbColor = Color.White, // VISIBLE - Only thumb
+            trackColor = Color.Transparent, // HIDDEN - No track
+            readAheadColor = Color.Transparent, // HIDDEN
         ),
     )
 }
