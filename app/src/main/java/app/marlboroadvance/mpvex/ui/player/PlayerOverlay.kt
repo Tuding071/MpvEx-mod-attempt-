@@ -121,9 +121,11 @@ fun PlayerOverlay(
         val title = MPVLib.getPropertyString("media-title") ?: "Video"
         videoTitle = title
         
-        // Get filename from path
+        // Get path/URI from MPV
         val path = MPVLib.getPropertyString("path") ?: "file.mp4"
-        fileName = path.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "file" }
+        
+        // Extract filename from various URI formats
+        fileName = extractFileNameFromUri(path)
         
         // Show filename at start
         showVideoInfo = 1
@@ -397,7 +399,7 @@ fun PlayerOverlay(
         return false
     }
     
-    // Left area gesture handler with smooth speed ramping
+    // Left area gesture handler with 100ms delay
     fun handleLeftAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -408,21 +410,10 @@ fun PlayerOverlay(
                 coroutineScope.launch {
                     delay(300)
                     if (leftIsHolding) {
-                        // Smooth speed ramp-up over 200ms (40ms per step)
-                        val steps = listOf(1.2, 1.4, 1.6, 1.8, 2.0)
-                        val stepDelay = 40L // 40ms per step
-                        
-                        for (speed in steps) {
-                            if (!leftIsHolding) {
-                                MPVLib.setPropertyDouble("speed", 1.0)
-                                return@launch
-                            }
-                            MPVLib.setPropertyDouble("speed", speed)
-                            delay(stepDelay)
-                        }
-                        
-                        // Only set final state after successful ramp
+                        // Add 100ms buffer delay before speed-up
+                        delay(100)
                         if (leftIsHolding) {
+                            // Long press detected - activate 2x speed
                             isSpeedingUp = true
                         }
                     }
@@ -452,7 +443,7 @@ fun PlayerOverlay(
         }
     }
     
-    // Right area gesture handler with smooth speed ramping
+    // Right area gesture handler with 100ms delay
     fun handleRightAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -463,21 +454,10 @@ fun PlayerOverlay(
                 coroutineScope.launch {
                     delay(300)
                     if (rightIsHolding) {
-                        // Smooth speed ramp-up over 200ms (40ms per step)
-                        val steps = listOf(1.2, 1.4, 1.6, 1.8, 2.0)
-                        val stepDelay = 40L // 40ms per step
-                        
-                        for (speed in steps) {
-                            if (!rightIsHolding) {
-                                MPVLib.setPropertyDouble("speed", 1.0)
-                                return@launch
-                            }
-                            MPVLib.setPropertyDouble("speed", speed)
-                            delay(stepDelay)
-                        }
-                        
-                        // Only set final state after successful ramp
+                        // Add 100ms buffer delay before speed-up
+                        delay(100)
                         if (rightIsHolding) {
+                            // Long press detected - activate 2x speed
                             isSpeedingUp = true
                         }
                     }
@@ -737,6 +717,44 @@ fun CustomSeekbar(
             readAheadColor = Color.Gray,
         ),
     )
+}
+
+// Function to extract filename from various URI formats
+private fun extractFileNameFromUri(uriString: String): String {
+    return try {
+        when {
+            // Regular file path: /storage/emulated/0/Movies/video.mp4
+            uriString.contains("/") && !uriString.startsWith("content://") -> {
+                uriString.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "file" }
+            }
+            // Content URI: content://media/external/video/media/12345
+            uriString.startsWith("content://") -> {
+                // Try to extract from media store URI
+                val segments = uriString.split("/")
+                if (segments.size >= 2) {
+                    // For content URIs, use a generic name or try to get display name
+                    "video_${segments.lastOrNull() ?: "file"}"
+                } else {
+                    "video"
+                }
+            }
+            // Network URL: https://example.com/videos/movie.mp4
+            uriString.startsWith("http") -> {
+                uriString.substringAfterLast("/").substringBeforeLast("?").substringBeforeLast(".").ifEmpty { "stream" }
+            }
+            // Random numbers or unknown format
+            else -> {
+                // If it's just numbers, use a generic name
+                if (uriString.matches(Regex("\\d+"))) {
+                    "video_$uriString"
+                } else {
+                    uriString.substringBeforeLast(".").ifEmpty { "file" }
+                }
+            }
+        }
+    } catch (e: Exception) {
+        "video" // Fallback
+    }
 }
 
 // Function to format time simply without milliseconds
