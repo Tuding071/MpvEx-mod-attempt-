@@ -35,7 +35,7 @@ import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.vivvvek.seeker.Seeker
@@ -86,10 +86,6 @@ fun PlayerOverlay(
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
-    // ⭐ HORIZONTAL SEEKING for left/right areas
-    var leftSeekStartX by remember { mutableStateOf(0f) }
-    var rightSeekStartX by remember { mutableStateOf(0f) }
-    
     // ⭐ DEBOUNCING: Track last seek time for both drag and seekbar seeking
     var lastSeekTime by remember { mutableStateOf(0L) }
     val seekDebounceMs = 16L // 16ms = ~60fps for buttery smooth seeking
@@ -100,15 +96,11 @@ fun PlayerOverlay(
     var leftIsHolding by remember { mutableStateOf(false) }
     var rightIsHolding by remember { mutableStateOf(false) }
     
-    // ⭐ 5-SECOND SEEK FEEDBACK
-    var showSeekFeedback by remember { mutableStateOf(false) }
-    var seekFeedbackText by remember { mutableStateOf("") }
-    var seekFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    
-    // ⭐ SIMPLIFIED: Video name state from URI/URL
-    var showVideoName by remember { mutableStateOf(false) } // Show/hide video name
-    var displayName by remember { mutableStateOf("") } // Extracted from URI
-    var videoNameJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    // Video title and filename state
+    var showVideoInfo by remember { mutableStateOf(0) } // 0=hide, 1=filename, 2=title
+    var videoTitle by remember { mutableStateOf("Video") }
+    var fileName by remember { mutableStateOf("file.mp4") }
+    var videoInfoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
@@ -123,56 +115,24 @@ fun PlayerOverlay(
         label = "progressAnimation"
     )
     
-    // ⭐ FUNCTION: Show seek feedback (+5s / -5s)
-    fun showSeekFeedback(text: String) {
-        seekFeedbackText = text
-        showSeekFeedback = true
-        seekFeedbackJob?.cancel()
-        seekFeedbackJob = coroutineScope.launch {
-            delay(500) // Show for 500ms
-            showSeekFeedback = false
-        }
-    }
-    
-    // ⭐ FUNCTION: Seek by seconds
-    fun seekBySeconds(seconds: Int) {
-        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-        val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
-        val newPos = (currentPos + seconds).coerceIn(0.0, duration)
-        MPVLib.command("seek", newPos.toString(), "absolute", "exact")
-        
-        // Show feedback
-        val feedbackText = if (seconds > 0) "+${seconds}s" else "${seconds}s"
-        showSeekFeedback(feedbackText)
-    }
-    
-    // ⭐ SIMPLIFIED: Get display name from URI/URL path
+    // Get video title and filename at start and show filename
     LaunchedEffect(Unit) {
-        // Get the path/URI from MPV
-        val path = MPVLib.getPropertyString("path") ?: ""
+        // Get video title from MPV
+        val title = MPVLib.getPropertyString("media-title") ?: "Video"
+        videoTitle = title
         
-        // Extract clean filename from URI/URL path
-        displayName = when {
-            path.isNotEmpty() && path != "null" -> {
-                // Extract filename from path/URI
-                val fileName = if (path.contains("/")) {
-                    path.substringAfterLast("/")
-                } else {
-                    path
-                }
-                // Remove file extension and clean up
-                val cleanName = fileName.substringBeforeLast(".").trim()
-                if (cleanName.isNotEmpty()) cleanName else "Video"
-            }
-            else -> "Video"
-        }
+        // Get filename from path
+        val path = MPVLib.getPropertyString("path") ?: "file.mp4"
+        fileName = path.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "file" }
         
-        // Show briefly at start (4 seconds)
-        showVideoName = true
-        videoNameJob?.cancel()
-        videoNameJob = coroutineScope.launch {
+        // Show filename at start
+        showVideoInfo = 1
+        
+        // Auto-hide after 4 seconds
+        videoInfoJob?.cancel()
+        videoInfoJob = coroutineScope.launch {
             delay(4000)
-            showVideoName = false
+            showVideoInfo = 0
         }
     }
     
@@ -293,21 +253,27 @@ fun PlayerOverlay(
         }
     }
     
-    // ⭐ SIMPLIFIED: Toggle video name (show/hide)
-    fun toggleVideoName() {
-        showVideoName = !showVideoName
-        
-        if (showVideoName) {
-            // Auto-hide after 4 seconds when shown
-            videoNameJob?.cancel()
-            videoNameJob = coroutineScope.launch {
-                delay(4000)
-                showVideoName = false
-            }
-        } else {
-            // Cancel auto-hide when manually hidden
-            videoNameJob?.cancel()
+    // Function to toggle video info (filename/title)
+    fun toggleVideoInfo() {
+        showVideoInfo = when (showVideoInfo) {
+            0 -> 1
+            1 -> 2
+            else -> 0
         }
+        
+        if (showVideoInfo != 0) {
+            videoInfoJob?.cancel()
+            videoInfoJob = coroutineScope.launch {
+                delay(4000)
+                showVideoInfo = 0
+            }
+        }
+    }
+    
+    val displayText = when (showVideoInfo) {
+        1 -> fileName
+        2 -> videoTitle
+        else -> ""
     }
     
     // Simple real-time seeking function
@@ -447,13 +413,12 @@ fun PlayerOverlay(
         return false
     }
     
-    // ⭐ UPDATED: Left area gesture handler - HORIZONTAL SEEKING only
+    // Left area gesture handler with proper tap/hold detection
     fun handleLeftAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 leftTapStartTime = System.currentTimeMillis()
                 leftIsHolding = true
-                leftSeekStartX = event.x
                 
                 // Start checking for long press after 300ms
                 coroutineScope.launch {
@@ -462,30 +427,6 @@ fun PlayerOverlay(
                         // Long press detected - activate 2x speed
                         isSpeedingUp = true
                     }
-                }
-                true
-            }
-            MotionEvent.ACTION_MOVE -> {
-                if (leftIsHolding) {
-                    val currentX = event.x
-                    val deltaX = currentX - leftSeekStartX
-                    
-                    // Horizontal seeking (same logic as bottom area)
-                    val pixelsPerSecond = 3f / 0.033f
-                    val timeDeltaSeconds = deltaX / pixelsPerSecond
-                    val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-                    val newPositionSeconds = currentPos + timeDeltaSeconds
-                    val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-                    val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
-                    
-                    val now = System.currentTimeMillis()
-                    if (now - lastSeekTime >= seekDebounceMs) {
-                        performRealTimeSeek(clampedPosition)
-                        lastSeekTime = now
-                    }
-                    
-                    seekTargetTime = formatTimeSimple(clampedPosition)
-                    currentTime = formatTimeSimple(clampedPosition)
                 }
                 true
             }
@@ -512,13 +453,12 @@ fun PlayerOverlay(
         }
     }
     
-    // ⭐ UPDATED: Right area gesture handler - HORIZONTAL SEEKING only
+    // Right area gesture handler with proper tap/hold detection
     fun handleRightAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 rightTapStartTime = System.currentTimeMillis()
                 rightIsHolding = true
-                rightSeekStartX = event.x
                 
                 // Start checking for long press after 300ms
                 coroutineScope.launch {
@@ -527,30 +467,6 @@ fun PlayerOverlay(
                         // Long press detected - activate 2x speed
                         isSpeedingUp = true
                     }
-                }
-                true
-            }
-            MotionEvent.ACTION_MOVE -> {
-                if (rightIsHolding) {
-                    val currentX = event.x
-                    val deltaX = currentX - rightSeekStartX
-                    
-                    // Horizontal seeking (same logic as bottom area)
-                    val pixelsPerSecond = 3f / 0.033f
-                    val timeDeltaSeconds = deltaX / pixelsPerSecond
-                    val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-                    val newPositionSeconds = currentPos + timeDeltaSeconds
-                    val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-                    val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
-                    
-                    val now = System.currentTimeMillis()
-                    if (now - lastSeekTime >= seekDebounceMs) {
-                        performRealTimeSeek(clampedPosition)
-                        lastSeekTime = now
-                    }
-                    
-                    seekTargetTime = formatTimeSimple(clampedPosition)
-                    currentTime = formatTimeSimple(clampedPosition)
                 }
                 true
             }
@@ -580,108 +496,45 @@ fun PlayerOverlay(
     Box(
         modifier = modifier.fillMaxSize()
     ) {
-        // ⭐ 50dp VERTICAL INVISIBLE PADDING - Left side
+        // TOP 3% IGNORE AREA - Left and right side blank areas
         Box(
             modifier = Modifier
-                .fillMaxHeight()
-                .width(50.dp)
-                .align(Alignment.CenterStart)
-        )
+                .fillMaxWidth()
+                .fillMaxHeight(0.03f)
+                .align(Alignment.TopStart)
+        ) {
+            // Left 3% ignore area
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.03f)
+                    .fillMaxHeight()
+                    .align(Alignment.CenterStart)
+            )
+            
+            // Right 3% ignore area  
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.03f)
+                    .fillMaxHeight()
+                    .align(Alignment.CenterEnd)
+            )
+        }
         
-        // ⭐ 50dp VERTICAL INVISIBLE PADDING - Right side  
-        Box(
-            modifier = Modifier
-                .fillMaxHeight()
-                .width(50.dp)
-                .align(Alignment.CenterEnd)
-        )
-        
-        // TOP 5% - Video name toggle area WITH title on left
+        // TOP 5% - Video info toggle area (below ignore area)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .fillMaxHeight(0.05f)
                 .align(Alignment.TopStart)
+                .offset(y = (3).percentAsDp())
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
                     onClick = {
-                        toggleVideoName()
+                        toggleVideoInfo()
                     }
                 )
-        ) {
-            // ⭐ Video title on left side INSIDE the toggle area
-            if (showVideoName && displayName.isNotEmpty()) {
-                Text(
-                    text = displayName,
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 14.sp, // Same size as time display
-                        fontWeight = FontWeight.Medium
-                    ),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .padding(start = 16.dp) // Padding from left edge
-                        .background(Color.DarkGray.copy(alpha = 0.8f))
-                        .padding(horizontal = 12.dp, vertical = 4.dp)
-                )
-            }
-        }
-        
-        // ⭐ ALL FEEDBACK INDICATORS under top 5% area (centered)
-        Column(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .offset(y = 30.dp), // Position below top 5% area
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // 5-SECOND SEEK FEEDBACK (+5s / -5s)
-            if (showSeekFeedback) {
-                Text(
-                    text = seekFeedbackText,
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 14.sp, // Same as time display
-                        fontWeight = FontWeight.Medium
-                    ),
-                    modifier = Modifier
-                        .background(Color.DarkGray.copy(alpha = 0.8f))
-                        .padding(horizontal = 12.dp, vertical = 4.dp)
-                )
-            }
-            
-            // 2X Speed feedback
-            if (isSpeedingUp) {
-                Text(
-                    text = "2X",
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 14.sp, // Same as time display
-                        fontWeight = FontWeight.Medium
-                    ),
-                    modifier = Modifier
-                        .background(Color.DarkGray.copy(alpha = 0.8f))
-                        .padding(horizontal = 12.dp, vertical = 4.dp)
-                )
-            }
-            
-            // Center seek time - shows target position during seeking
-            if (showSeekTime) {
-                Text(
-                    text = seekTargetTime,
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 14.sp, // Same as time display
-                        fontWeight = FontWeight.Medium
-                    ),
-                    modifier = Modifier
-                        .background(Color.DarkGray.copy(alpha = 0.8f))
-                        .padding(horizontal = 12.dp, vertical = 4.dp)
-                )
-            }
-        }
+        )
         
         // CENTER 70% - Divided into 3 areas
         Box(
@@ -690,7 +543,7 @@ fun PlayerOverlay(
                 .fillMaxHeight(0.7f)
                 .align(Alignment.Center)
         ) {
-            // LEFT 27% - Tap to show/hide seekbar, hold for 2x speed, HORIZONTAL SEEKING
+            // LEFT 27% - Tap to show/hide seekbar, hold for 2x speed
             Box(
                 modifier = Modifier
                     .fillMaxWidth(0.27f)
@@ -718,7 +571,7 @@ fun PlayerOverlay(
                     )
             )
             
-            // RIGHT 27% - Tap to show/hide seekbar, hold for 2x speed, HORIZONTAL SEEKING
+            // RIGHT 27% - Tap to show/hide seekbar, hold for 2x speed
             Box(
                 modifier = Modifier
                     .fillMaxWidth(0.27f)
@@ -800,6 +653,60 @@ fun PlayerOverlay(
                 }
             }
         }
+        
+        // VIDEO INFO - Left Side (aligned with seekbar time)
+        if (showVideoInfo != 0) {
+            Text(
+                text = displayText,
+                style = TextStyle(
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium
+                ),
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .offset(x = 60.dp, y = (-70).dp)
+                    .background(Color.DarkGray.copy(alpha = 0.8f))
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+            )
+        }
+        
+        // TOP CENTER AREA - 2X Speed and Seek Time (smaller size, below title area)
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .offset(y = 80.dp) // Position below the title area
+        ) {
+            // 2X Speed feedback
+            if (isSpeedingUp) {
+                Text(
+                    text = "2X",
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 14.sp, // Smaller size to match time display
+                        fontWeight = FontWeight.Medium
+                    ),
+                    modifier = Modifier
+                        .background(Color.DarkGray.copy(alpha = 0.8f))
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+            }
+            
+            // Center seek time - shows target position during seeking
+            if (showSeekTime && !isSpeedingUp) {
+                Text(
+                    text = seekTargetTime,
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 14.sp, // Smaller size to match time display
+                        fontWeight = FontWeight.Medium
+                    ),
+                    modifier = Modifier
+                        .background(Color.DarkGray.copy(alpha = 0.8f))
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+            }
+        }
     }
 }
 
@@ -831,6 +738,9 @@ fun CustomSeekbar(
         ),
     )
 }
+
+// Extension function to convert percentage to dp
+private fun Int.percentAsDp() = (this * 0.01f).dp
 
 // Function to format time simply without milliseconds
 private fun formatTimeSimple(seconds: Double): String {
