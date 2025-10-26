@@ -64,11 +64,8 @@ fun PlayerOverlay(
     var seekbarPosition by remember { mutableStateOf(0f) }
     var seekbarDuration by remember { mutableStateOf(1f) }
     
-    // TWO-SEEKBAR YOUTUBE-STYLE STATES
+    // Seekbar states
     var isSeeking by remember { mutableStateOf(false) }
-    var frozenProgressPosition by remember { mutableStateOf(0f) } // Bottom layer - frozen progress
-    var thumbPosition by remember { mutableStateOf(0f) } // Top layer - moving thumb
-    var isThumbVisible by remember { mutableStateOf(true) } // Hide thumb after release
     
     // ⭐ NEW: Simple flag to freeze ALL seekbar updates during speed changes
     var freezeSeekbarUpdates by remember { mutableStateOf(false) }
@@ -191,8 +188,6 @@ fun PlayerOverlay(
                 if (showSeekbar && !freezeSeekbarUpdates) {
                     seekbarPosition = currentPos.toFloat()
                     seekbarDuration = duration.toFloat()
-                    thumbPosition = currentPos.toFloat()
-                    frozenProgressPosition = currentPos.toFloat()
                 }
             }
             
@@ -232,11 +227,10 @@ fun PlayerOverlay(
         showSeekbar = true
     }
     
-    // YOUTUBE-STYLE: Handle seekbar value change with two-layer approach
+    // ⭐ SIMPLIFIED: Handle seekbar value change for single seekbar
     fun handleSeekbarValueChange(newPosition: Float) {
         if (!isSeeking) {
             isSeeking = true
-            frozenProgressPosition = seekbarPosition // Freeze bottom progress bar
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
             lastSeekTime = 0L
@@ -246,7 +240,6 @@ fun PlayerOverlay(
             }
         }
         
-        thumbPosition = newPosition // Only top thumb moves
         val targetPosition = newPosition.toDouble()
         
         val now = System.currentTimeMillis()
@@ -259,32 +252,16 @@ fun PlayerOverlay(
         currentTime = formatTimeSimple(targetPosition)
     }
     
-    // Handle seekbar value change finished
+    // ⭐ SIMPLIFIED: Handle seekbar value change finished for single seekbar
     fun handleSeekbarValueChangeFinished() {
         if (isSeeking) {
             isSeeking = false
             showSeekTime = false
             
-            // Hide thumb for 200ms to avoid blinking
-            isThumbVisible = false
-            
-            // Bottom progress bar jumps to new position
-            frozenProgressPosition = thumbPosition
-            
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
                     delay(100)
                     MPVLib.setPropertyBoolean("pause", false)
-                    
-                    // Show thumb again after 200ms total
-                    delay(100)
-                    isThumbVisible = true
-                }
-            } else {
-                // Show thumb again after 200ms
-                coroutineScope.launch {
-                    delay(200)
-                    isThumbVisible = true
                 }
             }
             
@@ -363,7 +340,7 @@ fun PlayerOverlay(
         return false
     }
     
-    // Left area gesture handler with 100ms delay
+    // Left area gesture handler - RESTORED to 400ms
     fun handleLeftAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -371,12 +348,9 @@ fun PlayerOverlay(
                 leftIsHolding = true
                 
                 coroutineScope.launch {
-                    delay(300)
+                    delay(400) // ⭐ RESTORED to 400ms
                     if (leftIsHolding) {
-                        delay(100)
-                        if (leftIsHolding) {
-                            // Speed up will be handled by the unified LaunchedEffect
-                        }
+                        // Speed up will be handled by the unified LaunchedEffect
                     }
                 }
                 true
@@ -402,7 +376,7 @@ fun PlayerOverlay(
         }
     }
     
-    // Right area gesture handler with 100ms delay
+    // Right area gesture handler - RESTORED to 400ms
     fun handleRightAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -410,12 +384,9 @@ fun PlayerOverlay(
                 rightIsHolding = true
                 
                 coroutineScope.launch {
-                    delay(300)
+                    delay(400) // ⭐ RESTORED to 400ms
                     if (rightIsHolding) {
-                        delay(100)
-                        if (rightIsHolding) {
-                            // Speed up will be handled by the unified LaunchedEffect
-                        }
+                        // Speed up will be handled by the unified LaunchedEffect
                     }
                 }
                 true
@@ -556,30 +527,17 @@ fun PlayerOverlay(
                         }
                     }
                     
-                    // TWO-LAYER SEEKBAR CONTAINER
-                    Box(
+                    // ⭐ SINGLE SEEKBAR with YouTube styling
+                    YouTubeStyleSeekbar(
+                        position = seekbarPosition,
+                        duration = seekbarDuration,
+                        isSeeking = isSeeking,
+                        onValueChange = { handleSeekbarValueChange(it) },
+                        onValueChangeFinished = { handleSeekbarValueChangeFinished() },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(24.dp)
-                    ) {
-                        // LAYER 1: BOTTOM - Frozen Progress Bar
-                        FrozenProgressSeekbar(
-                            position = if (isSeeking) frozenProgressPosition else seekbarPosition,
-                            duration = seekbarDuration,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                        
-                        // LAYER 2: TOP - Interactive Thumb Only
-                        if (isThumbVisible) {
-                            ThumbOnlySeekbar(
-                                position = thumbPosition,
-                                duration = seekbarDuration,
-                                onValueChange = { handleSeekbarValueChange(it) },
-                                onValueChangeFinished = { handleSeekbarValueChangeFinished() },
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                    }
+                    )
                 }
             }
         }
@@ -638,54 +596,62 @@ fun PlayerOverlay(
     }
 }
 
-// LAYER 1: Bottom - Frozen Progress Bar
+// ⭐ SINGLE SEEKBAR that mimics YouTube's feel
 @Composable
-fun FrozenProgressSeekbar(
+fun YouTubeStyleSeekbar(
     position: Float,
     duration: Float,
-    modifier: Modifier = Modifier
-) {
-    Seeker(
-        value = position.coerceIn(0f, duration),
-        range = 0f..duration,
-        onValueChange = { },
-        onValueChangeFinished = { },
-        readAheadValue = 0f,
-        segments = persistentListOf(),
-        modifier = modifier,
-        colors = SeekerDefaults.seekerColors(
-            progressColor = Color.White,
-            thumbColor = Color.Transparent,
-            trackColor = Color.Gray.copy(alpha = 0.6f),
-            readAheadColor = Color.Gray,
-        ),
-    )
-}
-
-// LAYER 2: Top - Interactive Thumb Only
-@Composable
-fun ThumbOnlySeekbar(
-    position: Float,
-    duration: Float,
+    isSeeking: Boolean,
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Seeker(
-        value = position.coerceIn(0f, duration),
-        range = 0f..duration,
-        onValueChange = onValueChange,
-        onValueChangeFinished = onValueChangeFinished,
-        readAheadValue = 0f,
-        segments = persistentListOf(),
-        modifier = modifier,
-        colors = SeekerDefaults.seekerColors(
-            progressColor = Color.Transparent,
-            thumbColor = Color.White,
-            trackColor = Color.Transparent,
-            readAheadColor = Color.Transparent,
-        ),
-    )
+    Box(modifier = modifier) {
+        // Background track (always visible)
+        Seeker(
+            value = 0f,
+            range = 0f..duration,
+            onValueChange = { },
+            onValueChangeFinished = { },
+            modifier = Modifier.fillMaxSize(),
+            colors = SeekerDefaults.seekerColors(
+                progressColor = Color.Transparent,
+                thumbColor = Color.Transparent,
+                trackColor = Color.Gray.copy(alpha = 0.4f),
+                readAheadColor = Color.Transparent,
+            )
+        )
+        
+        // Progress (changes color during seeking)
+        Seeker(
+            value = position.coerceIn(0f, duration),
+            range = 0f..duration,
+            onValueChange = { },
+            onValueChangeFinished = { },
+            modifier = Modifier.fillMaxSize(),
+            colors = SeekerDefaults.seekerColors(
+                progressColor = if (isSeeking) Color.Red else Color.White,
+                thumbColor = Color.Transparent,
+                trackColor = Color.Transparent,
+                readAheadColor = Color.Transparent,
+            )
+        )
+        
+        // Interactive layer with thumb
+        Seeker(
+            value = position.coerceIn(0f, duration),
+            range = 0f..duration,
+            onValueChange = onValueChange,
+            onValueChangeFinished = onValueChangeFinished,
+            modifier = Modifier.fillMaxSize(),
+            colors = SeekerDefaults.seekerColors(
+                progressColor = Color.Transparent,
+                thumbColor = Color.White,
+                trackColor = Color.Transparent,
+                readAheadColor = Color.Transparent,
+            )
+        )
+    }
 }
 
 // Function to format time simply without milliseconds
