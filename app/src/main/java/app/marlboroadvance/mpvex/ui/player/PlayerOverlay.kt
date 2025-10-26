@@ -97,7 +97,7 @@ fun PlayerOverlay(
     var rightIsHolding by remember { mutableStateOf(false) }
     
     // Video title and filename state
-    var showVideoInfo by remember { mutableStateOf(0) } // 0=hide, 1=filename, 2=title
+    var showVideoInfo by remember { mutableStateOf(0) } // 0=hide, 1=filename
     var videoTitle by remember { mutableStateOf("Video") }
     var fileName by remember { mutableStateOf("file.mp4") }
     var videoInfoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -242,21 +242,9 @@ fun PlayerOverlay(
         }
     }
     
-    // OPTIMIZED: Handle pause/resume WITHOUT delays
-    LaunchedEffect(pendingPauseResume) {
-        if (pendingPauseResume) {
-            viewModel.pauseUnpause() // No delays - instant response
-            pendingPauseResume = false
-        }
-    }
-    
-    // Function to toggle video info (filename/title)
+    // Function to toggle video info (simplified - just filename show/hide)
     fun toggleVideoInfo() {
-        showVideoInfo = when (showVideoInfo) {
-            0 -> 1
-            1 -> 2
-            else -> 0
-        }
+        showVideoInfo = if (showVideoInfo == 0) 1 else 0
         
         if (showVideoInfo != 0) {
             videoInfoJob?.cancel()
@@ -269,7 +257,6 @@ fun PlayerOverlay(
     
     val displayText = when (showVideoInfo) {
         1 -> fileName
-        2 -> videoTitle
         else -> ""
     }
     
@@ -493,39 +480,12 @@ fun PlayerOverlay(
     Box(
         modifier = modifier.fillMaxSize()
     ) {
-        // TOP 3% IGNORE AREA - Left and right side blank areas
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .fillMaxHeight(0.03f)
-                .align(Alignment.TopStart)
-        ) {
-            // Left 3% ignore area
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(0.03f)
-                    .fillMaxHeight()
-                    .align(Alignment.CenterStart)
-                    .pointerInteropFilter { true } // Consume touches
-            )
-            
-            // Right 3% ignore area  
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(0.03f)
-                    .fillMaxHeight()
-                    .align(Alignment.CenterEnd)
-                    .pointerInteropFilter { true } // Consume touches
-            )
-        }
-        
-        // TOP 5% - Video info toggle area (below ignore area)
+        // TOP 5% - Video info toggle area
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .fillMaxHeight(0.05f)
                 .align(Alignment.TopStart)
-                .offset(y = (3).percentAsDp())
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -553,7 +513,7 @@ fun PlayerOverlay(
                     }
             )
             
-            // CENTER 46% - Tap for pause/resume
+            // CENTER 46% - Tap for pause/resume (using horizontal seek's smooth approach)
             Box(
                 modifier = Modifier
                     .fillMaxWidth(0.46f)
@@ -564,8 +524,19 @@ fun PlayerOverlay(
                         indication = null,
                         onClick = {
                             val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
+                            if (currentPaused) {
+                                // Smooth resume like horizontal seek
+                                coroutineScope.launch {
+                                    val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+                                    MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
+                                    delay(100) // Small delay like horizontal seek
+                                    MPVLib.setPropertyBoolean("pause", false)
+                                }
+                            } else {
+                                // Immediate pause
+                                MPVLib.setPropertyBoolean("pause", true)
+                            }
                             isPausing = !currentPaused
-                            pendingPauseResume = true
                         }
                     )
             )
@@ -664,7 +635,7 @@ fun PlayerOverlay(
                 ),
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .offset(x = 60.dp, y = 40.dp) // Positioned below toggle area
+                    .offset(x = 60.dp, y = 30.dp) // Moved up to 30.dp
                     .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 6.dp)
             )
@@ -737,9 +708,6 @@ fun CustomSeekbar(
         ),
     )
 }
-
-// Extension function to convert percentage to dp
-private fun Int.percentAsDp() = (this * 0.01f).dp
 
 // Function to format time simply without milliseconds
 private fun formatTimeSimple(seconds: Double): String {
