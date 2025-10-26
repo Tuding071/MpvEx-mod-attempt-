@@ -72,18 +72,14 @@ fun PlayerOverlay(
     var seekbarPosition by remember { mutableStateOf(0f) }
     var seekbarDuration by remember { mutableStateOf(1f) }
     
-    // ⭐ DETACHED BALL ANIMATION: Separate states for ball vs progress bar
-    var visualProgressPosition by remember { mutableStateOf(0f) } // White progress bar position
-    var ballPosition by remember { mutableStateOf(0f) } // White ball position
-    var isDragging by remember { mutableStateOf(false) } // Track if ball is being dragged
-    
-    // For smooth seeking animation
-    var userSeekPosition by remember { mutableStateOf<Float?>(null) }
+    // YouTube-style seekbar states
+    var isSeeking by remember { mutableStateOf(false) }
+    var seekStartPosition by remember { mutableStateOf(0f) } // Progress bar freezes at this position
+    var userSeekPosition by remember { mutableStateOf<Float?>(null) } // Thumb moves to this position
     
     // Drag seeking variables
-    var isSeeking by remember { mutableStateOf(false) }
     var seekStartX by remember { mutableStateOf(0f) }
-    var seekStartPosition by remember { mutableStateOf(0.0) }
+    var dragSeekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
     // ⭐ DEBOUNCING: Track last seek time for both drag and seekbar seeking
@@ -104,28 +100,15 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // ⭐ ANIMATED PROGRESS POSITION: Smooth animation for progress bar
-    val animatedProgressPosition by animateFloatAsState(
-        targetValue = if (isDragging) visualProgressPosition else seekbarPosition,
-        animationSpec = if (isDragging) {
-            tween(durationMillis = 0) // Instant freeze during dragging
-        } else {
-            tween(durationMillis = 200) // Smooth catch-up after release
-        },
-        label = "progressAnimation"
-    )
-    
     // Get video title and filename at start and show filename
     LaunchedEffect(Unit) {
         // Get video title from MPV
         val title = MPVLib.getPropertyString("media-title") ?: "Video"
         videoTitle = title
         
-        // Get path/URI from MPV
+        // Get filename from path
         val path = MPVLib.getPropertyString("path") ?: "file.mp4"
-        
-        // Extract filename from various URI formats
-        fileName = extractFileNameFromUri(path)
+        fileName = path.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "file" }
         
         // Show filename at start
         showVideoInfo = 1
@@ -230,8 +213,8 @@ fun PlayerOverlay(
                 }
             }
             
-            // OPTIMIZED: Only update seekbar position when NOT seeking AND seekbar is visible
-            if (showSeekbar && !isSeeking && !isDragging) {
+            // OPTIMIZED: Only update seekbar position when NOT seeking
+            if (!isSeeking) {
                 seekbarPosition = currentPos.toFloat()
                 seekbarDuration = duration.toFloat()
             }
@@ -272,10 +255,11 @@ fun PlayerOverlay(
         showSeekbar = true
     }
     
-    // ⭐ DEBOUNCED: Handle seekbar value change with 16ms debouncing
+    // ⭐ YOUTUBE-STYLE: Handle seekbar value change with frozen progress bar
     fun handleSeekbarValueChange(newPosition: Float) {
         if (!isSeeking) {
             isSeeking = true
+            seekStartPosition = seekbarPosition // Freeze progress bar at current position
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
             lastSeekTime = 0L
@@ -285,14 +269,7 @@ fun PlayerOverlay(
             }
         }
         
-        // ⭐ DETACHED BALL: Set up dragging state
-        if (!isDragging) {
-            isDragging = true
-            visualProgressPosition = seekbarPosition // Freeze progress bar at current position
-        }
-        
-        userSeekPosition = newPosition
-        ballPosition = newPosition // Only ball moves during dragging
+        userSeekPosition = newPosition // Only thumb moves
         
         val targetPosition = newPosition.toDouble()
         
@@ -310,10 +287,11 @@ fun PlayerOverlay(
     fun handleSeekbarValueChangeFinished() {
         if (isSeeking) {
             userSeekPosition = null
+            isSeeking = false
+            showSeekTime = false
             
-            // ⭐ DETACHED BALL: End dragging and let progress bar catch up
-            isDragging = false
-            visualProgressPosition = ballPosition // Progress bar catches up to ball position
+            // Progress bar instantly jumps to new position
+            seekbarPosition = userSeekPosition ?: seekbarPosition
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -322,8 +300,6 @@ fun PlayerOverlay(
                 }
             }
             
-            isSeeking = false
-            showSeekTime = false
             wasPlayingBeforeSeek = false
         }
     }
@@ -333,7 +309,7 @@ fun PlayerOverlay(
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 seekStartX = event.x
-                seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+                dragSeekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
                 wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
                 isSeeking = true
                 showSeekTime = true
@@ -353,7 +329,7 @@ fun PlayerOverlay(
                     val pixelsPerSecond = 3f / 0.033f
                     val timeDeltaSeconds = deltaX / pixelsPerSecond
                     
-                    val newPositionSeconds = seekStartPosition + timeDeltaSeconds
+                    val newPositionSeconds = dragSeekStartPosition + timeDeltaSeconds
                     val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
                     val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
                     
@@ -374,7 +350,7 @@ fun PlayerOverlay(
                     val deltaX = currentX - seekStartX
                     val pixelsPerSecond = 3f / 0.033f
                     val timeDeltaSeconds = deltaX / pixelsPerSecond
-                    val newPositionSeconds = seekStartPosition + timeDeltaSeconds
+                    val newPositionSeconds = dragSeekStartPosition + timeDeltaSeconds
                     val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
                     val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
                     
@@ -390,7 +366,7 @@ fun PlayerOverlay(
                     isSeeking = false
                     showSeekTime = false
                     seekStartX = 0f
-                    seekStartPosition = 0.0
+                    dragSeekStartPosition = 0.0
                     wasPlayingBeforeSeek = false
                 }
                 return true
@@ -486,6 +462,10 @@ fun PlayerOverlay(
             else -> false
         }
     }
+    
+    // Calculate positions for YouTube-style seekbar
+    val progressBarPosition = if (isSeeking) seekStartPosition else seekbarPosition
+    val thumbPosition = if (isSeeking) (userSeekPosition ?: seekStartPosition) else seekbarPosition
     
     Box(
         modifier = modifier.fillMaxSize()
@@ -619,14 +599,12 @@ fun PlayerOverlay(
                             .fillMaxWidth()
                             .height(24.dp)
                     ) {
-                        CustomSeekbar(
-                            // ⭐ DETACHED BALL: Use animated position for smooth progress bar
-                            position = animatedProgressPosition,
+                        YouTubeStyleSeekbar(
+                            progressPosition = progressBarPosition, // Frozen during seek
+                            thumbPosition = thumbPosition, // Moves during seek
                             duration = seekbarDuration,
-                            readAheadValue = 0f,
                             onValueChange = { handleSeekbarValueChange(it) },
                             onValueChangeFinished = { handleSeekbarValueChangeFinished() },
-                            chapters = persistentListOf(),
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -691,24 +669,21 @@ fun PlayerOverlay(
 }
 
 @Composable
-fun CustomSeekbar(
-    position: Float,
+fun YouTubeStyleSeekbar(
+    progressPosition: Float,
+    thumbPosition: Float,
     duration: Float,
-    readAheadValue: Float,
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: () -> Unit,
-    chapters: ImmutableList<Segment>,
     modifier: Modifier = Modifier
 ) {
     Seeker(
-        value = position.coerceIn(0f, duration),
+        value = thumbPosition.coerceIn(0f, duration), // Use thumb position for the seeker
         range = 0f..duration,
         onValueChange = onValueChange,
         onValueChangeFinished = onValueChangeFinished,
-        readAheadValue = readAheadValue,
-        segments = chapters
-            .filter { it.start in 0f..duration }
-            .let { (if (it.isNotEmpty() && it[0].start != 0f) persistentListOf(Segment("", 0f)) + it else it) + it },
+        readAheadValue = 0f,
+        segments = persistentListOf(),
         modifier = modifier,
         colors = SeekerDefaults.seekerColors(
             progressColor = Color.White,
@@ -717,44 +692,6 @@ fun CustomSeekbar(
             readAheadColor = Color.Gray,
         ),
     )
-}
-
-// Function to extract filename from various URI formats
-private fun extractFileNameFromUri(uriString: String): String {
-    return try {
-        when {
-            // Regular file path: /storage/emulated/0/Movies/video.mp4
-            uriString.contains("/") && !uriString.startsWith("content://") -> {
-                uriString.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "file" }
-            }
-            // Content URI: content://media/external/video/media/12345
-            uriString.startsWith("content://") -> {
-                // Try to extract from media store URI
-                val segments = uriString.split("/")
-                if (segments.size >= 2) {
-                    // For content URIs, use a generic name or try to get display name
-                    "video_${segments.lastOrNull() ?: "file"}"
-                } else {
-                    "video"
-                }
-            }
-            // Network URL: https://example.com/videos/movie.mp4
-            uriString.startsWith("http") -> {
-                uriString.substringAfterLast("/").substringBeforeLast("?").substringBeforeLast(".").ifEmpty { "stream" }
-            }
-            // Random numbers or unknown format
-            else -> {
-                // If it's just numbers, use a generic name
-                if (uriString.matches(Regex("\\d+"))) {
-                    "video_$uriString"
-                } else {
-                    uriString.substringBeforeLast(".").ifEmpty { "file" }
-                }
-            }
-        }
-    } catch (e: Exception) {
-        "video" // Fallback
-    }
 }
 
 // Function to format time simply without milliseconds
