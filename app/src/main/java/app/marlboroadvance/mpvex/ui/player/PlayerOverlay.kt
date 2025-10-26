@@ -1,8 +1,6 @@
 package app.marlboroadvance.mpvex.ui.player
 
 import android.view.MotionEvent
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -16,12 +14,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -35,7 +29,6 @@ import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.vivvvek.seeker.Seeker
@@ -49,7 +42,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import `is`.xyz.mpv.MPVLib
-import `is`.xyz.mpv.Utils
 
 @Composable
 fun PlayerOverlay(
@@ -72,10 +64,11 @@ fun PlayerOverlay(
     var seekbarPosition by remember { mutableStateOf(0f) }
     var seekbarDuration by remember { mutableStateOf(1f) }
     
-    // YouTube-style seekbar states
+    // ⭐ TWO-SEEKBAR YOUTUBE-STYLE STATES
     var isSeeking by remember { mutableStateOf(false) }
-    var seekStartPosition by remember { mutableStateOf(0f) } // Progress bar freezes at this position
-    var userSeekPosition by remember { mutableStateOf<Float?>(null) } // Thumb moves to this position
+    var frozenProgressPosition by remember { mutableStateOf(0f) } // Bottom layer - frozen progress
+    var thumbPosition by remember { mutableStateOf(0f) } // Top layer - moving thumb
+    var isThumbVisible by remember { mutableStateOf(true) } // Hide thumb after release
     
     // Drag seeking variables
     var seekStartX by remember { mutableStateOf(0f) }
@@ -147,48 +140,22 @@ fun PlayerOverlay(
         
         // OPTIMIZED: 4 cores for software decoding (reduced from 8)
         MPVLib.setPropertyString("vd-lavc-threads", "4")
-        MPVLib.setPropertyString("audio-channels", "auto") // OPTIMIZED: Auto-detect instead of 8 channels
+        MPVLib.setPropertyString("audio-channels", "auto")
         MPVLib.setPropertyString("demuxer-lavf-threads", "4")
         
         // OPTIMIZED: 150MB cache allocation (reduced from 250MB)
         MPVLib.setPropertyString("cache", "yes")
         MPVLib.setPropertyInt("demuxer-max-bytes", 150 * 1024 * 1024)
-        MPVLib.setPropertyString("demuxer-readahead-secs", "60") // Reduced from 120 to 60 seconds
+        MPVLib.setPropertyString("demuxer-readahead-secs", "60")
         MPVLib.setPropertyString("cache-secs", "60")
         MPVLib.setPropertyString("cache-pause", "no")
         MPVLib.setPropertyString("cache-initial", "0.5")
         
-        // OPTIMIZED: Software decoding optimizations with quality reduction
-        MPVLib.setPropertyString("video-sync", "display-resample")
-        MPVLib.setPropertyString("untimed", "yes")
-        MPVLib.setPropertyString("hr-seek", "yes")
-        MPVLib.setPropertyString("hr-seek-framedrop", "no")
-        
-        // QUALITY REDUCTION FOR SPEED (as requested)
+        // QUALITY REDUCTION FOR SPEED
         MPVLib.setPropertyString("vd-lavc-fast", "yes")
-        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all") // Skip loop filter
-        MPVLib.setPropertyString("vd-lavc-skipidct", "all") // Skip IDCT
+        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
+        MPVLib.setPropertyString("vd-lavc-skipidct", "all")
         MPVLib.setPropertyString("vd-lavc-assemble", "yes")
-        
-        // Memory and buffer optimizations
-        MPVLib.setPropertyString("demuxer-max-back-bytes", "50M")
-        MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
-        
-        // Software rendering optimizations
-        MPVLib.setPropertyString("gpu-dumb-mode", "yes")
-        MPVLib.setPropertyString("opengl-pbo", "yes")
-        
-        // Network optimizations
-        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1")
-        MPVLib.setPropertyString("network-timeout", "30")
-        
-        // Audio processing
-        MPVLib.setPropertyString("audio-client-name", "MPVEx-Software-4Core")
-        MPVLib.setPropertyString("audio-samplerate", "auto")
-        
-        // Additional performance flags
-        MPVLib.setPropertyString("deband", "no")
-        MPVLib.setPropertyString("video-aspect-override", "no")
     }
     
     // OPTIMIZED: Update time and progress every 500ms with smart updates
@@ -211,19 +178,21 @@ fun PlayerOverlay(
                     totalTime = formatTimeSimple(duration)
                     lastSeconds = currentSeconds
                 }
+                
+                // Update seekbar position when NOT seeking
+                if (showSeekbar) {
+                    seekbarPosition = currentPos.toFloat()
+                    seekbarDuration = duration.toFloat()
+                    thumbPosition = currentPos.toFloat() // Keep thumb in sync
+                    frozenProgressPosition = currentPos.toFloat() // Keep progress in sync
+                }
             }
             
-            // OPTIMIZED: Only update seekbar position when NOT seeking
-            if (!isSeeking) {
-                seekbarPosition = currentPos.toFloat()
-                seekbarDuration = duration.toFloat()
-            }
-            
-            // Always update these for internal logic (they're cheap)
+            // Always update these for internal logic
             currentPosition = currentPos
             videoDuration = duration
             
-            delay(500) // OPTIMIZED: Reduced from 50ms to 500ms
+            delay(500)
         }
     }
     
@@ -255,11 +224,11 @@ fun PlayerOverlay(
         showSeekbar = true
     }
     
-    // ⭐ YOUTUBE-STYLE: Handle seekbar value change with frozen progress bar
+    // ⭐ YOUTUBE-STYLE: Handle seekbar value change with two-layer approach
     fun handleSeekbarValueChange(newPosition: Float) {
         if (!isSeeking) {
             isSeeking = true
-            seekStartPosition = seekbarPosition // Freeze progress bar at current position
+            frozenProgressPosition = seekbarPosition // Freeze bottom progress bar
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
             lastSeekTime = 0L
@@ -269,8 +238,7 @@ fun PlayerOverlay(
             }
         }
         
-        userSeekPosition = newPosition // Only thumb moves
-        
+        thumbPosition = newPosition // Only top thumb moves
         val targetPosition = newPosition.toDouble()
         
         val now = System.currentTimeMillis()
@@ -286,17 +254,29 @@ fun PlayerOverlay(
     // Handle seekbar value change finished
     fun handleSeekbarValueChangeFinished() {
         if (isSeeking) {
-            userSeekPosition = null
             isSeeking = false
             showSeekTime = false
             
-            // Progress bar instantly jumps to new position
-            seekbarPosition = userSeekPosition ?: seekbarPosition
+            // Hide thumb for 200ms to avoid blinking
+            isThumbVisible = false
+            
+            // Bottom progress bar jumps to new position
+            frozenProgressPosition = thumbPosition
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
                     delay(100)
                     MPVLib.setPropertyBoolean("pause", false)
+                    
+                    // Show thumb again after 200ms total
+                    delay(100)
+                    isThumbVisible = true
+                }
+            } else {
+                // Show thumb again after 200ms
+                coroutineScope.launch {
+                    delay(200)
+                    isThumbVisible = true
                 }
             }
             
@@ -304,7 +284,7 @@ fun PlayerOverlay(
         }
     }
     
-    // ⭐ DEBOUNCED: Continuous drag seeking gesture handler with 16ms debouncing
+    // ⭐ DEBOUNCED: Continuous drag seeking gesture handler
     fun handleDragSeekGesture(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -382,14 +362,11 @@ fun PlayerOverlay(
                 leftTapStartTime = System.currentTimeMillis()
                 leftIsHolding = true
                 
-                // Start checking for long press after 300ms
                 coroutineScope.launch {
                     delay(300)
                     if (leftIsHolding) {
-                        // Add 100ms buffer delay before speed-up
                         delay(100)
                         if (leftIsHolding) {
-                            // Long press detected - activate 2x speed
                             isSpeedingUp = true
                         }
                     }
@@ -401,14 +378,12 @@ fun PlayerOverlay(
                 leftIsHolding = false
                 
                 if (tapDuration < 200) {
-                    // Short tap - toggle seekbar
                     if (showSeekbar) {
                         showSeekbar = false
                     } else {
                         showSeekbar()
                     }
                 }
-                // Long press speed will auto-reset via LaunchedEffect
                 true
             }
             MotionEvent.ACTION_CANCEL -> {
@@ -426,14 +401,11 @@ fun PlayerOverlay(
                 rightTapStartTime = System.currentTimeMillis()
                 rightIsHolding = true
                 
-                // Start checking for long press after 300ms
                 coroutineScope.launch {
                     delay(300)
                     if (rightIsHolding) {
-                        // Add 100ms buffer delay before speed-up
                         delay(100)
                         if (rightIsHolding) {
-                            // Long press detected - activate 2x speed
                             isSpeedingUp = true
                         }
                     }
@@ -445,14 +417,12 @@ fun PlayerOverlay(
                 rightIsHolding = false
                 
                 if (tapDuration < 200) {
-                    // Short tap - toggle seekbar
                     if (showSeekbar) {
                         showSeekbar = false
                     } else {
                         showSeekbar()
                     }
                 }
-                // Long press speed will auto-reset via LaunchedEffect
                 true
             }
             MotionEvent.ACTION_CANCEL -> {
@@ -462,10 +432,6 @@ fun PlayerOverlay(
             else -> false
         }
     }
-    
-    // Calculate positions for YouTube-style seekbar
-    val progressBarPosition = if (isSeeking) seekStartPosition else seekbarPosition
-    val thumbPosition = if (isSeeking) (userSeekPosition ?: seekStartPosition) else seekbarPosition
     
     Box(
         modifier = modifier.fillMaxSize()
@@ -479,9 +445,7 @@ fun PlayerOverlay(
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
-                    onClick = {
-                        toggleVideoInfo()
-                    }
+                    onClick = { toggleVideoInfo() }
                 )
         )
         
@@ -498,12 +462,10 @@ fun PlayerOverlay(
                     .fillMaxWidth(0.27f)
                     .fillMaxHeight()
                     .align(Alignment.CenterStart)
-                    .pointerInteropFilter { event ->
-                        handleLeftAreaGesture(event)
-                    }
+                    .pointerInteropFilter { event -> handleLeftAreaGesture(event) }
             )
             
-            // CENTER 46% - Tap for pause/resume (using horizontal seek's smooth approach)
+            // CENTER 46% - Tap for pause/resume
             Box(
                 modifier = Modifier
                     .fillMaxWidth(0.46f)
@@ -515,15 +477,13 @@ fun PlayerOverlay(
                         onClick = {
                             val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
                             if (currentPaused) {
-                                // Smooth resume like horizontal seek
                                 coroutineScope.launch {
                                     val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
                                     MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
-                                    delay(100) // Small delay like horizontal seek
+                                    delay(100)
                                     MPVLib.setPropertyBoolean("pause", false)
                                 }
                             } else {
-                                // Immediate pause
                                 MPVLib.setPropertyBoolean("pause", true)
                             }
                             isPausing = !currentPaused
@@ -537,9 +497,7 @@ fun PlayerOverlay(
                     .fillMaxWidth(0.27f)
                     .fillMaxHeight()
                     .align(Alignment.CenterEnd)
-                    .pointerInteropFilter { event ->
-                        handleRightAreaGesture(event)
-                    }
+                    .pointerInteropFilter { event -> handleRightAreaGesture(event) }
             )
         }
         
@@ -549,12 +507,10 @@ fun PlayerOverlay(
                 .fillMaxWidth()
                 .fillMaxHeight(0.25f)
                 .align(Alignment.BottomStart)
-                .pointerInteropFilter { event ->
-                    handleDragSeekGesture(event)
-                }
+                .pointerInteropFilter { event -> handleDragSeekGesture(event) }
         )
         
-        // BOTTOM AREA - Times and Seekbar (all toggle together)
+        // BOTTOM AREA - Times and Seekbar
         if (showSeekbar) {
             Box(
                 modifier = Modifier
@@ -578,7 +534,6 @@ fun PlayerOverlay(
                             modifier = Modifier.align(Alignment.CenterStart),
                             horizontalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
-                            // Current time / total time
                             Text(
                                 text = "$currentTime / $totalTime",
                                 style = TextStyle(
@@ -593,26 +548,35 @@ fun PlayerOverlay(
                         }
                     }
                     
-                    // Seekbar
+                    // ⭐ TWO-LAYER SEEKBAR CONTAINER
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(24.dp)
                     ) {
-                        YouTubeStyleSeekbar(
-                            progressPosition = progressBarPosition, // Frozen during seek
-                            thumbPosition = thumbPosition, // Moves during seek
+                        // LAYER 1: BOTTOM - Frozen Progress Bar (Non-interactive)
+                        FrozenProgressSeekbar(
+                            position = if (isSeeking) frozenProgressPosition else seekbarPosition,
                             duration = seekbarDuration,
-                            onValueChange = { handleSeekbarValueChange(it) },
-                            onValueChangeFinished = { handleSeekbarValueChangeFinished() },
                             modifier = Modifier.fillMaxSize()
                         )
+                        
+                        // LAYER 2: TOP - Interactive Thumb Only
+                        if (isThumbVisible) {
+                            ThumbOnlySeekbar(
+                                position = thumbPosition,
+                                duration = seekbarDuration,
+                                onValueChange = { handleSeekbarValueChange(it) },
+                                onValueChangeFinished = { handleSeekbarValueChangeFinished() },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
                     }
                 }
             }
         }
         
-        // VIDEO INFO - Left Side (just below the 5% toggle area)
+        // VIDEO INFO - Left Side
         if (showVideoInfo != 0) {
             Text(
                 text = displayText,
@@ -629,19 +593,18 @@ fun PlayerOverlay(
             )
         }
         
-        // TOP CENTER AREA - 2X Speed and Seek Time (smaller size, below title area)
+        // TOP CENTER AREA - 2X Speed and Seek Time
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .offset(y = 80.dp) // Position below the title area
+                .offset(y = 80.dp)
         ) {
-            // 2X Speed feedback
             if (isSpeedingUp) {
                 Text(
                     text = "2X",
                     style = TextStyle(
                         color = Color.White,
-                        fontSize = 14.sp, // Smaller size to match time display
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.Medium
                     ),
                     modifier = Modifier
@@ -650,13 +613,12 @@ fun PlayerOverlay(
                 )
             }
             
-            // Center seek time - shows target position during seeking
             if (showSeekTime && !isSpeedingUp) {
                 Text(
                     text = seekTargetTime,
                     style = TextStyle(
                         color = Color.White,
-                        fontSize = 14.sp, // Smaller size to match time display
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.Medium
                     ),
                     modifier = Modifier
@@ -668,17 +630,41 @@ fun PlayerOverlay(
     }
 }
 
+// ⭐ LAYER 1: Bottom - Frozen Progress Bar (Non-interactive)
 @Composable
-fun YouTubeStyleSeekbar(
-    progressPosition: Float,
-    thumbPosition: Float,
+fun FrozenProgressSeekbar(
+    position: Float,
+    duration: Float,
+    modifier: Modifier = Modifier
+) {
+    Seeker(
+        value = position.coerceIn(0f, duration),
+        range = 0f..duration,
+        onValueChange = { }, // Non-interactive
+        onValueChangeFinished = { }, // Non-interactive
+        readAheadValue = 0f,
+        segments = persistentListOf(),
+        modifier = modifier,
+        colors = SeekerDefaults.seekerColors(
+            progressColor = Color.White,
+            thumbColor = Color.Transparent, // ❌ HIDDEN - No thumb
+            trackColor = Color.Gray.copy(alpha = 0.6f),
+            readAheadColor = Color.Gray,
+        ),
+    )
+}
+
+// ⭐ LAYER 2: Top - Interactive Thumb Only
+@Composable
+fun ThumbOnlySeekbar(
+    position: Float,
     duration: Float,
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Seeker(
-        value = thumbPosition.coerceIn(0f, duration), // Use thumb position for the seeker
+        value = position.coerceIn(0f, duration),
         range = 0f..duration,
         onValueChange = onValueChange,
         onValueChangeFinished = onValueChangeFinished,
@@ -686,10 +672,10 @@ fun YouTubeStyleSeekbar(
         segments = persistentListOf(),
         modifier = modifier,
         colors = SeekerDefaults.seekerColors(
-            progressColor = Color.White,
-            thumbColor = Color.White,
-            trackColor = Color.Gray.copy(alpha = 0.6f),
-            readAheadColor = Color.Gray,
+            progressColor = Color.Transparent, // ❌ HIDDEN - No progress
+            thumbColor = Color.White, // ✅ VISIBLE - Only thumb
+            trackColor = Color.Transparent, // ❌ HIDDEN - No track
+            readAheadColor = Color.Transparent, // ❌ HIDDEN
         ),
     )
 }
@@ -697,7 +683,6 @@ fun YouTubeStyleSeekbar(
 // Function to format time simply without milliseconds
 private fun formatTimeSimple(seconds: Double): String {
     val totalSeconds = seconds.toInt()
-    
     val hours = totalSeconds / 3600
     val minutes = (totalSeconds % 3600) / 60
     val secs = totalSeconds % 60
