@@ -408,8 +408,12 @@ fun PlayerOverlay(
                 coroutineScope.launch {
                     delay(300)
                     if (leftIsHolding) {
-                        // Long press detected - activate 2x speed
-                        isSpeedingUp = true
+                        // Add 100ms buffer delay before speed-up
+                        delay(100)
+                        if (leftIsHolding) {
+                            // Long press detected - activate 2x speed
+                            isSpeedingUp = true
+                        }
                     }
                 }
                 true
@@ -448,8 +452,12 @@ fun PlayerOverlay(
                 coroutineScope.launch {
                     delay(300)
                     if (rightIsHolding) {
-                        // Long press detected - activate 2x speed
-                        isSpeedingUp = true
+                        // Add 100ms buffer delay before speed-up
+                        delay(100)
+                        if (rightIsHolding) {
+                            // Long press detected - activate 2x speed
+                            isSpeedingUp = true
+                        }
                     }
                 }
                 true
@@ -635,7 +643,7 @@ fun PlayerOverlay(
                 ),
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .offset(x = 60.dp, y = 30.dp) // Moved up to 30.dp
+                    .offset(x = 60.dp, y = 20.dp) // Changed from 30.dp to 20.dp
                     .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 6.dp)
             )
