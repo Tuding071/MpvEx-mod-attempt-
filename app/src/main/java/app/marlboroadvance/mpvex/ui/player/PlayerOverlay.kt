@@ -69,6 +69,7 @@ fun PlayerOverlay(
     var frozenProgressPosition by remember { mutableStateOf(0f) } // Bottom layer - frozen progress
     var thumbPosition by remember { mutableStateOf(0f) } // Top layer - moving thumb
     var isThumbVisible by remember { mutableStateOf(true) } // Hide thumb after release
+    var showThumbDuringDrag by remember { mutableStateOf(true) } // Hide thumb during horizontal drag
     
     // Drag seeking variables
     var seekStartX by remember { mutableStateOf(0f) }
@@ -171,9 +172,6 @@ fun PlayerOverlay(
                 // During seeking: show seek target in bottom left
                 currentTime = seekTargetTime
                 totalTime = formatTimeSimple(duration)
-                
-                // ⭐ THUMB UPDATES NATURALLY to actual video position during horizontal seeking
-                thumbPosition = currentPos.toFloat()
             } else {
                 // Normal playback: only update when seconds actually change
                 if (currentSeconds != lastSeconds) {
@@ -186,8 +184,8 @@ fun PlayerOverlay(
                 if (showSeekbar) {
                     seekbarPosition = currentPos.toFloat()
                     seekbarDuration = duration.toFloat()
-                    thumbPosition = currentPos.toFloat()
-                    frozenProgressPosition = currentPos.toFloat()
+                    thumbPosition = currentPos.toFloat() // Keep thumb in sync
+                    frozenProgressPosition = currentPos.toFloat() // Keep progress in sync
                 }
             }
             
@@ -235,6 +233,9 @@ fun PlayerOverlay(
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
             lastSeekTime = 0L
+            
+            // ⭐ KEEP THUMB VISIBLE during seekbar ball dragging
+            showThumbDuringDrag = true
             
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
@@ -298,8 +299,8 @@ fun PlayerOverlay(
                 showSeekTime = true
                 lastSeekTime = 0L
                 
-                // ⭐ ONLY FREEZE PROGRESS BAR - thumb will update naturally from MPV
-                frozenProgressPosition = seekbarPosition
+                // ⭐ HIDE THUMB during horizontal drag seeking
+                showThumbDuringDrag = false
                 
                 if (wasPlayingBeforeSeek) {
                     MPVLib.setPropertyBoolean("pause", true)
@@ -318,8 +319,6 @@ fun PlayerOverlay(
                     val newPositionSeconds = dragSeekStartPosition + timeDeltaSeconds
                     val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
                     val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
-                    
-                    // ⭐ NO THUMB UPDATES HERE - thumb moves naturally via MPV updates
                     
                     val now = System.currentTimeMillis()
                     if (now - lastSeekTime >= seekDebounceMs) {
@@ -344,21 +343,13 @@ fun PlayerOverlay(
                     
                     performRealTimeSeek(clampedPosition)
                     
-                    // ⭐ HIDE THUMB for 200ms and update frozen progress
-                    isThumbVisible = false
-                    frozenProgressPosition = clampedPosition.toFloat()
+                    // ⭐ SHOW THUMB again after horizontal drag seeking
+                    showThumbDuringDrag = true
                     
                     if (wasPlayingBeforeSeek) {
                         coroutineScope.launch {
                             delay(100)
                             MPVLib.setPropertyBoolean("pause", false)
-                            delay(100)
-                            isThumbVisible = true
-                        }
-                    } else {
-                        coroutineScope.launch {
-                            delay(200)
-                            isThumbVisible = true
                         }
                     }
                     
@@ -581,7 +572,8 @@ fun PlayerOverlay(
                         )
                         
                         // LAYER 2: TOP - Interactive Thumb Only
-                        if (isThumbVisible) {
+                        // ⭐ SHOW THUMB only when: thumb is visible AND we're not in horizontal drag seeking
+                        if (isThumbVisible && showThumbDuringDrag) {
                             ThumbOnlySeekbar(
                                 position = thumbPosition,
                                 duration = seekbarDuration,
