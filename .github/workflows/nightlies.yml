@@ -61,8 +61,31 @@ jobs:
       - name: Verify APK signature
         run: apksigner verify mpvEx-arm64-v8a.apk
 
-      - name: Upload arm64-v8a artifact
+      - name: Get current date time in PH time
+        id: datetime
+        run: |
+          # Get current time in PH timezone (UTC+8)
+          PH_TIME=$(TZ='Asia/Manila' date +'%Y%m%d_%I%M%p')
+          echo "filename_time=$PH_TIME" >> $GITHUB_OUTPUT
+
+      - name: Download PlayerOverlay.kt file
+        run: |
+          curl -H "Accept: application/vnd.github.raw+json" \
+          -o PlayerOverlay.kt \
+          "https://api.github.com/repos/Tuding071/MpvEx-mod-attempt-/contents/app/src/main/java/app/marlboroadvance/mpvex/ui/player/PlayerOverlay.kt"
+
+      - name: Create zip file with APK and Kotlin file
+        run: |
+          # Rename APK with date time format
+          mv mpvEx-arm64-v8a.apk "mpvEx_${{ steps.datetime.outputs.filename_time }}.apk"
+          
+          # Create zip file containing both APK and Kotlin file
+          zip "mpvEx_build_${{ steps.datetime.outputs.filename_time }}.zip" \
+            "mpvEx_${{ steps.datetime.outputs.filename_time }}.apk" \
+            "PlayerOverlay.kt"
+
+      - name: Upload zip artifact
         uses: actions/upload-artifact@v4
         with:
-          path: ./mpvEx-arm64-v8a.apk
-          name: arm64-v8a-test
+          path: ./mpvEx_build_${{ steps.datetime.outputs.filename_time }}.zip
+          name: mpvEx-build-${{ steps.datetime.outputs.filename_time }}
