@@ -139,9 +139,17 @@ fun PlayerOverlay(
     // Handle speed reset when not holding
     LaunchedEffect(leftIsHolding, rightIsHolding) {
         if (!leftIsHolding && !rightIsHolding && isSpeedingUp) {
-            delay(100)
             MPVLib.setPropertyDouble("speed", 1.0)
             isSpeedingUp = false
+        }
+    }
+    
+    // Handle speed transitions IMMEDIATELY (no delays)
+    LaunchedEffect(isSpeedingUp) {
+        if (isSpeedingUp) {
+            MPVLib.setPropertyDouble("speed", 2.0) // Immediate
+        } else {
+            MPVLib.setPropertyDouble("speed", 1.0) // Immediate
         }
     }
     
@@ -231,17 +239,6 @@ fun PlayerOverlay(
             videoDuration = duration
             
             delay(500) // OPTIMIZED: Reduced from 50ms to 500ms
-        }
-    }
-    
-    // Handle speed transitions with 100ms delay
-    LaunchedEffect(isSpeedingUp) {
-        if (isSpeedingUp) {
-            delay(100)
-            MPVLib.setPropertyDouble("speed", 2.0)
-        } else {
-            delay(100)
-            MPVLib.setPropertyDouble("speed", 1.0)
         }
     }
     
@@ -509,6 +506,7 @@ fun PlayerOverlay(
                     .fillMaxWidth(0.03f)
                     .fillMaxHeight()
                     .align(Alignment.CenterStart)
+                    .pointerInteropFilter { true } // Consume touches
             )
             
             // Right 3% ignore area  
@@ -517,6 +515,7 @@ fun PlayerOverlay(
                     .fillMaxWidth(0.03f)
                     .fillMaxHeight()
                     .align(Alignment.CenterEnd)
+                    .pointerInteropFilter { true } // Consume touches
             )
         }
         
@@ -654,7 +653,7 @@ fun PlayerOverlay(
             }
         }
         
-        // VIDEO INFO - Left Side (aligned with seekbar time)
+        // VIDEO INFO - Left Side (just below the 5% toggle area)
         if (showVideoInfo != 0) {
             Text(
                 text = displayText,
@@ -664,8 +663,8 @@ fun PlayerOverlay(
                     fontWeight = FontWeight.Medium
                 ),
                 modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .offset(x = 60.dp, y = (-70).dp)
+                    .align(Alignment.TopStart)
+                    .offset(x = 60.dp, y = 40.dp) // Positioned below toggle area
                     .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 6.dp)
             )
