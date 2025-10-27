@@ -104,23 +104,15 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // Smooth speed ramp effect
+    // Web-player style smooth speed transitions
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
-            // 6-step speed ramp with 80ms between steps
-            MPVLib.setPropertyDouble("speed", 1.1)
-            delay(80)
-            MPVLib.setPropertyDouble("speed", 1.3)
-            delay(80)
-            MPVLib.setPropertyDouble("speed", 1.6)
-            delay(80)
-            MPVLib.setPropertyDouble("speed", 1.9)
-            delay(80)
-            MPVLib.setPropertyDouble("speed", 2.1)
-            delay(80)
-            MPVLib.setPropertyDouble("speed", 2.0) // Final correction
+            // Single gradual step like web players
+            MPVLib.command("multiply", "speed", "1.8") // Direct to 1.8x
+            delay(100)
+            MPVLib.command("multiply", "speed", "1.11") // Then to 2.0x (1.8 * 1.11 ≈ 2.0)
         } else {
-            // Immediate return to normal speed
+            // Reset to exactly 1.0x
             MPVLib.setPropertyDouble("speed", 1.0)
         }
     }
@@ -378,7 +370,7 @@ fun PlayerOverlay(
         return false
     }
     
-    // Left area gesture handler with 880ms total speed ramp
+    // Left area gesture handler
     fun handleLeftAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -390,10 +382,10 @@ fun PlayerOverlay(
                 speedRampJob = coroutineScope.launch {
                     delay(300)
                     if (leftIsHolding) {
-                        // Add 100ms buffer delay before starting speed ramp
+                        // Add 100ms buffer delay before speed-up
                         delay(100)
                         if (leftIsHolding) {
-                            // Long press detected - activate smooth speed ramp to 2x
+                            // Long press detected - activate 2x speed
                             isSpeedingUp = true
                         }
                     }
@@ -431,7 +423,7 @@ fun PlayerOverlay(
         }
     }
     
-    // Right area gesture handler with 880ms total speed ramp
+    // Right area gesture handler
     fun handleRightAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -443,10 +435,10 @@ fun PlayerOverlay(
                 speedRampJob = coroutineScope.launch {
                     delay(300)
                     if (rightIsHolding) {
-                        // Add 100ms buffer delay before starting speed ramp
+                        // Add 100ms buffer delay before speed-up
                         delay(100)
                         if (rightIsHolding) {
-                            // Long press detected - activate smooth speed ramp to 2x
+                            // Long press detected - activate 2x speed
                             isSpeedingUp = true
                         }
                     }
@@ -571,7 +563,7 @@ fun PlayerOverlay(
                 }
         )
         
-        // BOTTOM AREA - Times and Seekbar (all toggle together) - MOVED FURTHER DOWN
+        // BOTTOM AREA - Times and Seekbar (all toggle together) - LOWERED POSITION
         if (showSeekbar) {
             Box(
                 modifier = Modifier
@@ -579,7 +571,7 @@ fun PlayerOverlay(
                     .height(70.dp)
                     .align(Alignment.BottomStart)
                     .padding(horizontal = 60.dp)
-                    .offset(y = (-50).dp) // MOVED FURTHER DOWN from -30.dp to -50.dp
+                    .offset(y = (-50).dp) // LOWERED from -30.dp to -50.dp
             ) {
                 Column(
                     modifier = Modifier.fillMaxSize(),
