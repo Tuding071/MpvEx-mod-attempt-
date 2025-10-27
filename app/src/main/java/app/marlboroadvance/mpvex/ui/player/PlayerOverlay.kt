@@ -99,25 +99,7 @@ fun PlayerOverlay(
     var fileName by remember { mutableStateOf("file.mp4") }
     var videoInfoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    // Speed control
-    var speedRampJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
-    
-    // 20-step linear speed ramp - every 30ms from 1.0 to 2.0
-    LaunchedEffect(isSpeedingUp) {
-        if (isSpeedingUp) {
-            // Linear ramp: 1.0, 1.05, 1.10, 1.15, ..., 2.0
-            for (step in 1..20) {
-                val speed = 1.0 + (step * 0.05) // 1.05, 1.10, 1.15, ..., 2.0
-                MPVLib.setPropertyDouble("speed", speed)
-                delay(30) // 30ms between each step
-            }
-        } else {
-            // Immediate return to normal speed
-            MPVLib.setPropertyDouble("speed", 1.0)
-        }
-    }
     
     // Get video title and filename at start and show filename
     LaunchedEffect(Unit) {
@@ -143,7 +125,17 @@ fun PlayerOverlay(
     // Handle speed reset when not holding
     LaunchedEffect(leftIsHolding, rightIsHolding) {
         if (!leftIsHolding && !rightIsHolding && isSpeedingUp) {
+            MPVLib.setPropertyDouble("speed", 1.0)
             isSpeedingUp = false
+        }
+    }
+    
+    // Handle speed transitions IMMEDIATELY (no delays)
+    LaunchedEffect(isSpeedingUp) {
+        if (isSpeedingUp) {
+            MPVLib.setPropertyDouble("speed", 2.0) // Immediate
+        } else {
+            MPVLib.setPropertyDouble("speed", 1.0) // Immediate
         }
     }
     
@@ -387,8 +379,7 @@ fun PlayerOverlay(
                 leftIsHolding = true
                 
                 // Start checking for long press after 300ms
-                speedRampJob?.cancel()
-                speedRampJob = coroutineScope.launch {
+                coroutineScope.launch {
                     delay(300)
                     if (leftIsHolding) {
                         // Add 100ms buffer delay before speed-up
@@ -404,7 +395,6 @@ fun PlayerOverlay(
             MotionEvent.ACTION_UP -> {
                 val tapDuration = System.currentTimeMillis() - leftTapStartTime
                 leftIsHolding = false
-                speedRampJob?.cancel()
                 
                 if (tapDuration < 200) {
                     // Short tap - toggle seekbar
@@ -419,7 +409,6 @@ fun PlayerOverlay(
             }
             MotionEvent.ACTION_CANCEL -> {
                 leftIsHolding = false
-                speedRampJob?.cancel()
                 true
             }
             else -> false
@@ -434,8 +423,7 @@ fun PlayerOverlay(
                 rightIsHolding = true
                 
                 // Start checking for long press after 300ms
-                speedRampJob?.cancel()
-                speedRampJob = coroutineScope.launch {
+                coroutineScope.launch {
                     delay(300)
                     if (rightIsHolding) {
                         // Add 100ms buffer delay before speed-up
@@ -451,7 +439,6 @@ fun PlayerOverlay(
             MotionEvent.ACTION_UP -> {
                 val tapDuration = System.currentTimeMillis() - rightTapStartTime
                 rightIsHolding = false
-                speedRampJob?.cancel()
                 
                 if (tapDuration < 200) {
                     // Short tap - toggle seekbar
@@ -466,7 +453,6 @@ fun PlayerOverlay(
             }
             MotionEvent.ACTION_CANCEL -> {
                 rightIsHolding = false
-                speedRampJob?.cancel()
                 true
             }
             else -> false
@@ -560,7 +546,7 @@ fun PlayerOverlay(
                 }
         )
         
-        // BOTTOM AREA - Times and Seekbar (all toggle together) - MOVED DOWN CORRECTLY
+        // BOTTOM AREA - Times and Seekbar (all toggle together) - LOWERED POSITION
         if (showSeekbar) {
             Box(
                 modifier = Modifier
@@ -568,11 +554,11 @@ fun PlayerOverlay(
                     .height(70.dp)
                     .align(Alignment.BottomStart)
                     .padding(horizontal = 60.dp)
-                    .offset(y = 30.dp) // POSITIVE offset moves it DOWN
+                    .offset(y = (-10).dp) 
             ) {
                 Column(
                     modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     // Time display
                     Box(
