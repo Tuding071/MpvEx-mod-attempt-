@@ -104,15 +104,28 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // Web-player style smooth speed transitions
+    // 8-step bezier curve speed ramp over 1000ms
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
-            // Single gradual step like web players
-            MPVLib.command("multiply", "speed", "1.8") // Direct to 1.8x
+            // 8-step bezier curve speed ramp
+            MPVLib.setPropertyDouble("speed", 1.05)
+            delay(80)
+            MPVLib.setPropertyDouble("speed", 1.15)
             delay(100)
-            MPVLib.command("multiply", "speed", "1.11") // Then to 2.0x (1.8 * 1.11 ≈ 2.0)
+            MPVLib.setPropertyDouble("speed", 1.3)
+            delay(120)
+            MPVLib.setPropertyDouble("speed", 1.5)
+            delay(140)
+            MPVLib.setPropertyDouble("speed", 1.75)
+            delay(140)
+            MPVLib.setPropertyDouble("speed", 1.9)
+            delay(120)
+            MPVLib.setPropertyDouble("speed", 1.98)
+            delay(100)
+            MPVLib.setPropertyDouble("speed", 2.0)
+            delay(80) // Final buffer
         } else {
-            // Reset to exactly 1.0x
+            // Immediate return to normal speed
             MPVLib.setPropertyDouble("speed", 1.0)
         }
     }
