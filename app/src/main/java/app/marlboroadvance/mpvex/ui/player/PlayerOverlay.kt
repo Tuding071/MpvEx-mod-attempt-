@@ -52,6 +52,8 @@ import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.Utils
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
+import android.content.Intent
+import android.net.Uri
 
 @Composable
 fun PlayerOverlay(
@@ -96,20 +98,33 @@ fun PlayerOverlay(
     // Video title and filename state
     var showVideoInfo by remember { mutableStateOf(0) } // 0=hide, 1=filename
     var videoTitle by remember { mutableStateOf("Video") }
-    var fileName by remember { mutableStateOf("file.mp4") }
+    var fileName by remember { mutableStateOf("Video") }
     var videoInfoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // Get video title and filename at start and show filename
+    // IMPROVED: Get video filename from multiple sources
     LaunchedEffect(Unit) {
+        // Try to get filename from the Intent that started this activity
+        val intent = (context as? android.app.Activity)?.intent
+        fileName = when {
+            intent?.action == Intent.ACTION_SEND -> {
+                // Handle share intent
+                getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context)
+            }
+            intent?.action == Intent.ACTION_VIEW -> {
+                // Handle view intent (most common)
+                getFileNameFromUri(intent.data, context)
+            }
+            else -> {
+                // Fallback: try multiple sources
+                getBestAvailableFileName(context)
+            }
+        }
+        
         // Get video title from MPV
         val title = MPVLib.getPropertyString("media-title") ?: "Video"
         videoTitle = title
-        
-        // Get filename from path
-        val path = MPVLib.getPropertyString("path") ?: "file.mp4"
-        fileName = path.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "file" }
         
         // Show filename at start
         showVideoInfo = 1
@@ -728,4 +743,64 @@ private fun formatTimeSimple(seconds: Double): String {
     } else {
         String.format("%02d:%02d", minutes, secs)
     }
+}
+
+// IMPROVED: Helper functions for filename detection
+private fun getFileNameFromUri(uri: Uri?, context: android.content.Context): String {
+    if (uri == null) return getBestAvailableFileName(context)
+    
+    return when {
+        uri.scheme == "file" -> {
+            // Direct file path - this is what file managers use
+            uri.lastPathSegment?.substringBeforeLast(".") ?: getBestAvailableFileName(context)
+        }
+        uri.scheme == "content" -> {
+            // Content URI - try to extract real filename
+            getDisplayNameFromContentUri(uri, context) ?: getBestAvailableFileName(context)
+        }
+        uri.scheme in listOf("http", "https") -> {
+            // Network URL
+            uri.lastPathSegment?.substringBeforeLast(".") ?: "Online Video"
+        }
+        else -> getBestAvailableFileName(context)
+    }
+}
+
+private fun getDisplayNameFromContentUri(uri: Uri, context: android.content.Context): String? {
+    return try {
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                // Try multiple column names for display name
+                val displayNameIndex = cursor.getColumnIndex("_display_name")
+                val displayName = if (displayNameIndex != -1) {
+                    cursor.getString(displayNameIndex)?.substringBeforeLast(".")
+                } else null
+                
+                // If no display name, try to extract from URI itself as fallback
+                displayName ?: uri.lastPathSegment?.substringBeforeLast(".")
+            } else {
+                null
+            }
+        }
+    } catch (e: Exception) {
+        null
+    }
+}
+
+// NEW: Function to try multiple fallback sources for filename
+private fun getBestAvailableFileName(context: android.content.Context): String {
+    // Try MPV media-title first
+    val mediaTitle = MPVLib.getPropertyString("media-title")
+    if (mediaTitle != null && mediaTitle != "Video" && mediaTitle.isNotBlank()) {
+        return mediaTitle.substringBeforeLast(".")
+    }
+    
+    // Try MPV path as last resort
+    val mpvPath = MPVLib.getPropertyString("path")
+    if (mpvPath != null && mpvPath.isNotBlank()) {
+        return mpvPath.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "Video" }
+    }
+    
+    // Final fallback
+    return "Video"
 }
