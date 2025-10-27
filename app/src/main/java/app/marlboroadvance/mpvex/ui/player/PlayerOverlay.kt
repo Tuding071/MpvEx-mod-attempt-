@@ -154,25 +154,33 @@ fun PlayerOverlay(
         }
     }
     
-    // OPTIMIZED SOFTWARE DECODING - 4 cores & 150MB cache
+    // OPTIMIZED SOFTWARE DECODING - 4 cores & 150MB cache + NETWORK STREAMING OPTIMIZATIONS
     LaunchedEffect(Unit) {
         // PURE SOFTWARE DECODING (no GPU acceleration)
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
         MPVLib.setPropertyString("profile", "fast")
         
+        // ⭐ NETWORK STREAMING OPTIMIZATIONS
+        MPVLib.setPropertyString("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+        MPVLib.setPropertyString("network-timeout", "30")
+        MPVLib.setPropertyString("hls-bitrate", "max")
+        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1:user_agent=Mozilla/5.0")
+        MPVLib.setPropertyString("ytdl", "yes")
+        MPVLib.setPropertyString("ytdl-format", "best")
+        
+        // Network buffer and cache optimizations
+        MPVLib.setPropertyString("cache", "yes")
+        MPVLib.setPropertyInt("demuxer-max-bytes", 150 * 1024 * 1024) // 150MB cache
+        MPVLib.setPropertyString("cache-secs", "120") // Increased to 120 seconds for streaming
+        MPVLib.setPropertyString("demuxer-readahead-secs", "120")
+        MPVLib.setPropertyString("cache-pause", "no")
+        MPVLib.setPropertyString("cache-initial", "1.0")
+        
         // OPTIMIZED: 4 cores for software decoding (reduced from 8)
         MPVLib.setPropertyString("vd-lavc-threads", "4")
         MPVLib.setPropertyString("audio-channels", "auto") // OPTIMIZED: Auto-detect instead of 8 channels
         MPVLib.setPropertyString("demuxer-lavf-threads", "4")
-        
-        // OPTIMIZED: 150MB cache allocation (reduced from 250MB)
-        MPVLib.setPropertyString("cache", "yes")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 150 * 1024 * 1024)
-        MPVLib.setPropertyString("demuxer-readahead-secs", "60") // Reduced from 120 to 60 seconds
-        MPVLib.setPropertyString("cache-secs", "60")
-        MPVLib.setPropertyString("cache-pause", "no")
-        MPVLib.setPropertyString("cache-initial", "0.5")
         
         // OPTIMIZED: Software decoding optimizations with quality reduction
         MPVLib.setPropertyString("video-sync", "display-resample")
@@ -194,9 +202,10 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("gpu-dumb-mode", "yes")
         MPVLib.setPropertyString("opengl-pbo", "yes")
         
-        // Network optimizations
-        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1")
-        MPVLib.setPropertyString("network-timeout", "30")
+        // Additional network optimizations
+        MPVLib.setPropertyString("prefetch-playlist", "yes")
+        MPVLib.setPropertyString("force-seekable", "yes")
+        MPVLib.setPropertyString("demuxer-mkv-subtitle-preroll", "yes")
         
         // Audio processing
         MPVLib.setPropertyString("audio-client-name", "MPVEx-Software-4Core")
@@ -569,7 +578,7 @@ fun PlayerOverlay(
                     .height(70.dp)
                     .align(Alignment.BottomStart)
                     .padding(horizontal = 60.dp)
-                    .offset(y = (-10).dp) 
+                    .offset(y = (-9).dp) 
             ) {
                 Column(
                     modifier = Modifier.fillMaxSize(),
