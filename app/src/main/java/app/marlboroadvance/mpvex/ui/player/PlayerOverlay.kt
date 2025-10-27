@@ -104,26 +104,15 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // 8-step bezier curve speed ramp over 1000ms
+    // 20-step linear speed ramp - every 30ms from 1.0 to 2.0
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
-            // 8-step bezier curve speed ramp
-            MPVLib.setPropertyDouble("speed", 1.05)
-            delay(80)
-            MPVLib.setPropertyDouble("speed", 1.15)
-            delay(100)
-            MPVLib.setPropertyDouble("speed", 1.3)
-            delay(120)
-            MPVLib.setPropertyDouble("speed", 1.5)
-            delay(140)
-            MPVLib.setPropertyDouble("speed", 1.75)
-            delay(140)
-            MPVLib.setPropertyDouble("speed", 1.9)
-            delay(120)
-            MPVLib.setPropertyDouble("speed", 1.98)
-            delay(100)
-            MPVLib.setPropertyDouble("speed", 2.0)
-            delay(80) // Final buffer
+            // Linear ramp: 1.0, 1.05, 1.10, 1.15, ..., 2.0
+            for (step in 1..20) {
+                val speed = 1.0 + (step * 0.05) // 1.05, 1.10, 1.15, ..., 2.0
+                MPVLib.setPropertyDouble("speed", speed)
+                delay(30) // 30ms between each step
+            }
         } else {
             // Immediate return to normal speed
             MPVLib.setPropertyDouble("speed", 1.0)
@@ -148,6 +137,13 @@ fun PlayerOverlay(
         videoInfoJob = coroutineScope.launch {
             delay(4000)
             showVideoInfo = 0
+        }
+    }
+    
+    // Handle speed reset when not holding
+    LaunchedEffect(leftIsHolding, rightIsHolding) {
+        if (!leftIsHolding && !rightIsHolding && isSpeedingUp) {
+            isSpeedingUp = false
         }
     }
     
@@ -383,7 +379,7 @@ fun PlayerOverlay(
         return false
     }
     
-    // Left area gesture handler
+    // Left area gesture handler with proper tap/hold detection
     fun handleLeftAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -418,25 +414,19 @@ fun PlayerOverlay(
                         showSeekbar()
                     }
                 }
-                // Speed will auto-reset via LaunchedEffect when isSpeedingUp becomes false
-                if (isSpeedingUp) {
-                    isSpeedingUp = false
-                }
+                // Long press speed will auto-reset via LaunchedEffect
                 true
             }
             MotionEvent.ACTION_CANCEL -> {
                 leftIsHolding = false
                 speedRampJob?.cancel()
-                if (isSpeedingUp) {
-                    isSpeedingUp = false
-                }
                 true
             }
             else -> false
         }
     }
     
-    // Right area gesture handler
+    // Right area gesture handler with proper tap/hold detection
     fun handleRightAreaGesture(event: MotionEvent): Boolean {
         return when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -471,18 +461,12 @@ fun PlayerOverlay(
                         showSeekbar()
                     }
                 }
-                // Speed will auto-reset via LaunchedEffect when isSpeedingUp becomes false
-                if (isSpeedingUp) {
-                    isSpeedingUp = false
-                }
+                // Long press speed will auto-reset via LaunchedEffect
                 true
             }
             MotionEvent.ACTION_CANCEL -> {
                 rightIsHolding = false
                 speedRampJob?.cancel()
-                if (isSpeedingUp) {
-                    isSpeedingUp = false
-                }
                 true
             }
             else -> false
@@ -576,7 +560,7 @@ fun PlayerOverlay(
                 }
         )
         
-        // BOTTOM AREA - Times and Seekbar (all toggle together) - LOWERED POSITION
+        // BOTTOM AREA - Times and Seekbar (all toggle together) - MOVED DOWN CORRECTLY
         if (showSeekbar) {
             Box(
                 modifier = Modifier
@@ -584,7 +568,7 @@ fun PlayerOverlay(
                     .height(70.dp)
                     .align(Alignment.BottomStart)
                     .padding(horizontal = 60.dp)
-                    .offset(y = (-50).dp) // LOWERED from -30.dp to -50.dp
+                    .offset(y = 30.dp) // POSITIVE offset moves it DOWN
             ) {
                 Column(
                     modifier = Modifier.fillMaxSize(),
