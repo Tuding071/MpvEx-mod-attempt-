@@ -154,20 +154,24 @@ fun PlayerOverlay(
         }
     }
     
-    // OPTIMIZED SOFTWARE DECODING - 4 cores & 150MB cache + NETWORK STREAMING OPTIMIZATIONS
+    // OPTIMIZED SOFTWARE DECODING - 4 cores & 150MB cache + UNIVERSAL STREAMING OPTIMIZATIONS
     LaunchedEffect(Unit) {
         // PURE SOFTWARE DECODING (no GPU acceleration)
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
         MPVLib.setPropertyString("profile", "fast")
         
-        // ⭐ NETWORK STREAMING OPTIMIZATIONS
+        // ⭐ UNIVERSAL STREAMING OPTIMIZATIONS - WORKS FOR ANY URL
         MPVLib.setPropertyString("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
         MPVLib.setPropertyString("network-timeout", "30")
+        
+        // HLS specific settings for any HLS stream
         MPVLib.setPropertyString("hls-bitrate", "max")
-        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1:user_agent=Mozilla/5.0")
-        MPVLib.setPropertyString("ytdl", "yes")
-        MPVLib.setPropertyString("ytdl-format", "best")
+        MPVLib.setPropertyString("hls-connect-timeout", "30")
+        MPVLib.setPropertyString("hls-timeout", "30")
+        
+        // Universal protocol support
+        MPVLib.setPropertyString("protocol-whitelist", "file,http,https,tcp,tls,crypto,rtmp,rtmps,rtp,data")
         
         // Network buffer and cache optimizations
         MPVLib.setPropertyString("cache", "yes")
@@ -205,7 +209,7 @@ fun PlayerOverlay(
         // Additional network optimizations
         MPVLib.setPropertyString("prefetch-playlist", "yes")
         MPVLib.setPropertyString("force-seekable", "yes")
-        MPVLib.setPropertyString("demuxer-mkv-subtitle-preroll", "yes")
+        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1")
         
         // Audio processing
         MPVLib.setPropertyString("audio-client-name", "MPVEx-Software-4Core")
@@ -578,7 +582,7 @@ fun PlayerOverlay(
                     .height(70.dp)
                     .align(Alignment.BottomStart)
                     .padding(horizontal = 60.dp)
-                    .offset(y = (-9).dp) 
+                    .offset(y = (-10).dp) 
             ) {
                 Column(
                     modifier = Modifier.fillMaxSize(),
