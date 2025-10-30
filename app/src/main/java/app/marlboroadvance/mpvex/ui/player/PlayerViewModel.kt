@@ -112,6 +112,10 @@ class PlayerViewModel(
     private val _remainingTime = MutableStateFlow(0)
     val remainingTime = _remainingTime.asStateFlow()
 
+    // Add state to track if volume was triggered by button
+    private val _volumeTriggeredByButton = MutableStateFlow(false)
+    val volumeTriggeredByButton = _volumeTriggeredByButton.asStateFlow()
+
     fun startTimer(seconds: Int) {
         timerJob?.cancel()
         _remainingTime.value = seconds
@@ -168,12 +172,42 @@ class PlayerViewModel(
     fun unpause() = MPVLib.setPropertyBoolean("pause", false)
 
     private val showStatusBar = playerPreferences.showSystemStatusBar.get()
-    fun showControls() { /* UI Disabled */ }
-    fun hideControls() { /* UI Disabled */ }
-    fun hideSeekBar() { /* UI Disabled */ }
-    fun showSeekBar() { /* UI Disabled */ }
-    fun lockControls() { /* UI Disabled */ }
-    fun unlockControls() { /* UI Disabled */ }
+    
+    fun showControls() { 
+        if (!_volumeTriggeredByButton.value) {
+            _controlsShown.value = true
+        }
+    }
+    
+    fun hideControls() { 
+        if (!_volumeTriggeredByButton.value) {
+            _controlsShown.value = false
+        }
+    }
+    
+    fun hideSeekBar() { 
+        if (!_volumeTriggeredByButton.value) {
+            _seekBarShown.value = false
+        }
+    }
+    
+    fun showSeekBar() { 
+        if (!_volumeTriggeredByButton.value) {
+            _seekBarShown.value = true
+        }
+    }
+    
+    fun lockControls() { 
+        if (!_volumeTriggeredByButton.value) {
+            _areControlsLocked.value = true
+        }
+    }
+    
+    fun unlockControls() { 
+        if (!_volumeTriggeredByButton.value) {
+            _areControlsLocked.value = false
+        }
+    }
 
     fun seekBy(offset: Int, precise: Boolean = false) {
         MPVLib.command("seek", offset.toString(), if (precise) "relative+exact" else "relative")
@@ -184,60 +218,184 @@ class PlayerViewModel(
         MPVLib.command("seek", position.toString(), if (precise) "absolute" else "absolute+keyframes")
     }
 
-    fun changeBrightnessBy(change: Float) { /* UI Disabled */ }
-    fun changeBrightnessTo(brightness: Float) { /* UI Disabled */ }
-    fun displayBrightnessSlider() { /* UI Disabled */ }
+    fun changeBrightnessBy(change: Float) { 
+        if (!_volumeTriggeredByButton.value) {
+            // Your brightness change logic here
+        }
+    }
+    
+    fun changeBrightnessTo(brightness: Float) { 
+        if (!_volumeTriggeredByButton.value) {
+            // Your brightness change logic here
+        }
+    }
+    
+    fun displayBrightnessSlider() { 
+        if (!_volumeTriggeredByButton.value) {
+            isBrightnessSliderShown.value = true
+            viewModelScope.launch {
+                delay(2000)
+                isBrightnessSliderShown.value = false
+            }
+        }
+    }
 
     val maxVolume = activity.audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+    
     fun changeVolumeBy(change: Int) {
+        // Set volume triggered flag
+        _volumeTriggeredByButton.value = true
+        
         val mpvVolume = MPVLib.getPropertyInt("volume")
         if ((volumeBoostCap ?: audioPreferences.volumeBoostCap.get()) > 0 && currentVolume.value == maxVolume) {
             if (mpvVolume == 100 && change < 0) changeVolumeTo(currentVolume.value + change)
             val finalMPVVolume = (mpvVolume?.plus(change))?.coerceAtLeast(100) ?: 100
             if (finalMPVVolume in 100..(volumeBoostCap ?: audioPreferences.volumeBoostCap.get()) + 100) {
                 changeMPVVolumeTo(finalMPVVolume)
+                // Show volume slider when changing MPV volume
+                displayVolumeSlider()
                 return
             }
         }
         changeVolumeTo(currentVolume.value + change)
+        
+        // Show volume slider
+        displayVolumeSlider()
     }
 
     fun changeVolumeTo(volume: Int) {
+        // Set volume triggered flag
+        _volumeTriggeredByButton.value = true
+        
         val newVolume = volume.coerceIn(0..maxVolume)
         activity.audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, newVolume, 0)
         currentVolume.update { newVolume }
+        
+        // Show volume slider
+        displayVolumeSlider()
     }
 
     fun changeMPVVolumeTo(volume: Int) = MPVLib.setPropertyInt("volume", volume)
-    fun setMPVVolume(volume: Int) { /* UI Disabled */ }
-    fun displayVolumeSlider() { /* UI Disabled */ }
+    
+    fun setMPVVolume(volume: Int) { 
+        // Set volume triggered flag
+        _volumeTriggeredByButton.value = true
+        changeMPVVolumeTo(volume)
+        displayVolumeSlider()
+    }
+    
+    fun displayVolumeSlider() { 
+        // Always show volume slider regardless of other UI state
+        isVolumeSliderShown.value = true
+        _volumeTriggeredByButton.value = true
+        
+        viewModelScope.launch {
+            delay(2000) // Show for 2 seconds
+            isVolumeSliderShown.value = false
+            _volumeTriggeredByButton.value = false
+        }
+    }
 
-    fun changeVideoAspect(aspect: VideoAspect) { /* UI Disabled */ }
-    fun cycleScreenRotations() { /* UI Disabled */ }
+    fun changeVideoAspect(aspect: VideoAspect) { 
+        if (!_volumeTriggeredByButton.value) {
+            // Your aspect ratio change logic here
+        }
+    }
+    
+    fun cycleScreenRotations() { 
+        if (!_volumeTriggeredByButton.value) {
+            // Your rotation logic here
+        }
+    }
 
     @Suppress("CyclomaticComplexMethod", "LongMethod")
-    fun handleLuaInvocation(property: String, value: String) { /* UI Disabled */ }
+    fun handleLuaInvocation(property: String, value: String) { 
+        if (!_volumeTriggeredByButton.value) {
+            // Your Lua invocation logic here
+        }
+    }
 
     private val inputMethodManager = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-    private fun forceShowSoftwareKeyboard() { /* UI Disabled */ }
-    private fun forceHideSoftwareKeyboard() { /* UI Disabled */ }
+    private fun forceShowSoftwareKeyboard() { 
+        if (!_volumeTriggeredByButton.value) {
+            // Your keyboard show logic here
+        }
+    }
+    
+    private fun forceHideSoftwareKeyboard() { 
+        if (!_volumeTriggeredByButton.value) {
+            // Your keyboard hide logic here
+        }
+    }
 
-    private fun seekToWithText(seekValue: Int, text: String?) { /* UI Disabled */ }
-    private fun seekByWithText(value: Int, text: String?) { /* UI Disabled */ }
+    private fun seekToWithText(seekValue: Int, text: String?) { 
+        if (!_volumeTriggeredByButton.value) {
+            // Your seek with text logic here
+        }
+    }
+    
+    private fun seekByWithText(value: Int, text: String?) { 
+        if (!_volumeTriggeredByButton.value) {
+            // Your seek by with text logic here
+        }
+    }
 
     private val doubleTapToSeekDuration = gesturePreferences.doubleTapToSeekDuration.get()
 
     // <<< STUBS ADDED TO FIX GESTUREHANDLER.KT >>>
-    fun updateSeekAmount(amount: Int) { /* No-op stub */ }
-    fun updateSeekText(text: String?) { /* No-op stub */ }
+    fun updateSeekAmount(amount: Int) { 
+        if (!_volumeTriggeredByButton.value) {
+            // Your update seek amount logic here
+        }
+    }
+    
+    fun updateSeekText(text: String?) { 
+        if (!_volumeTriggeredByButton.value) {
+            // Your update seek text logic here
+        }
+    }
 
-    fun leftSeek() { /* UI Disabled */ }
-    fun rightSeek() { /* UI Disabled */ }
-    fun handleLeftDoubleTap() { /* UI Disabled */ }
-    fun handleCenterDoubleTap() { /* UI Disabled */ }
-    fun handleRightDoubleTap() { /* UI Disabled */ }
-    fun setVideoZoom(zoom: Float) { /* UI Disabled */ }
-    fun updateFrameInfo() { /* UI Disabled */ }
+    fun leftSeek() { 
+        if (!_volumeTriggeredByButton.value) {
+            // Your left seek logic here
+        }
+    }
+    
+    fun rightSeek() { 
+        if (!_volumeTriggeredByButton.value) {
+            // Your right seek logic here
+        }
+    }
+    
+    fun handleLeftDoubleTap() { 
+        if (!_volumeTriggeredByButton.value) {
+            // Your left double tap logic here
+        }
+    }
+    
+    fun handleCenterDoubleTap() { 
+        if (!_volumeTriggeredByButton.value) {
+            // Your center double tap logic here
+        }
+    }
+    
+    fun handleRightDoubleTap() { 
+        if (!_volumeTriggeredByButton.value) {
+            // Your right double tap logic here
+        }
+    }
+    
+    fun setVideoZoom(zoom: Float) { 
+        if (!_volumeTriggeredByButton.value) {
+            // Your video zoom logic here
+        }
+    }
+    
+    fun updateFrameInfo() { 
+        if (!_volumeTriggeredByButton.value) {
+            // Your frame info update logic here
+        }
+    }
 }
 
 fun Float.normalize(inMin: Float, inMax: Float, outMin: Float, outMax: Float): Float {
