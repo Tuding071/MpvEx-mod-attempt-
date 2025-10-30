@@ -115,28 +115,28 @@ fun PlayerOverlay(
     var downscaleJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     // ⭐ NEW: Volume feedback
-    var showVolumeFeedback by remember { mutableStateOf(false) }
+    var showVolumeFeedbackState by remember { mutableStateOf(false) }
     var currentVolume by remember { mutableStateOf(viewModel.currentVolume.value) }
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
+    
+    // ⭐ FIXED: Volume feedback function as a lambda
+    val showVolumeFeedback: (Int) -> Unit = { volume ->
+        volumeFeedbackJob?.cancel()
+        showVolumeFeedbackState = true
+        
+        volumeFeedbackJob = coroutineScope.launch {
+            delay(1000) // Show for 1 second
+            showVolumeFeedbackState = false
+        }
+    }
     
     // ⭐ NEW: Observe volume changes from ViewModel
     LaunchedEffect(viewModel.currentVolume) {
         viewModel.currentVolume.collect { volume ->
             currentVolume = volume
             showVolumeFeedback(volume)
-        }
-    }
-    
-    // ⭐ NEW: Function to show volume feedback
-    fun showVolumeFeedback(volume: Int) {
-        volumeFeedbackJob?.cancel()
-        showVolumeFeedback = true
-        
-        volumeFeedbackJob = coroutineScope.launch {
-            delay(1000) // Show for 1 second
-            showVolumeFeedback = false
         }
     }
     
@@ -775,7 +775,7 @@ fun PlayerOverlay(
         ) {
             // ⭐ UPDATED: Priority order: Volume > 2X Speed > Seek Time > Playback Feedback
             when {
-                showVolumeFeedback -> {
+                showVolumeFeedbackState -> {
                     Text(
                         text = "Volume: ${(currentVolume.toFloat() / viewModel.maxVolume.toFloat() * 100).toInt()}%",
                         style = TextStyle(
