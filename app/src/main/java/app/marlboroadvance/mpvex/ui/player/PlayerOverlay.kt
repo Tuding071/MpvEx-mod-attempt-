@@ -121,15 +121,7 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // ⭐ NEW: Observe volume changes from ViewModel
-    LaunchedEffect(viewModel.currentVolume) {
-        viewModel.currentVolume.collect { volume ->
-            currentVolume = volume
-            showVolumeFeedback(volume)
-        }
-    }
-    
-    // ⭐ NEW: Function to show volume feedback
+    // ⭐ NEW: Function to show volume feedback (DEFINED FIRST)
     fun showVolumeFeedback(volume: Int) {
         volumeFeedbackJob?.cancel()
         showVolumeFeedback = true
@@ -140,7 +132,15 @@ fun PlayerOverlay(
         }
     }
     
-    // ⭐ NEW: Function to revert to normal quality (DEFINED FIRST)
+    // ⭐ NEW: Observe volume changes from ViewModel
+    LaunchedEffect(viewModel.currentVolume) {
+        viewModel.currentVolume.collect { volume ->
+            currentVolume = volume
+            showVolumeFeedback(volume)
+        }
+    }
+    
+    // ⭐ NEW: Function to revert to normal quality
     fun revertToNormalQuality() {
         if (isDownscaled) {
             MPVLib.setPropertyString("scale", "no")
