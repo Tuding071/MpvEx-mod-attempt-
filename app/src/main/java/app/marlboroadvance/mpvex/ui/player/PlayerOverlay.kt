@@ -123,7 +123,27 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // ⭐ NEW: Volume key handling
+    // ⭐ NEW: Function to show volume feedback (DEFINED FIRST)
+    fun showVolumeFeedback(volume: Int) {
+        volumeFeedbackJob?.cancel()
+        currentVolume = volume
+        showVolumeFeedback = true
+        
+        volumeFeedbackJob = coroutineScope.launch {
+            delay(1000) // Show for 1 second like other feedback
+            showVolumeFeedback = false
+        }
+    }
+    
+    // ⭐ NEW: Function to handle volume changes (DEFINED SECOND)
+    fun handleVolumeChange(change: Int) {
+        val newVolume = (currentVolume + change).coerceIn(0, 100)
+        currentVolume = newVolume
+        MPVLib.setPropertyInt("volume", newVolume)
+        showVolumeFeedback(newVolume)
+    }
+    
+    // ⭐ NEW: Volume key handling (NOW IT CAN CALL handleVolumeChange)
     val currentView = LocalView.current
     
     LaunchedEffect(currentView) {
@@ -146,27 +166,7 @@ fun PlayerOverlay(
         }
     }
     
-    // ⭐ NEW: Function to show volume feedback
-    fun showVolumeFeedback(volume: Int) {
-        volumeFeedbackJob?.cancel()
-        currentVolume = volume
-        showVolumeFeedback = true
-        
-        volumeFeedbackJob = coroutineScope.launch {
-            delay(1000) // Show for 1 second like other feedback
-            showVolumeFeedback = false
-        }
-    }
-    
-    // ⭐ NEW: Function to handle volume changes
-    fun handleVolumeChange(change: Int) {
-        val newVolume = (currentVolume + change).coerceIn(0, 100)
-        currentVolume = newVolume
-        MPVLib.setPropertyInt("volume", newVolume)
-        showVolumeFeedback(newVolume)
-    }
-    
-    // ⭐ NEW: Function to revert to normal quality (DEFINED FIRST)
+    // ⭐ NEW: Function to revert to normal quality
     fun revertToNormalQuality() {
         if (isDownscaled) {
             MPVLib.setPropertyString("scale", "no")
