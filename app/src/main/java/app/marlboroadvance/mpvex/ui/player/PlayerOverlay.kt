@@ -114,7 +114,31 @@ fun PlayerOverlay(
     var isDownscaled by remember { mutableStateOf(false) }
     var downscaleJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
+    // ⭐ NEW: Volume feedback
+    var showVolumeFeedback by remember { mutableStateOf(false) }
+    var currentVolume by remember { mutableStateOf(viewModel.currentVolume.value) }
+    var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
+    
+    // ⭐ NEW: Observe volume changes from ViewModel
+    LaunchedEffect(viewModel.currentVolume) {
+        viewModel.currentVolume.collect { volume ->
+            currentVolume = volume
+            showVolumeFeedback(volume)
+        }
+    }
+    
+    // ⭐ NEW: Function to show volume feedback
+    fun showVolumeFeedback(volume: Int) {
+        volumeFeedbackJob?.cancel()
+        showVolumeFeedback = true
+        
+        volumeFeedbackJob = coroutineScope.launch {
+            delay(1000) // Show for 1 second
+            showVolumeFeedback = false
+        }
+    }
     
     // ⭐ NEW: Function to revert to normal quality (DEFINED FIRST)
     fun revertToNormalQuality() {
@@ -743,14 +767,27 @@ fun PlayerOverlay(
             )
         }
         
-        // ⭐ UPDATED: TOP CENTER AREA - Now shows multiple feedback types
+        // ⭐ UPDATED: TOP CENTER AREA - Now shows multiple feedback types with VOLUME priority
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .offset(y = 80.dp) // Position below the title area
         ) {
-            // Priority order: 2X Speed > Seek Time > Playback Feedback
+            // ⭐ UPDATED: Priority order: Volume > 2X Speed > Seek Time > Playback Feedback
             when {
+                showVolumeFeedback -> {
+                    Text(
+                        text = "Volume: $currentVolume%",
+                        style = TextStyle(
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        ),
+                        modifier = Modifier
+                            .background(Color.DarkGray.copy(alpha = 0.8f))
+                            .padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
+                }
                 isSpeedingUp -> {
                     Text(
                         text = "2X",
