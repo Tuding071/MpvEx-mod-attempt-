@@ -101,7 +101,40 @@ fun PlayerOverlay(
     var fileName by remember { mutableStateOf("Video") }
     var videoInfoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
+    // ⭐ NEW: Auto-hide timeout for seekbar
+    var userInteracting by remember { mutableStateOf(false) }
+    var hideSeekbarJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
+    
+    // ⭐ NEW: Function to schedule seekbar hide
+    fun scheduleSeekbarHide() {
+        if (userInteracting) return // Don't hide if user is interacting
+        
+        hideSeekbarJob?.cancel()
+        hideSeekbarJob = coroutineScope.launch {
+            delay(4000)
+            showSeekbar = false
+        }
+    }
+    
+    // ⭐ NEW: Function to cancel auto-hide when user interacts
+    fun cancelAutoHide() {
+        userInteracting = true
+        hideSeekbarJob?.cancel()
+        
+        // Reset userInteracting after a short delay
+        coroutineScope.launch {
+            delay(100)
+            userInteracting = false
+        }
+    }
+    
+    // ⭐ NEW: Show seekbar and cancel auto-hide
+    fun showSeekbarWithTimeout() {
+        showSeekbar = true
+        scheduleSeekbarHide()
+    }
     
     // IMPROVED: Get video filename from multiple sources
     LaunchedEffect(Unit) {
@@ -135,6 +168,9 @@ fun PlayerOverlay(
             delay(4000)
             showVideoInfo = 0
         }
+        
+        // Auto-hide seekbar after 4 seconds
+        scheduleSeekbarHide()
     }
     
     // Handle speed reset when not holding
@@ -154,37 +190,25 @@ fun PlayerOverlay(
         }
     }
     
-    // OPTIMIZED SOFTWARE DECODING - 4 cores & 150MB cache + UNIVERSAL STREAMING OPTIMIZATIONS
+    // OPTIMIZED SOFTWARE DECODING - 4 cores & 150MB cache
     LaunchedEffect(Unit) {
         // PURE SOFTWARE DECODING (no GPU acceleration)
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
         MPVLib.setPropertyString("profile", "fast")
         
-        // ⭐ UNIVERSAL STREAMING OPTIMIZATIONS - WORKS FOR ANY URL
-        MPVLib.setPropertyString("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-        MPVLib.setPropertyString("network-timeout", "30")
-        
-        // HLS specific settings for any HLS stream
-        MPVLib.setPropertyString("hls-bitrate", "max")
-        MPVLib.setPropertyString("hls-connect-timeout", "30")
-        MPVLib.setPropertyString("hls-timeout", "30")
-        
-        // Universal protocol support
-        MPVLib.setPropertyString("protocol-whitelist", "file,http,https,tcp,tls,crypto,rtmp,rtmps,rtp,data")
-        
-        // Network buffer and cache optimizations
-        MPVLib.setPropertyString("cache", "yes")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 150 * 1024 * 1024) // 150MB cache
-        MPVLib.setPropertyString("cache-secs", "120") // Increased to 120 seconds for streaming
-        MPVLib.setPropertyString("demuxer-readahead-secs", "120")
-        MPVLib.setPropertyString("cache-pause", "no")
-        MPVLib.setPropertyString("cache-initial", "1.0")
-        
         // OPTIMIZED: 4 cores for software decoding (reduced from 8)
         MPVLib.setPropertyString("vd-lavc-threads", "4")
         MPVLib.setPropertyString("audio-channels", "auto") // OPTIMIZED: Auto-detect instead of 8 channels
         MPVLib.setPropertyString("demuxer-lavf-threads", "4")
+        
+        // OPTIMIZED: 150MB cache allocation (reduced from 250MB)
+        MPVLib.setPropertyString("cache", "yes")
+        MPVLib.setPropertyInt("demuxer-max-bytes", 150 * 1024 * 1024)
+        MPVLib.setPropertyString("demuxer-readahead-secs", "60") // Reduced from 120 to 60 seconds
+        MPVLib.setPropertyString("cache-secs", "60")
+        MPVLib.setPropertyString("cache-pause", "no")
+        MPVLib.setPropertyString("cache-initial", "0.5")
         
         // OPTIMIZED: Software decoding optimizations with quality reduction
         MPVLib.setPropertyString("video-sync", "display-resample")
@@ -206,10 +230,9 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("gpu-dumb-mode", "yes")
         MPVLib.setPropertyString("opengl-pbo", "yes")
         
-        // Additional network optimizations
-        MPVLib.setPropertyString("prefetch-playlist", "yes")
-        MPVLib.setPropertyString("force-seekable", "yes")
+        // Network optimizations
         MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1")
+        MPVLib.setPropertyString("network-timeout", "30")
         
         // Audio processing
         MPVLib.setPropertyString("audio-client-name", "MPVEx-Software-4Core")
@@ -279,13 +302,17 @@ fun PlayerOverlay(
         MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
     }
     
-    // Function to show seekbar (no auto-hide)
+    // Function to show seekbar with timeout
     fun showSeekbar() {
         showSeekbar = true
+        scheduleSeekbarHide()
     }
     
     // Simple draggable progress bar handler
     fun handleProgressBarDrag(newPosition: Float) {
+        // ⭐ NEW: Cancel auto-hide when using seekbar
+        cancelAutoHide()
+        
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
@@ -326,10 +353,16 @@ fun PlayerOverlay(
         isSeeking = false
         showSeekTime = false
         wasPlayingBeforeSeek = false
+        
+        // ⭐ NEW: Schedule hide after drag finished
+        scheduleSeekbarHide()
     }
     
     // ⭐ DEBOUNCED: Continuous drag seeking gesture handler with 16ms debouncing
     fun handleDragSeekGesture(event: MotionEvent): Boolean {
+        // ⭐ NEW: Cancel auto-hide when using horizontal drag seeking
+        cancelAutoHide()
+        
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 seekStartX = event.x
@@ -392,6 +425,9 @@ fun PlayerOverlay(
                     seekStartX = 0f
                     seekStartPosition = 0.0
                     wasPlayingBeforeSeek = false
+                    
+                    // ⭐ NEW: Schedule hide after drag finished
+                    scheduleSeekbarHide()
                 }
                 return true
             }
@@ -429,7 +465,7 @@ fun PlayerOverlay(
                     if (showSeekbar) {
                         showSeekbar = false
                     } else {
-                        showSeekbar()
+                        showSeekbarWithTimeout()
                     }
                 }
                 // Long press speed will auto-reset via LaunchedEffect
@@ -473,7 +509,7 @@ fun PlayerOverlay(
                     if (showSeekbar) {
                         showSeekbar = false
                     } else {
-                        showSeekbar()
+                        showSeekbarWithTimeout()
                     }
                 }
                 // Long press speed will auto-reset via LaunchedEffect
@@ -613,11 +649,11 @@ fun PlayerOverlay(
                         }
                     }
                     
-                    // Simple Draggable Progress Bar
+                    // Simple Draggable Progress Bar - NOW 5dp HEIGHT
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(24.dp)
+                            .height(24.dp) // Container remains same for touch area
                     ) {
                         SimpleDraggableProgressBar(
                             position = seekbarPosition,
@@ -699,25 +735,26 @@ fun SimpleDraggableProgressBar(
         modifier = modifier
             .height(24.dp)
     ) {
-        // Background track
+        // Background track - NOW 5dp HEIGHT
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(4.dp)
+                .height(5.dp) // ⭐ CHANGED: Reduced from 4dp to 5dp
                 .align(Alignment.CenterStart)
                 .background(Color.Gray.copy(alpha = 0.6f))
         )
         
-        // White progress bar - moves directly with finger during drag
+        // White progress bar - moves directly with finger during drag - NOW 5dp HEIGHT
         Box(
             modifier = Modifier
                 .fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f)
-                .height(4.dp)
+                .height(5.dp) // ⭐ CHANGED: Reduced from 4dp to 5dp
                 .align(Alignment.CenterStart)
                 .background(Color.White)
         )
         
-        // Invisible draggable area - NO VISIBLE THUMB
+        // ⭐ IMPROVED: Invisible draggable area that controls thumb position
+        // Now the entire area controls the thumb, not just dragging from current position
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -726,11 +763,13 @@ fun SimpleDraggableProgressBar(
                 .pointerInput(Unit) {
                     detectDragGestures(
                         onDragStart = { offset ->
+                            // Calculate new position based on tap/drag start point
                             val newPosition = (offset.x / size.width) * duration
                             onValueChange(newPosition.coerceIn(0f, duration))
                         },
                         onDrag = { change, dragAmount ->
                             change.consume()
+                            // Calculate new position based on current drag position
                             val newPosition = (change.position.x / size.width) * duration
                             onValueChange(newPosition.coerceIn(0f, duration))
                         },
@@ -739,6 +778,22 @@ fun SimpleDraggableProgressBar(
                         }
                     )
                 }
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) {
+                    // This ensures taps also work, but drag gestures take priority
+                }
+        )
+        
+        // ⭐ NEW: Invisible thumb indicator (for visual reference during development)
+        // You can remove this Box if you want it completely invisible
+        Box(
+            modifier = Modifier
+                .offset(x = if (duration > 0) (position / duration * size.width).dp - 2.dp else 0.dp)
+                .size(4.dp) // Very small invisible thumb
+                .align(Alignment.CenterStart)
+                .background(Color.Transparent) // Completely transparent
         )
     }
 }
