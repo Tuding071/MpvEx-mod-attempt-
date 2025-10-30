@@ -110,7 +110,38 @@ fun PlayerOverlay(
     var playbackFeedbackText by remember { mutableStateOf("") }
     var playbackFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
+    // ⭐ NEW: 480p downscaling during seeking
+    var isDownscaled by remember { mutableStateOf(false) }
+    var downscaleJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
+    
+    // ⭐ NEW: Function to activate 480p downscaling for seeking
+    fun activateSeekingMode() {
+        if (!isDownscaled) {
+            coroutineScope.launch {
+                // Small delay to ensure smooth transition
+                delay(30)
+                MPVLib.setPropertyString("scale", "480")
+                isDownscaled = true
+            }
+        }
+        
+        // Reset the auto-revert timer
+        downscaleJob?.cancel()
+        downscaleJob = coroutineScope.launch {
+            delay(600) // Keep downscaled for 600ms after seeking ends
+            revertToNormalQuality()
+        }
+    }
+    
+    // ⭐ NEW: Function to revert to normal quality
+    fun revertToNormalQuality() {
+        if (isDownscaled) {
+            MPVLib.setPropertyString("scale", "no")
+            isDownscaled = false
+        }
+    }
     
     // ⭐ NEW: Function to schedule seekbar hide
     fun scheduleSeekbarHide() {
@@ -329,6 +360,8 @@ fun PlayerOverlay(
     fun handleProgressBarDrag(newPosition: Float) {
         // ⭐ NEW: Cancel auto-hide when using seekbar
         cancelAutoHide()
+        // ⭐ NEW: Activate 480p downscaling for smooth seeking
+        activateSeekingMode()
         
         if (!isSeeking) {
             isSeeking = true
@@ -373,6 +406,7 @@ fun PlayerOverlay(
         
         // ⭐ NEW: Schedule hide after drag finished
         scheduleSeekbarHide()
+        // Downscale will auto-revert after 600ms via downscaleJob
     }
     
     // ⭐ DEBOUNCED: Continuous drag seeking gesture handler with 16ms debouncing
@@ -382,6 +416,9 @@ fun PlayerOverlay(
         
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
+                // ⭐ NEW: Activate 480p downscaling for smooth seeking
+                activateSeekingMode()
+                
                 seekStartX = event.x
                 seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
                 wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
@@ -445,6 +482,7 @@ fun PlayerOverlay(
                     
                     // ⭐ NEW: Schedule hide after drag finished
                     scheduleSeekbarHide()
+                    // Downscale will auto-revert after 600ms via downscaleJob
                 }
                 return true
             }
