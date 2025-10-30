@@ -1,7 +1,6 @@
 package app.marlboroadvance.mpvex.ui.player
 
 import android.view.MotionEvent
-import android.view.KeyEvent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -34,7 +33,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -116,57 +114,9 @@ fun PlayerOverlay(
     var isDownscaled by remember { mutableStateOf(false) }
     var downscaleJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    // ⭐ NEW: Volume feedback
-    var showVolumeFeedback by remember { mutableStateOf(false) }
-    var currentVolume by remember { mutableStateOf(50) } // Default volume
-    var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // ⭐ NEW: Function to show volume feedback (DEFINED FIRST)
-    fun showVolumeFeedback(volume: Int) {
-        volumeFeedbackJob?.cancel()
-        currentVolume = volume
-        showVolumeFeedback = true
-        
-        volumeFeedbackJob = coroutineScope.launch {
-            delay(1000) // Show for 1 second like other feedback
-            showVolumeFeedback = false
-        }
-    }
-    
-    // ⭐ NEW: Function to handle volume changes (DEFINED SECOND)
-    fun handleVolumeChange(change: Int) {
-        val newVolume = (currentVolume + change).coerceIn(0, 100)
-        currentVolume = newVolume
-        MPVLib.setPropertyInt("volume", newVolume)
-        showVolumeFeedback(newVolume)
-    }
-    
-    // ⭐ NEW: Volume key handling (NOW IT CAN CALL handleVolumeChange)
-    val currentView = LocalView.current
-    
-    LaunchedEffect(currentView) {
-        currentView.setOnKeyListener { _, keyCode, event ->
-            if (event.action == KeyEvent.ACTION_DOWN) {
-                when (keyCode) {
-                    KeyEvent.KEYCODE_VOLUME_UP -> {
-                        handleVolumeChange(5)
-                        true // Consume the event
-                    }
-                    KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                        handleVolumeChange(-5)
-                        true // Consume the event
-                    }
-                    else -> false
-                }
-            } else {
-                false
-            }
-        }
-    }
-    
-    // ⭐ NEW: Function to revert to normal quality
+    // ⭐ NEW: Function to revert to normal quality (DEFINED FIRST)
     fun revertToNormalQuality() {
         if (isDownscaled) {
             MPVLib.setPropertyString("scale", "no")
@@ -256,10 +206,6 @@ fun PlayerOverlay(
         // Get video title from MPV
         val title = MPVLib.getPropertyString("media-title") ?: "Video"
         videoTitle = title
-        
-        // Get initial volume from MPV
-        val initialVolume = MPVLib.getPropertyInt("volume") ?: 50
-        currentVolume = initialVolume
         
         // Show filename at start
         showVideoInfo = 1
@@ -797,27 +743,14 @@ fun PlayerOverlay(
             )
         }
         
-        // ⭐ UPDATED: TOP CENTER AREA - Now shows multiple feedback types with VOLUME priority
+        // ⭐ UPDATED: TOP CENTER AREA - Now shows multiple feedback types
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .offset(y = 80.dp) // Position below the title area
         ) {
-            // ⭐ UPDATED: Priority order: Volume > 2X Speed > Seek Time > Playback Feedback
+            // Priority order: 2X Speed > Seek Time > Playback Feedback
             when {
-                showVolumeFeedback -> {
-                    Text(
-                        text = "Volume: $currentVolume%",
-                        style = TextStyle(
-                            color = Color.White,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium
-                        ),
-                        modifier = Modifier
-                            .background(Color.DarkGray.copy(alpha = 0.8f))
-                            .padding(horizontal = 12.dp, vertical = 4.dp)
-                    )
-                }
                 isSpeedingUp -> {
                     Text(
                         text = "2X",
