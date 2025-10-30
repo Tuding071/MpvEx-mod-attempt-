@@ -54,6 +54,8 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
 
 @Composable
 fun PlayerOverlay(
@@ -731,6 +733,9 @@ fun SimpleDraggableProgressBar(
     onValueChangeFinished: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Calculate progress percentage
+    val progress = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f
+    
     Box(
         modifier = modifier
             .height(24.dp)
@@ -739,7 +744,7 @@ fun SimpleDraggableProgressBar(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(5.dp) // ⭐ CHANGED: Reduced from 4dp to 5dp
+                .height(5.dp) // ⭐ CHANGED: Reduced to 5dp
                 .align(Alignment.CenterStart)
                 .background(Color.Gray.copy(alpha = 0.6f))
         )
@@ -747,13 +752,13 @@ fun SimpleDraggableProgressBar(
         // White progress bar - moves directly with finger during drag - NOW 5dp HEIGHT
         Box(
             modifier = Modifier
-                .fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f)
-                .height(5.dp) // ⭐ CHANGED: Reduced from 4dp to 5dp
+                .fillMaxWidth(fraction = progress)
+                .height(5.dp) // ⭐ CHANGED: Reduced to 5dp
                 .align(Alignment.CenterStart)
                 .background(Color.White)
         )
         
-        // ⭐ IMPROVED: Invisible draggable area that controls thumb position
+        // ⭐ FIXED: Invisible draggable area that controls thumb position
         // Now the entire area controls the thumb, not just dragging from current position
         Box(
             modifier = Modifier
@@ -786,13 +791,15 @@ fun SimpleDraggableProgressBar(
                 }
         )
         
-        // ⭐ NEW: Invisible thumb indicator (for visual reference during development)
-        // You can remove this Box if you want it completely invisible
+        // ⭐ FIXED: Invisible thumb indicator - using graphicsLayer for proper positioning
         Box(
             modifier = Modifier
-                .offset(x = if (duration > 0) (position / duration * size.width).dp - 2.dp else 0.dp)
-                .size(4.dp) // Very small invisible thumb
+                .fillMaxWidth()
+                .height(24.dp)
                 .align(Alignment.CenterStart)
+                .graphicsLayer {
+                    translationX = progress * size.width
+                }
                 .background(Color.Transparent) // Completely transparent
         )
     }
