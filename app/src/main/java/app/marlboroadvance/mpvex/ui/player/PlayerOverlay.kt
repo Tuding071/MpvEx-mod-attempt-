@@ -54,8 +54,6 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.graphicsLayer
 
 @Composable
 fun PlayerOverlay(
@@ -107,6 +105,11 @@ fun PlayerOverlay(
     var userInteracting by remember { mutableStateOf(false) }
     var hideSeekbarJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
+    // ⭐ NEW: Pause/Resume feedback
+    var showPlaybackFeedback by remember { mutableStateOf(false) }
+    var playbackFeedbackText by remember { mutableStateOf("") }
+    var playbackFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
     // ⭐ NEW: Function to schedule seekbar hide
@@ -136,6 +139,18 @@ fun PlayerOverlay(
     fun showSeekbarWithTimeout() {
         showSeekbar = true
         scheduleSeekbarHide()
+    }
+    
+    // ⭐ NEW: Show playback feedback
+    fun showPlaybackFeedback(text: String) {
+        playbackFeedbackJob?.cancel()
+        showPlaybackFeedback = true
+        playbackFeedbackText = text
+        
+        playbackFeedbackJob = coroutineScope.launch {
+            delay(1000) // Show for 1 second
+            showPlaybackFeedback = false
+        }
     }
     
     // IMPROVED: Get video filename from multiple sources
@@ -580,9 +595,13 @@ fun PlayerOverlay(
                                     delay(100) // Small delay like horizontal seek
                                     MPVLib.setPropertyBoolean("pause", false)
                                 }
+                                // ⭐ NEW: Show resume feedback
+                                showPlaybackFeedback("Resume")
                             } else {
                                 // Immediate pause
                                 MPVLib.setPropertyBoolean("pause", true)
+                                // ⭐ NEW: Show pause feedback
+                                showPlaybackFeedback("Pause")
                             }
                             isPausing = !currentPaused
                         }
@@ -620,7 +639,7 @@ fun PlayerOverlay(
                     .height(70.dp)
                     .align(Alignment.BottomStart)
                     .padding(horizontal = 60.dp)
-                    .offset(y = (-10).dp) 
+                    .offset(y = (-5).dp) 
             ) {
                 Column(
                     modifier = Modifier.fillMaxSize(),
@@ -651,11 +670,11 @@ fun PlayerOverlay(
                         }
                     }
                     
-                    // Simple Draggable Progress Bar - NOW 5dp HEIGHT
+                    // Simple Draggable Progress Bar
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(24.dp) // Container remains same for touch area
+                            .height(24.dp)
                     ) {
                         SimpleDraggableProgressBar(
                             position = seekbarPosition,
@@ -686,40 +705,53 @@ fun PlayerOverlay(
             )
         }
         
-        // TOP CENTER AREA - 2X Speed and Seek Time (smaller size, below title area)
+        // ⭐ UPDATED: TOP CENTER AREA - Now shows multiple feedback types
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .offset(y = 80.dp) // Position below the title area
         ) {
-            // 2X Speed feedback
-            if (isSpeedingUp) {
-                Text(
-                    text = "2X",
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 14.sp, // Smaller size to match time display
-                        fontWeight = FontWeight.Medium
-                    ),
-                    modifier = Modifier
-                        .background(Color.DarkGray.copy(alpha = 0.8f))
-                        .padding(horizontal = 12.dp, vertical = 4.dp)
-                )
-            }
-            
-            // Center seek time - shows target position during seeking
-            if (showSeekTime && !isSpeedingUp) {
-                Text(
-                    text = seekTargetTime,
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 14.sp, // Smaller size to match time display
-                        fontWeight = FontWeight.Medium
-                    ),
-                    modifier = Modifier
-                        .background(Color.DarkGray.copy(alpha = 0.8f))
-                        .padding(horizontal = 12.dp, vertical = 4.dp)
-                )
+            // Priority order: 2X Speed > Seek Time > Playback Feedback
+            when {
+                isSpeedingUp -> {
+                    Text(
+                        text = "2X",
+                        style = TextStyle(
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        ),
+                        modifier = Modifier
+                            .background(Color.DarkGray.copy(alpha = 0.8f))
+                            .padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
+                }
+                showSeekTime -> {
+                    Text(
+                        text = seekTargetTime,
+                        style = TextStyle(
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        ),
+                        modifier = Modifier
+                            .background(Color.DarkGray.copy(alpha = 0.8f))
+                            .padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
+                }
+                showPlaybackFeedback -> {
+                    Text(
+                        text = playbackFeedbackText,
+                        style = TextStyle(
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        ),
+                        modifier = Modifier
+                            .background(Color.DarkGray.copy(alpha = 0.8f))
+                            .padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
+                }
             }
         }
     }
@@ -733,33 +765,29 @@ fun SimpleDraggableProgressBar(
     onValueChangeFinished: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // Calculate progress percentage
-    val progress = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f
-    
     Box(
         modifier = modifier
             .height(24.dp)
     ) {
-        // Background track - NOW 5dp HEIGHT
+        // Background track
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(5.dp) // ⭐ CHANGED: Reduced to 5dp
+                .height(4.dp)
                 .align(Alignment.CenterStart)
                 .background(Color.Gray.copy(alpha = 0.6f))
         )
         
-        // White progress bar - moves directly with finger during drag - NOW 5dp HEIGHT
+        // White progress bar - moves directly with finger during drag
         Box(
             modifier = Modifier
-                .fillMaxWidth(fraction = progress)
-                .height(5.dp) // ⭐ CHANGED: Reduced to 5dp
+                .fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f)
+                .height(4.dp)
                 .align(Alignment.CenterStart)
                 .background(Color.White)
         )
         
-        // ⭐ FIXED: Invisible draggable area that controls thumb position
-        // Now the entire area controls the thumb, not just dragging from current position
+        // Invisible draggable area - NO VISIBLE THUMB
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -768,13 +796,11 @@ fun SimpleDraggableProgressBar(
                 .pointerInput(Unit) {
                     detectDragGestures(
                         onDragStart = { offset ->
-                            // Calculate new position based on tap/drag start point
                             val newPosition = (offset.x / size.width) * duration
                             onValueChange(newPosition.coerceIn(0f, duration))
                         },
                         onDrag = { change, dragAmount ->
                             change.consume()
-                            // Calculate new position based on current drag position
                             val newPosition = (change.position.x / size.width) * duration
                             onValueChange(newPosition.coerceIn(0f, duration))
                         },
@@ -783,24 +809,6 @@ fun SimpleDraggableProgressBar(
                         }
                     )
                 }
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null
-                ) {
-                    // This ensures taps also work, but drag gestures take priority
-                }
-        )
-        
-        // ⭐ FIXED: Invisible thumb indicator - using graphicsLayer for proper positioning
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(24.dp)
-                .align(Alignment.CenterStart)
-                .graphicsLayer {
-                    translationX = progress * size.width
-                }
-                .background(Color.Transparent) // Completely transparent
         )
     }
 }
