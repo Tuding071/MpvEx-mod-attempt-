@@ -116,6 +116,14 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
+    // ⭐ NEW: Function to revert to normal quality (DEFINED FIRST)
+    fun revertToNormalQuality() {
+        if (isDownscaled) {
+            MPVLib.setPropertyString("scale", "no")
+            isDownscaled = false
+        }
+    }
+    
     // ⭐ NEW: Function to activate 480p downscaling for seeking
     fun activateSeekingMode() {
         if (!isDownscaled) {
@@ -132,14 +140,6 @@ fun PlayerOverlay(
         downscaleJob = coroutineScope.launch {
             delay(600) // Keep downscaled for 600ms after seeking ends
             revertToNormalQuality()
-        }
-    }
-    
-    // ⭐ NEW: Function to revert to normal quality
-    fun revertToNormalQuality() {
-        if (isDownscaled) {
-            MPVLib.setPropertyString("scale", "no")
-            isDownscaled = false
         }
     }
     
