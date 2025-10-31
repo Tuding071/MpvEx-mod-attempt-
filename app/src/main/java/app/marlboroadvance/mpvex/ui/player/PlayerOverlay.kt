@@ -50,6 +50,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.Utils
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import android.content.Intent
 import android.net.Uri
@@ -118,6 +119,11 @@ fun PlayerOverlay(
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
+    
+    // ADD MISSING FUNCTION: performRealTimeSeek
+    fun performRealTimeSeek(targetPosition: Double) {
+        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+    }
     
     fun toggleVideoInfo() {
         showVideoInfo = if (showVideoInfo == 0) 1 else 0
@@ -430,10 +436,6 @@ fun PlayerOverlay(
     val displayText = when (showVideoInfo) {
         1 -> fileName
         else -> ""
-    }
-    
-    fun performRealTimeSeek(targetPosition: Double) {
-        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
     }
     
     fun handleProgressBarDrag(newPosition: Float) {
