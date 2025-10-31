@@ -290,35 +290,6 @@ fun PlayerOverlay(
         }
     }
     
-    // Get video filename from multiple sources
-    LaunchedEffect(Unit) {
-        val intent = (context as? android.app.Activity)?.intent
-        fileName = when {
-            intent?.action == Intent.ACTION_SEND -> {
-                getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context)
-            }
-            intent?.action == Intent.ACTION_VIEW -> {
-                getFileNameFromUri(intent.data, context)
-            }
-            else -> {
-                getBestAvailableFileName(context)
-            }
-        }
-        
-        val title = MPVLib.getPropertyString("media-title") ?: "Video"
-        videoTitle = title
-        
-        showVideoInfo = 1
-        
-        videoInfoJob?.cancel()
-        videoInfoJob = coroutineScope.launch {
-            delay(4000)
-            showVideoInfo = 0
-        }
-        
-        scheduleSeekbarHide()
-    }
-    
     // Software decoding optimization
     LaunchedEffect(Unit) {
         MPVLib.setPropertyString("hwdec", "no")
@@ -577,14 +548,21 @@ fun PlayerOverlay(
                             handleMergedTap()
                         },
                         onLongPress = { 
-                            // Long press handled - keep it active until release
-                            pendingLongPress = true
-                        },
-                        onRelease = {
-                            // FIXED: Release long press when finger is lifted
-                            cancelLongPress()
+                            // Long press detected - we'll handle the release manually
                         }
                     )
+                }
+                // FIXED: Add pointerInteropFilter to handle release for long press
+                .pointerInteropFilter { event ->
+                    when (event.action) {
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            // FIXED: Cancel long press when finger is released
+                            if (pendingLongPress) {
+                                cancelLongPress()
+                            }
+                        }
+                    }
+                    false // Let other gesture detectors handle the event
                 }
         )
         
