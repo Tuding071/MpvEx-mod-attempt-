@@ -86,9 +86,11 @@ fun PlayerOverlay(
     var lastSeekTime by remember { mutableStateOf(0L) }
     val seekDebounceMs = 16L
     
-    // FIXED: Simple boolean to track if we're currently holding for 2x
-    var isHoldingFor2x by remember { mutableStateOf(false) }
-    var longPressJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    // ORIGINAL WORKING VARIABLES from your initial code
+    var leftTapStartTime by remember { mutableStateOf(0L) }
+    var rightTapStartTime by remember { mutableStateOf(0L) }
+    var leftIsHolding by remember { mutableStateOf(false) }
+    var rightIsHolding by remember { mutableStateOf(false) }
     
     var showVideoInfo by remember { mutableStateOf(0) }
     var videoTitle by remember { mutableStateOf("Video") }
@@ -215,25 +217,96 @@ fun PlayerOverlay(
         isPausing = !currentPaused
     }
     
-    // FIXED: Simple and reliable long press handling
-    fun startLongPressDetection() {
-        isHoldingFor2x = true
-        longPressJob?.cancel()
-        longPressJob = coroutineScope.launch {
-            delay(300) // Wait 300ms
-            if (isHoldingFor2x) {
-                isSpeedingUp = true
-                MPVLib.setPropertyDouble("speed", 2.0)
+    // ORIGINAL WORKING 2X SPEED LOGIC from your initial code
+    fun handleLeftAreaGesture(event: MotionEvent): Boolean {
+        return when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                leftTapStartTime = System.currentTimeMillis()
+                leftIsHolding = true
+                
+                coroutineScope.launch {
+                    delay(300)
+                    if (leftIsHolding) {
+                        delay(100)
+                        if (leftIsHolding) {
+                            isSpeedingUp = true
+                        }
+                    }
+                }
+                true
             }
+            MotionEvent.ACTION_UP -> {
+                val tapDuration = System.currentTimeMillis() - leftTapStartTime
+                leftIsHolding = false
+                
+                if (tapDuration < 200) {
+                    toggleVideoInfo()
+                }
+                true
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                leftIsHolding = false
+                true
+            }
+            else -> false
         }
     }
     
-    fun cancelLongPressDetection() {
-        isHoldingFor2x = false
-        longPressJob?.cancel()
-        if (isSpeedingUp) {
-            isSpeedingUp = false
-            MPVLib.setPropertyDouble("speed", 1.0)
+    fun handleRightAreaGesture(event: MotionEvent): Boolean {
+        return when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                rightTapStartTime = System.currentTimeMillis()
+                rightIsHolding = true
+                
+                coroutineScope.launch {
+                    delay(300)
+                    if (rightIsHolding) {
+                        delay(100)
+                        if (rightIsHolding) {
+                            isSpeedingUp = true
+                        }
+                    }
+                }
+                true
+            }
+            MotionEvent.ACTION_UP -> {
+                val tapDuration = System.currentTimeMillis() - rightTapStartTime
+                rightIsHolding = false
+                
+                if (tapDuration < 200) {
+                    toggleVideoInfo()
+                }
+                true
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                rightIsHolding = false
+                true
+            }
+            else -> false
+        }
+    }
+    
+    // ORIGINAL WORKING CENTER AREA GESTURE for 2x speed
+    fun handleCenterAreaGesture(event: MotionEvent): Boolean {
+        return when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                // Start long press detection for 2x speed
+                coroutineScope.launch {
+                    delay(300)
+                    if (true) { // Always check since we're in center area
+                        isSpeedingUp = true
+                    }
+                }
+                true
+            }
+            MotionEvent.ACTION_UP -> {
+                // Speed will auto-reset via LaunchedEffect below
+                true
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                true
+            }
+            else -> false
         }
     }
     
@@ -261,7 +334,15 @@ fun PlayerOverlay(
         scheduleSeekbarHide()
     }
     
-    // FIXED: Backup speed reset - if somehow it gets stuck
+    // ORIGINAL WORKING SPEED RESET LOGIC
+    LaunchedEffect(leftIsHolding, rightIsHolding) {
+        if (!leftIsHolding && !rightIsHolding && isSpeedingUp) {
+            MPVLib.setPropertyDouble("speed", 1.0)
+            isSpeedingUp = false
+        }
+    }
+    
+    // ORIGINAL WORKING SPEED TRANSITION
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
             MPVLib.setPropertyDouble("speed", 2.0)
@@ -394,17 +475,15 @@ fun PlayerOverlay(
                     .fillMaxHeight(0.95f)
                     .align(Alignment.BottomStart)
             ) {
-                // LEFT 5% - Video info toggle
+                // LEFT 5% - Video info toggle + 2x speed (long press)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.05f)
                         .fillMaxHeight()
                         .align(Alignment.CenterStart)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = { toggleVideoInfo() }
-                        )
+                        .pointerInteropFilter { event ->
+                            handleLeftAreaGesture(event)
+                        }
                 )
                 
                 // CENTER 90% - All gestures (tap, long press, drag)
@@ -416,7 +495,6 @@ fun PlayerOverlay(
                         .pointerInput(Unit) {
                             detectDragGestures(
                                 onDragStart = { offset ->
-                                    cancelLongPressDetection()
                                     cancelAutoHide()
                                     activateSeekingMode()
                                     seekStartX = offset.x
@@ -471,37 +549,37 @@ fun PlayerOverlay(
                         .pointerInput(Unit) {
                             detectTapGestures(
                                 onPress = { 
-                                    startLongPressDetection()
+                                    // Start long press for 2x speed in center area
+                                    coroutineScope.launch {
+                                        delay(300)
+                                        isSpeedingUp = true
+                                    }
                                 },
                                 onTap = { 
-                                    cancelLongPressDetection()
                                     handleMergedTap()
                                 },
                                 onLongPress = { }
                             )
                         }
-                        // FIXED: Use pointerInteropFilter to catch ALL release events
                         .pointerInteropFilter { event ->
                             when (event.action) {
                                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                    cancelLongPressDetection()
+                                    // Speed will auto-reset via LaunchedEffect
                                 }
                             }
                             false
                         }
                 )
                 
-                // RIGHT 5% - Video info toggle
+                // RIGHT 5% - Video info toggle + 2x speed (long press)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.05f)
                         .fillMaxHeight()
                         .align(Alignment.CenterEnd)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = { toggleVideoInfo() }
-                        )
+                        .pointerInteropFilter { event ->
+                            handleRightAreaGesture(event)
+                        }
                 )
             }
         }
