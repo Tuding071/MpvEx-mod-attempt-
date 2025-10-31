@@ -24,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.by
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -517,7 +518,9 @@ fun PlayerOverlay(
                         },
                         onDragEnd = {
                             if (isSeeking) {
-                                performRealTimeSeek(seekStartPosition + ((it - seekStartX) / (3f / 0.033f)).toDouble())
+                                // Calculate final position based on current drag state
+                                val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
+                                performRealTimeSeek(currentPos)
                                 
                                 if (wasPlayingBeforeSeek) {
                                     coroutineScope.launch {
