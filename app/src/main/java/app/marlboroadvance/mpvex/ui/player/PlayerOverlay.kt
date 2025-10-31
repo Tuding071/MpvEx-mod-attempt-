@@ -86,8 +86,8 @@ fun PlayerOverlay(
     var lastSeekTime by remember { mutableStateOf(0L) }
     val seekDebounceMs = 16L
     
-    // FIXED: Use the original center area gesture variables for 2x speed
-    var pendingLongPress by remember { mutableStateOf(false) }
+    // FIXED: Simple boolean to track if we're currently holding for 2x
+    var isHoldingFor2x by remember { mutableStateOf(false) }
     var longPressJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     var showVideoInfo by remember { mutableStateOf(0) }
@@ -111,7 +111,6 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // MOVE toggleVideoInfo function to the top
     fun toggleVideoInfo() {
         showVideoInfo = if (showVideoInfo == 0) 1 else 0
         if (showVideoInfo != 0) {
@@ -216,23 +215,26 @@ fun PlayerOverlay(
         isPausing = !currentPaused
     }
     
-    // FIXED: Simple long press handling for center area
-    fun startLongPress() {
-        pendingLongPress = true
+    // FIXED: Simple and reliable long press handling
+    fun startLongPressDetection() {
+        isHoldingFor2x = true
+        longPressJob?.cancel()
         longPressJob = coroutineScope.launch {
-            delay(300) // Wait 300ms for long press
-            if (pendingLongPress) {
+            delay(300) // Wait 300ms
+            if (isHoldingFor2x) {
                 isSpeedingUp = true
                 MPVLib.setPropertyDouble("speed", 2.0)
             }
         }
     }
     
-    fun cancelLongPress() {
-        pendingLongPress = false
+    fun cancelLongPressDetection() {
+        isHoldingFor2x = false
         longPressJob?.cancel()
-        isSpeedingUp = false
-        MPVLib.setPropertyDouble("speed", 1.0)
+        if (isSpeedingUp) {
+            isSpeedingUp = false
+            MPVLib.setPropertyDouble("speed", 1.0)
+        }
     }
     
     LaunchedEffect(Unit) {
@@ -259,7 +261,7 @@ fun PlayerOverlay(
         scheduleSeekbarHide()
     }
     
-    // FIXED: Handle speed transitions
+    // FIXED: Backup speed reset - if somehow it gets stuck
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
             MPVLib.setPropertyDouble("speed", 2.0)
@@ -414,7 +416,7 @@ fun PlayerOverlay(
                         .pointerInput(Unit) {
                             detectDragGestures(
                                 onDragStart = { offset ->
-                                    cancelLongPress()
+                                    cancelLongPressDetection()
                                     cancelAutoHide()
                                     activateSeekingMode()
                                     seekStartX = offset.x
@@ -469,19 +471,20 @@ fun PlayerOverlay(
                         .pointerInput(Unit) {
                             detectTapGestures(
                                 onPress = { 
-                                    startLongPress()
+                                    startLongPressDetection()
                                 },
                                 onTap = { 
-                                    cancelLongPress()
+                                    cancelLongPressDetection()
                                     handleMergedTap()
                                 },
                                 onLongPress = { }
                             )
                         }
+                        // FIXED: Use pointerInteropFilter to catch ALL release events
                         .pointerInteropFilter { event ->
                             when (event.action) {
                                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                    cancelLongPress()
+                                    cancelLongPressDetection()
                                 }
                             }
                             false
