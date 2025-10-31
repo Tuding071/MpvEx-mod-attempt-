@@ -86,11 +86,9 @@ fun PlayerOverlay(
     var lastSeekTime by remember { mutableStateOf(0L) }
     val seekDebounceMs = 16L
     
-    // ORIGINAL: Tap detection variables for left/right areas
-    var leftTapStartTime by remember { mutableStateOf(0L) }
-    var rightTapStartTime by remember { mutableStateOf(0L) }
-    var leftIsHolding by remember { mutableStateOf(false) }
-    var rightIsHolding by remember { mutableStateOf(false) }
+    // FIXED: Use the original center area gesture variables for 2x speed
+    var pendingLongPress by remember { mutableStateOf(false) }
+    var longPressJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     var showVideoInfo by remember { mutableStateOf(0) }
     var videoTitle by remember { mutableStateOf("Video") }
@@ -218,84 +216,23 @@ fun PlayerOverlay(
         isPausing = !currentPaused
     }
     
-    // ORIGINAL: Left area gesture handler with proper tap/hold detection
-    fun handleLeftAreaGesture(event: MotionEvent): Boolean {
-        return when (event.action) {
-            MotionEvent.ACTION_DOWN -> {
-                leftTapStartTime = System.currentTimeMillis()
-                leftIsHolding = true
-                
-                // Start checking for long press after 300ms
-                coroutineScope.launch {
-                    delay(300)
-                    if (leftIsHolding) {
-                        // Add 100ms buffer delay before speed-up
-                        delay(100)
-                        if (leftIsHolding) {
-                            // Long press detected - activate 2x speed
-                            isSpeedingUp = true
-                        }
-                    }
-                }
-                true
+    // FIXED: Simple long press handling for center area
+    fun startLongPress() {
+        pendingLongPress = true
+        longPressJob = coroutineScope.launch {
+            delay(300) // Wait 300ms for long press
+            if (pendingLongPress) {
+                isSpeedingUp = true
+                MPVLib.setPropertyDouble("speed", 2.0)
             }
-            MotionEvent.ACTION_UP -> {
-                val tapDuration = System.currentTimeMillis() - leftTapStartTime
-                leftIsHolding = false
-                
-                if (tapDuration < 200) {
-                    // Short tap - toggle video info
-                    toggleVideoInfo()
-                }
-                // Long press speed will auto-reset via LaunchedEffect
-                true
-            }
-            MotionEvent.ACTION_CANCEL -> {
-                leftIsHolding = false
-                true
-            }
-            else -> false
         }
     }
     
-    // ORIGINAL: Right area gesture handler with proper tap/hold detection
-    fun handleRightAreaGesture(event: MotionEvent): Boolean {
-        return when (event.action) {
-            MotionEvent.ACTION_DOWN -> {
-                rightTapStartTime = System.currentTimeMillis()
-                rightIsHolding = true
-                
-                // Start checking for long press after 300ms
-                coroutineScope.launch {
-                    delay(300)
-                    if (rightIsHolding) {
-                        // Add 100ms buffer delay before speed-up
-                        delay(100)
-                        if (rightIsHolding) {
-                            // Long press detected - activate 2x speed
-                            isSpeedingUp = true
-                        }
-                    }
-                }
-                true
-            }
-            MotionEvent.ACTION_UP -> {
-                val tapDuration = System.currentTimeMillis() - rightTapStartTime
-                rightIsHolding = false
-                
-                if (tapDuration < 200) {
-                    // Short tap - toggle video info
-                    toggleVideoInfo()
-                }
-                // Long press speed will auto-reset via LaunchedEffect
-                true
-            }
-            MotionEvent.ACTION_CANCEL -> {
-                rightIsHolding = false
-                true
-            }
-            else -> false
-        }
+    fun cancelLongPress() {
+        pendingLongPress = false
+        longPressJob?.cancel()
+        isSpeedingUp = false
+        MPVLib.setPropertyDouble("speed", 1.0)
     }
     
     LaunchedEffect(Unit) {
@@ -322,20 +259,12 @@ fun PlayerOverlay(
         scheduleSeekbarHide()
     }
     
-    // ORIGINAL: Handle speed reset when not holding - THIS WORKED
-    LaunchedEffect(leftIsHolding, rightIsHolding) {
-        if (!leftIsHolding && !rightIsHolding && isSpeedingUp) {
-            MPVLib.setPropertyDouble("speed", 1.0)
-            isSpeedingUp = false
-        }
-    }
-    
-    // ORIGINAL: Handle speed transitions IMMEDIATELY (no delays)
+    // FIXED: Handle speed transitions
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
-            MPVLib.setPropertyDouble("speed", 2.0) // Immediate
+            MPVLib.setPropertyDouble("speed", 2.0)
         } else {
-            MPVLib.setPropertyDouble("speed", 1.0) // Immediate
+            MPVLib.setPropertyDouble("speed", 1.0)
         }
     }
     
@@ -446,98 +375,132 @@ fun PlayerOverlay(
     }
     
     Box(modifier = modifier.fillMaxSize()) {
-        // MAIN GESTURE AREA - Full screen divided into left/center/right
+        // MAIN GESTURE AREA - Full screen divided into areas
         Box(modifier = Modifier.fillMaxSize()) {
-            // LEFT 5% - Video info toggle + 2x speed (long press)
+            // TOP 5% - Ignore area
             Box(
                 modifier = Modifier
-                    .fillMaxWidth(0.05f)
-                    .fillMaxHeight()
-                    .align(Alignment.CenterStart)
-                    .pointerInteropFilter { event ->
-                        handleLeftAreaGesture(event)
-                    }
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.05f)
+                    .align(Alignment.TopStart)
             )
             
-            // CENTER 90% - All gestures (tap, drag)
+            // CENTER AREA - 95% height, divided into left/center/right
             Box(
                 modifier = Modifier
-                    .fillMaxWidth(0.9f)
-                    .fillMaxHeight()
-                    .align(Alignment.Center)
-                    .pointerInput(Unit) {
-                        detectDragGestures(
-                            onDragStart = { offset ->
-                                cancelAutoHide()
-                                activateSeekingMode()
-                                seekStartX = offset.x
-                                seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-                                wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
-                                isSeeking = true
-                                showSeekTime = true
-                                lastSeekTime = 0L
-                                if (wasPlayingBeforeSeek) {
-                                    MPVLib.setPropertyBoolean("pause", true)
-                                }
-                            },
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                if (isSeeking) {
-                                    val currentX = change.position.x
-                                    val deltaX = currentX - seekStartX
-                                    val pixelsPerSecond = 3f / 0.033f
-                                    val timeDeltaSeconds = deltaX / pixelsPerSecond
-                                    val newPositionSeconds = seekStartPosition + timeDeltaSeconds
-                                    val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-                                    val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
-                                    val now = System.currentTimeMillis()
-                                    if (now - lastSeekTime >= seekDebounceMs) {
-                                        performRealTimeSeek(clampedPosition)
-                                        lastSeekTime = now
-                                    }
-                                    seekTargetTime = formatTimeSimple(clampedPosition)
-                                    currentTime = formatTimeSimple(clampedPosition)
-                                }
-                            },
-                            onDragEnd = {
-                                if (isSeeking) {
-                                    val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
-                                    performRealTimeSeek(currentPos)
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.95f)
+                    .align(Alignment.BottomStart)
+            ) {
+                // LEFT 5% - Video info toggle
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.05f)
+                        .fillMaxHeight()
+                        .align(Alignment.CenterStart)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { toggleVideoInfo() }
+                        )
+                )
+                
+                // CENTER 90% - All gestures (tap, long press, drag)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
+                        .fillMaxHeight()
+                        .align(Alignment.Center)
+                        .pointerInput(Unit) {
+                            detectDragGestures(
+                                onDragStart = { offset ->
+                                    cancelLongPress()
+                                    cancelAutoHide()
+                                    activateSeekingMode()
+                                    seekStartX = offset.x
+                                    seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+                                    wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
+                                    isSeeking = true
+                                    showSeekTime = true
+                                    lastSeekTime = 0L
                                     if (wasPlayingBeforeSeek) {
-                                        coroutineScope.launch {
-                                            delay(100)
-                                            MPVLib.setPropertyBoolean("pause", false)
-                                        }
+                                        MPVLib.setPropertyBoolean("pause", true)
                                     }
-                                    isSeeking = false
-                                    showSeekTime = false
-                                    seekStartX = 0f
-                                    seekStartPosition = 0.0
-                                    wasPlayingBeforeSeek = false
-                                    scheduleSeekbarHide()
+                                },
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    if (isSeeking) {
+                                        val currentX = change.position.x
+                                        val deltaX = currentX - seekStartX
+                                        val pixelsPerSecond = 3f / 0.033f
+                                        val timeDeltaSeconds = deltaX / pixelsPerSecond
+                                        val newPositionSeconds = seekStartPosition + timeDeltaSeconds
+                                        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+                                        val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
+                                        val now = System.currentTimeMillis()
+                                        if (now - lastSeekTime >= seekDebounceMs) {
+                                            performRealTimeSeek(clampedPosition)
+                                            lastSeekTime = now
+                                        }
+                                        seekTargetTime = formatTimeSimple(clampedPosition)
+                                        currentTime = formatTimeSimple(clampedPosition)
+                                    }
+                                },
+                                onDragEnd = {
+                                    if (isSeeking) {
+                                        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
+                                        performRealTimeSeek(currentPos)
+                                        if (wasPlayingBeforeSeek) {
+                                            coroutineScope.launch {
+                                                delay(100)
+                                                MPVLib.setPropertyBoolean("pause", false)
+                                            }
+                                        }
+                                        isSeeking = false
+                                        showSeekTime = false
+                                        seekStartX = 0f
+                                        seekStartPosition = 0.0
+                                        wasPlayingBeforeSeek = false
+                                        scheduleSeekbarHide()
+                                    }
+                                }
+                            )
+                        }
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onPress = { 
+                                    startLongPress()
+                                },
+                                onTap = { 
+                                    cancelLongPress()
+                                    handleMergedTap()
+                                },
+                                onLongPress = { }
+                            )
+                        }
+                        .pointerInteropFilter { event ->
+                            when (event.action) {
+                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                    cancelLongPress()
                                 }
                             }
+                            false
+                        }
+                )
+                
+                // RIGHT 5% - Video info toggle
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.05f)
+                        .fillMaxHeight()
+                        .align(Alignment.CenterEnd)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { toggleVideoInfo() }
                         )
-                    }
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onTap = { 
-                                handleMergedTap()
-                            }
-                        )
-                    }
-            )
-            
-            // RIGHT 5% - Video info toggle + 2x speed (long press)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(0.05f)
-                    .fillMaxHeight()
-                    .align(Alignment.CenterEnd)
-                    .pointerInteropFilter { event ->
-                        handleRightAreaGesture(event)
-                    }
-            )
+                )
+            }
         }
         
         // BOTTOM SEEK BAR AREA
