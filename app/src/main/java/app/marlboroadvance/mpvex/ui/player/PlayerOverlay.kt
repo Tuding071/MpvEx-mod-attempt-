@@ -282,21 +282,41 @@ fun PlayerOverlay(
         scheduleSeekbarHide()
     }
     
-    // Handle speed reset when not holding
-    LaunchedEffect(leftIsHolding, rightIsHolding) {
-        if (!leftIsHolding && !rightIsHolding && isSpeedingUp) {
+    // Handle speed reset when not holding - FIXED: This should handle the release properly
+    LaunchedEffect(leftIsHolding, rightIsHolding, pendingLongPress) {
+        if (!leftIsHolding && !rightIsHolding && !pendingLongPress && isSpeedingUp) {
             MPVLib.setPropertyDouble("speed", 1.0)
             isSpeedingUp = false
         }
     }
     
-    // Handle speed transitions
-    LaunchedEffect(isSpeedingUp) {
-        if (isSpeedingUp) {
-            MPVLib.setPropertyDouble("speed", 2.0)
-        } else {
-            MPVLib.setPropertyDouble("speed", 1.0)
+    // Get video filename from multiple sources
+    LaunchedEffect(Unit) {
+        val intent = (context as? android.app.Activity)?.intent
+        fileName = when {
+            intent?.action == Intent.ACTION_SEND -> {
+                getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context)
+            }
+            intent?.action == Intent.ACTION_VIEW -> {
+                getFileNameFromUri(intent.data, context)
+            }
+            else -> {
+                getBestAvailableFileName(context)
+            }
         }
+        
+        val title = MPVLib.getPropertyString("media-title") ?: "Video"
+        videoTitle = title
+        
+        showVideoInfo = 1
+        
+        videoInfoJob?.cancel()
+        videoInfoJob = coroutineScope.launch {
+            delay(4000)
+            showVideoInfo = 0
+        }
+        
+        scheduleSeekbarHide()
     }
     
     // Software decoding optimization
@@ -448,7 +468,7 @@ fun PlayerOverlay(
     Box(
         modifier = modifier.fillMaxSize()
     ) {
-        // TOP 5% - Video info toggle area
+        // TOP 5% - Video info toggle area - FIXED POSITION (on top)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -463,12 +483,12 @@ fun PlayerOverlay(
                 )
         )
         
-        // MAIN GESTURE AREA - 80% Center (ALL GESTURES)
+        // MAIN GESTURE AREA - 95% Bottom (ALL GESTURES) - FIXED POSITION
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.9f)
+                .fillMaxWidth()
                 .fillMaxHeight(0.95f)
-                .align(Alignment.Center)
+                .align(Alignment.BottomStart)
                 .pointerInput(Unit) {
                     detectDragGestures(
                         onDragStart = { offset ->
@@ -557,8 +577,12 @@ fun PlayerOverlay(
                             handleMergedTap()
                         },
                         onLongPress = { 
-                            // Long press handled separately
-                            pendingLongPress = false
+                            // Long press handled - keep it active until release
+                            pendingLongPress = true
+                        },
+                        onRelease = {
+                            // FIXED: Release long press when finger is lifted
+                            cancelLongPress()
                         }
                     )
                 }
@@ -620,7 +644,7 @@ fun PlayerOverlay(
             }
         }
         
-        // VIDEO INFO - Left Side
+        // VIDEO INFO - Top Center (moved to top center for better visibility)
         if (showVideoInfo != 0) {
             Text(
                 text = displayText,
@@ -630,14 +654,14 @@ fun PlayerOverlay(
                     fontWeight = FontWeight.Medium
                 ),
                 modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .offset(x = 60.dp, y = 20.dp)
+                    .align(Alignment.TopCenter)
+                    .offset(y = 20.dp)
                     .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 6.dp)
             )
         }
         
-        // FEEDBACK AREA - Top Center
+        // FEEDBACK AREA - Top Center (below video info)
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
