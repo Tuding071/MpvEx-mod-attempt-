@@ -701,7 +701,7 @@ fun PlayerOverlay(
                     .height(70.dp)
                     .align(Alignment.BottomStart)
                     .padding(horizontal = 60.dp)
-                    .offset(y = (-5).dp) 
+                    .offset(y = (-1).dp) 
             ) {
                 Column(
                     modifier = Modifier.fillMaxSize(),
