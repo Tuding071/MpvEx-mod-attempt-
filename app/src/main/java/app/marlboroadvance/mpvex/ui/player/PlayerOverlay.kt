@@ -50,7 +50,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.Utils
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import android.content.Intent
 import android.net.Uri
@@ -85,11 +84,19 @@ fun PlayerOverlay(
     var lastSeekTime by remember { mutableStateOf(0L) }
     val seekDebounceMs = 16L
     
-    // CLEAR GESTURE STATES
+    // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
     var touchStartTime by remember { mutableStateOf(0L) }
+    var touchStartX by remember { mutableStateOf(0f) }
+    var touchStartY by remember { mutableStateOf(0f) }
     var isTouching by remember { mutableStateOf(false) }
     var isLongTap by remember { mutableStateOf(false) }
+    var isHorizontalSwipe by remember { mutableStateOf(false) }
     var longTapJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    
+    // THRESHOLDS
+    val longTapThreshold = 300L // ms
+    val horizontalSwipeThreshold = 30f // pixels - minimum horizontal movement to trigger seeking
+    val maxVerticalMovement = 50f // pixels - maximum vertical movement allowed for horizontal swipe
     
     var showVideoInfo by remember { mutableStateOf(0) }
     var videoTitle by remember { mutableStateOf("Video") }
@@ -221,12 +228,87 @@ fun PlayerOverlay(
         touchStartTime = System.currentTimeMillis()
         longTapJob?.cancel()
         longTapJob = coroutineScope.launch {
-            delay(300) // Wait 300ms for long tap
-            if (isTouching) {
+            delay(longTapThreshold)
+            if (isTouching && !isHorizontalSwipe) {
                 isLongTap = true
                 isSpeedingUp = true
                 MPVLib.setPropertyDouble("speed", 2.0)
             }
+        }
+    }
+    
+    fun checkForHorizontalSwipe(currentX: Float, currentY: Float): Boolean {
+        if (isHorizontalSwipe || isLongTap) return false // Already determined or long tap active
+        
+        val deltaX = kotlin.math.abs(currentX - touchStartX)
+        val deltaY = kotlin.math.abs(currentY - touchStartY)
+        
+        // Only trigger horizontal swipe if:
+        // 1. Horizontal movement is significant (> threshold)
+        // 2. Horizontal movement is greater than vertical movement (primarily horizontal)
+        // 3. Vertical movement is within acceptable limits
+        if (deltaX > horizontalSwipeThreshold && deltaX > deltaY && deltaY < maxVerticalMovement) {
+            isHorizontalSwipe = true
+            longTapJob?.cancel() // Cancel long tap detection
+            return true
+        }
+        return false
+    }
+    
+    fun startHorizontalSeeking(startX: Float) {
+        isHorizontalSwipe = true
+        cancelAutoHide()
+        activateSeekingMode()
+        seekStartX = startX
+        seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+        wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
+        isSeeking = true
+        showSeekTime = true
+        lastSeekTime = 0L
+        
+        if (wasPlayingBeforeSeek) {
+            MPVLib.setPropertyBoolean("pause", true)
+        }
+    }
+    
+    fun handleHorizontalSeeking(currentX: Float) {
+        if (!isSeeking) return
+        
+        val deltaX = currentX - seekStartX
+        val pixelsPerSecond = 3f / 0.033f
+        val timeDeltaSeconds = deltaX / pixelsPerSecond
+        val newPositionSeconds = seekStartPosition + timeDeltaSeconds
+        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+        val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
+        
+        val now = System.currentTimeMillis()
+        if (now - lastSeekTime >= seekDebounceMs) {
+            performRealTimeSeek(clampedPosition)
+            lastSeekTime = now
+        }
+        
+        seekTargetTime = formatTimeSimple(clampedPosition)
+        currentTime = formatTimeSimple(clampedPosition)
+    }
+    
+    fun endHorizontalSeeking() {
+        if (isSeeking) {
+            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
+            performRealTimeSeek(currentPos)
+            
+            if (wasPlayingBeforeSeek) {
+                coroutineScope.launch {
+                    delay(100)
+                    MPVLib.setPropertyBoolean("pause", false)
+                }
+            }
+            
+            isSeeking = false
+            showSeekTime = false
+            seekStartX = 0f
+            seekStartPosition = 0.0
+            wasPlayingBeforeSeek = false
+            scheduleSeekbarHide()
         }
     }
     
@@ -240,11 +322,17 @@ fun PlayerOverlay(
             isLongTap = false
             isSpeedingUp = false
             MPVLib.setPropertyDouble("speed", 1.0)
+        } else if (isHorizontalSwipe) {
+            // Horizontal swipe ended
+            endHorizontalSeeking()
+            isHorizontalSwipe = false
         } else if (touchDuration < 150) {
             // Short tap (less than 150ms)
             handleTap()
         }
-        // If touch duration is between 150-300ms, it's considered neither tap nor long tap
+        // Reset all gesture states
+        isHorizontalSwipe = false
+        isLongTap = false
     }
     
     LaunchedEffect(Unit) {
@@ -417,75 +505,32 @@ fun PlayerOverlay(
                         )
                 )
                 
-                // CENTER 90% - All gestures (tap, long tap, drag)
+                // CENTER 90% - All gestures (tap, long tap, horizontal swipe)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.9f)
                         .fillMaxHeight()
                         .align(Alignment.Center)
-                        .pointerInput(Unit) {
-                            detectDragGestures(
-                                onDragStart = { offset ->
-                                    // Cancel any ongoing touch detection
-                                    isTouching = false
-                                    longTapJob?.cancel()
-                                    
-                                    cancelAutoHide()
-                                    activateSeekingMode()
-                                    seekStartX = offset.x
-                                    seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-                                    wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
-                                    isSeeking = true
-                                    showSeekTime = true
-                                    lastSeekTime = 0L
-                                    if (wasPlayingBeforeSeek) {
-                                        MPVLib.setPropertyBoolean("pause", true)
-                                    }
-                                },
-                                onDrag = { change, dragAmount ->
-                                    change.consume()
-                                    if (isSeeking) {
-                                        val currentX = change.position.x
-                                        val deltaX = currentX - seekStartX
-                                        val pixelsPerSecond = 3f / 0.033f
-                                        val timeDeltaSeconds = deltaX / pixelsPerSecond
-                                        val newPositionSeconds = seekStartPosition + timeDeltaSeconds
-                                        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-                                        val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
-                                        val now = System.currentTimeMillis()
-                                        if (now - lastSeekTime >= seekDebounceMs) {
-                                            performRealTimeSeek(clampedPosition)
-                                            lastSeekTime = now
-                                        }
-                                        seekTargetTime = formatTimeSimple(clampedPosition)
-                                        currentTime = formatTimeSimple(clampedPosition)
-                                    }
-                                },
-                                onDragEnd = {
-                                    if (isSeeking) {
-                                        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
-                                        performRealTimeSeek(currentPos)
-                                        if (wasPlayingBeforeSeek) {
-                                            coroutineScope.launch {
-                                                delay(100)
-                                                MPVLib.setPropertyBoolean("pause", false)
-                                            }
-                                        }
-                                        isSeeking = false
-                                        showSeekTime = false
-                                        seekStartX = 0f
-                                        seekStartPosition = 0.0
-                                        wasPlayingBeforeSeek = false
-                                        scheduleSeekbarHide()
-                                    }
-                                }
-                            )
-                        }
-                        // CLEAR GESTURE SEPARATION: Use pointerInteropFilter for precise touch handling
+                        // USE SINGLE pointerInteropFilter FOR ALL GESTURES TO AVOID CONFLICTS
                         .pointerInteropFilter { event ->
                             when (event.action) {
                                 MotionEvent.ACTION_DOWN -> {
+                                    touchStartX = event.x
+                                    touchStartY = event.y
                                     startLongTapDetection()
+                                    true
+                                }
+                                MotionEvent.ACTION_MOVE -> {
+                                    if (!isHorizontalSwipe && !isLongTap) {
+                                        // Check if this should become a horizontal swipe
+                                        if (checkForHorizontalSwipe(event.x, event.y)) {
+                                            startHorizontalSeeking(event.x)
+                                        }
+                                    } else if (isHorizontalSwipe) {
+                                        // Continue horizontal seeking
+                                        handleHorizontalSeeking(event.x)
+                                    }
+                                    // If it's a long tap, ignore movement (allow slight finger movement during hold)
                                     true
                                 }
                                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
