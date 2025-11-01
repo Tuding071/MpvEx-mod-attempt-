@@ -83,7 +83,7 @@ fun PlayerOverlay(
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
     var lastSeekTime by remember { mutableStateOf(0L) }
-    val seekDebounceMs = 11L
+    val seekDebounceMs = 33L
     
     // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
     var touchStartTime by remember { mutableStateOf(0L) }
