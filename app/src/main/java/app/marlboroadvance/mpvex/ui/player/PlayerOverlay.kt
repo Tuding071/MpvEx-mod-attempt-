@@ -626,22 +626,33 @@ fun SimpleDraggableProgressBar(
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier.height(24.dp)) {
+        // Background track
         Box(modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.CenterStart).background(Color.Gray.copy(alpha = 0.6f)))
+        
+        // Progress track
         Box(modifier = Modifier.fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f).height(4.dp).align(Alignment.CenterStart).background(Color.White))
-        Box(modifier = Modifier.fillMaxWidth().height(24.dp).align(Alignment.CenterStart).pointerInput(Unit) {
-            detectDragGestures(
-                onDragStart = { offset ->
-                    val newPosition = (offset.x / size.width) * duration
-                    onValueChange(newPosition.coerceIn(0f, duration))
-                },
-                onDrag = { change, dragAmount ->
-                    change.consume()
-                    val newPosition = (change.position.x / size.width) * duration
-                    onValueChange(newPosition.coerceIn(0f, duration))
-                },
-                onDragEnd = { onValueChangeFinished() }
-            )
-        })
+        
+        // FIXED: Make the ENTIRE seekbar area (24dp height) draggable, not just the thumb
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(24.dp)
+                .align(Alignment.CenterStart)
+                .pointerInput(Unit) {
+                    detectDragGestures(
+                        onDragStart = { offset ->
+                            val newPosition = (offset.x / size.width) * duration
+                            onValueChange(newPosition.coerceIn(0f, duration))
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            val newPosition = (change.position.x / size.width) * duration
+                            onValueChange(newPosition.coerceIn(0f, duration))
+                        },
+                        onDragEnd = { onValueChangeFinished() }
+                    )
+                }
+        )
     }
 }
 
