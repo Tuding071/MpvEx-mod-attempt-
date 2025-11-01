@@ -133,6 +133,11 @@ fun PlayerOverlay(
         }
     }
     
+    // NEW: Function to get fresh position from MPV
+    fun getFreshPosition(): Float {
+        return (MPVLib.getPropertyDouble("time-pos") ?: 0.0).toFloat()
+    }
+    
     fun toggleVideoInfo() {
         showVideoInfo = if (showVideoInfo == 0) 1 else 0
         if (showVideoInfo != 0) {
@@ -569,6 +574,7 @@ fun PlayerOverlay(
                             duration = seekbarDuration,
                             onValueChange = { handleProgressBarDrag(it) },
                             onValueChangeFinished = { handleDragFinished() },
+                            getFreshPosition = { getFreshPosition() }, // NEW: Pass fresh position function
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -623,6 +629,7 @@ fun SimpleDraggableProgressBar(
     duration: Float,
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: () -> Unit,
+    getFreshPosition: () -> Float, // NEW: Function to get fresh position
     modifier: Modifier = Modifier
 ) {
     var dragStartX by remember { mutableStateOf(0f) }
@@ -635,14 +642,13 @@ fun SimpleDraggableProgressBar(
             detectDragGestures(
                 onDragStart = { offset ->
                     dragStartX = offset.x
-                    // CAPTURE THE EXACT POSITION WHEN TOUCH STARTS
-                    dragStartPosition = position
+                    // GET FRESH POSITION IMMEDIATELY WHEN DRAG STARTS
+                    dragStartPosition = getFreshPosition()
                 },
                 onDrag = { change, dragAmount ->
                     change.consume()
                     val deltaX = change.position.x - dragStartX
                     val deltaPosition = (deltaX / size.width) * duration
-                    // USE THE CAPTURED START POSITION FOR ALL CALCULATIONS
                     val newPosition = (dragStartPosition + deltaPosition).coerceIn(0f, duration)
                     onValueChange(newPosition)
                 },
