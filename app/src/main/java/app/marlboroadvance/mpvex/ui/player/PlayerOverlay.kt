@@ -267,7 +267,7 @@ fun PlayerOverlay(
         if (!isSeeking) return
         
         val deltaX = currentX - seekStartX
-        val pixelsPerSecond = 3f / 0.033f
+        val pixelsPerSecond = 6f / 0.033f
         val timeDeltaSeconds = deltaX / pixelsPerSecond
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
