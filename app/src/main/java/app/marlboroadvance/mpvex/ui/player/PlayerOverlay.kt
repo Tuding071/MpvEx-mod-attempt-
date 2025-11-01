@@ -629,6 +629,13 @@ fun SimpleDraggableProgressBar(
     var dragStartX by remember { mutableStateOf(0f) }
     var dragStartPosition by remember { mutableStateOf(0f) }
     
+    // Update dragStartPosition when position changes and we're not dragging
+    LaunchedEffect(position) {
+        if (!isDragging) {
+            dragStartPosition = position
+        }
+    }
+    
     Box(modifier = modifier.height(24.dp)) {
         Box(modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.CenterStart).background(Color.Gray.copy(alpha = 0.6f)))
         Box(modifier = Modifier.fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f).height(4.dp).align(Alignment.CenterStart).background(Color.White))
@@ -637,6 +644,7 @@ fun SimpleDraggableProgressBar(
                 onDragStart = { offset ->
                     isDragging = true
                     dragStartX = offset.x
+                    // Use the current position as the starting point for relative dragging
                     dragStartPosition = position
                 },
                 onDrag = { change, dragAmount ->
