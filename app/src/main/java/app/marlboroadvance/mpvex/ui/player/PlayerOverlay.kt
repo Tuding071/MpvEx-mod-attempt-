@@ -82,8 +82,10 @@ fun PlayerOverlay(
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
-    var lastSeekTime by remember { mutableStateOf(0L) }
-    val seekDebounceMs = 33L
+    // REMOVED: lastSeekTime and seekDebounceMs
+    // ADD: Simple throttle control
+    var isSeekInProgress by remember { mutableStateOf(false) }
+    val seekThrottleMs = 30L // Small delay between seek commands
     
     // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
     var touchStartTime by remember { mutableStateOf(0L) }
@@ -117,9 +119,18 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // ADD MISSING FUNCTION: performRealTimeSeek
+    // UPDATED: performRealTimeSeek with throttle
     fun performRealTimeSeek(targetPosition: Double) {
+        if (isSeekInProgress) return // Skip if we're already processing a seek
+        
+        isSeekInProgress = true
         MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+        
+        // Reset after throttle period
+        coroutineScope.launch {
+            delay(seekThrottleMs)
+            isSeekInProgress = false
+        }
     }
     
     fun toggleVideoInfo() {
@@ -244,13 +255,14 @@ fun PlayerOverlay(
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
-        lastSeekTime = 0L
+        // REMOVED: lastSeekTime = 0L
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
         }
     }
     
+    // UPDATED: handleHorizontalSeeking without debouncing
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
@@ -261,14 +273,12 @@ fun PlayerOverlay(
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
-        val now = System.currentTimeMillis()
-        if (now - lastSeekTime >= seekDebounceMs) {
-            performRealTimeSeek(clampedPosition)
-            lastSeekTime = now
-        }
-        
+        // ALWAYS update UI instantly
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
+        
+        // Send seek command with throttle
+        performRealTimeSeek(clampedPosition)
     }
     
     fun endHorizontalSeeking() {
@@ -412,13 +422,14 @@ fun PlayerOverlay(
         else -> ""
     }
     
+    // UPDATED: handleProgressBarDrag without debouncing
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
-            lastSeekTime = 0L
+            // REMOVED: lastSeekTime = 0L
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
             }
@@ -426,13 +437,13 @@ fun PlayerOverlay(
         isDragging = true
         seekbarPosition = newPosition
         val targetPosition = newPosition.toDouble()
-        val now = System.currentTimeMillis()
-        if (now - lastSeekTime >= seekDebounceMs) {
-            performRealTimeSeek(targetPosition)
-            lastSeekTime = now
-        }
+        
+        // ALWAYS update UI instantly
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
+        
+        // Send seek command with throttle
+        performRealTimeSeek(targetPosition)
     }
     
     fun handleDragFinished() {
