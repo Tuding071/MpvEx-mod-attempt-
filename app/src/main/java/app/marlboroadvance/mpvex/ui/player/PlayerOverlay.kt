@@ -625,16 +625,7 @@ fun SimpleDraggableProgressBar(
     onValueChangeFinished: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var isDragging by remember { mutableStateOf(false) }
     var dragStartX by remember { mutableStateOf(0f) }
-    var dragStartPosition by remember { mutableStateOf(0f) }
-    
-    // Update dragStartPosition when position changes and we're not dragging
-    LaunchedEffect(position) {
-        if (!isDragging) {
-            dragStartPosition = position
-        }
-    }
     
     Box(modifier = modifier.height(24.dp)) {
         Box(modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.CenterStart).background(Color.Gray.copy(alpha = 0.6f)))
@@ -642,22 +633,17 @@ fun SimpleDraggableProgressBar(
         Box(modifier = Modifier.fillMaxWidth().height(24.dp).align(Alignment.CenterStart).pointerInput(Unit) {
             detectDragGestures(
                 onDragStart = { offset ->
-                    isDragging = true
                     dragStartX = offset.x
-                    // Use the current position as the starting point for relative dragging
-                    dragStartPosition = position
+                    // Don't change position - just remember where we started dragging
                 },
                 onDrag = { change, dragAmount ->
                     change.consume()
                     val deltaX = change.position.x - dragStartX
                     val deltaPosition = (deltaX / size.width) * duration
-                    val newPosition = (dragStartPosition + deltaPosition).coerceIn(0f, duration)
+                    val newPosition = (position + deltaPosition).coerceIn(0f, duration)
                     onValueChange(newPosition)
                 },
-                onDragEnd = { 
-                    isDragging = false
-                    onValueChangeFinished()
-                }
+                onDragEnd = { onValueChangeFinished() }
             )
         })
     }
