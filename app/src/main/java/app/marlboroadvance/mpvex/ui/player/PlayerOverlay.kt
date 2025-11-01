@@ -111,9 +111,6 @@ fun PlayerOverlay(
     var playbackFeedbackText by remember { mutableStateOf("") }
     var playbackFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    var isDownscaled by remember { mutableStateOf(false) }
-    var downscaleJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    
     var showVolumeFeedbackState by remember { mutableStateOf(false) }
     var currentVolume by remember { mutableStateOf(viewModel.currentVolume.value) }
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -149,28 +146,6 @@ fun PlayerOverlay(
         viewModel.currentVolume.collect { volume ->
             currentVolume = volume
             showVolumeFeedback(volume)
-        }
-    }
-    
-    fun revertToNormalQuality() {
-        if (isDownscaled) {
-            MPVLib.setPropertyString("scale", "no")
-            isDownscaled = false
-        }
-    }
-    
-    fun activateSeekingMode() {
-        if (!isDownscaled) {
-            coroutineScope.launch {
-                delay(30)
-                MPVLib.setPropertyString("scale", "480")
-                isDownscaled = true
-            }
-        }
-        downscaleJob?.cancel()
-        downscaleJob = coroutineScope.launch {
-            delay(600)
-            revertToNormalQuality()
         }
     }
     
@@ -264,7 +239,6 @@ fun PlayerOverlay(
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
-        activateSeekingMode()
         seekStartX = startX
         seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
@@ -440,7 +414,6 @@ fun PlayerOverlay(
     
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
-        activateSeekingMode()
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
