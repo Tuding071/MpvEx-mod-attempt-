@@ -626,6 +626,7 @@ fun SimpleDraggableProgressBar(
     modifier: Modifier = Modifier
 ) {
     var dragStartX by remember { mutableStateOf(0f) }
+    var dragStartPosition by remember { mutableStateOf(0f) }
     
     Box(modifier = modifier.height(24.dp)) {
         Box(modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.CenterStart).background(Color.Gray.copy(alpha = 0.6f)))
@@ -634,13 +635,15 @@ fun SimpleDraggableProgressBar(
             detectDragGestures(
                 onDragStart = { offset ->
                     dragStartX = offset.x
-                    // Don't change position - just remember where we started dragging
+                    // CAPTURE THE EXACT POSITION WHEN TOUCH STARTS
+                    dragStartPosition = position
                 },
                 onDrag = { change, dragAmount ->
                     change.consume()
                     val deltaX = change.position.x - dragStartX
                     val deltaPosition = (deltaX / size.width) * duration
-                    val newPosition = (position + deltaPosition).coerceIn(0f, duration)
+                    // USE THE CAPTURED START POSITION FOR ALL CALCULATIONS
+                    val newPosition = (dragStartPosition + deltaPosition).coerceIn(0f, duration)
                     onValueChange(newPosition)
                 },
                 onDragEnd = { onValueChangeFinished() }
