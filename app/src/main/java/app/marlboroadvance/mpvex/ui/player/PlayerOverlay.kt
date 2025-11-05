@@ -121,22 +121,6 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // NEW: Low-res seeking functions
-    fun startLowResSeeking() {
-        // Enable GPU scaling to 240p for faster frame rendering during seek
-        MPVLib.setPropertyString("gpu-scale-down", "240")
-        MPVLib.setPropertyString("gpu-scale", "bilinear") // Fastest scaling algorithm
-        MPVLib.setPropertyString("gpu-dscale", "bilinear")
-        MPVLib.setPropertyString("hr-seek-framedrop", "no") // Show ALL frames during seek
-    }
-    
-    fun endLowResSeeking() {
-        // Restore full quality output
-        MPVLib.setPropertyString("gpu-scale-down", "no")
-        MPVLib.setPropertyString("gpu-scale", "mitchell") // Quality scaling for playback
-        MPVLib.setPropertyString("gpu-dscale", "mitchell")
-    }
-    
     // UPDATED: performRealTimeSeek with throttle
     fun performRealTimeSeek(targetPosition: Double) {
         if (isSeekInProgress) return // Skip if we're already processing a seek
@@ -270,7 +254,6 @@ fun PlayerOverlay(
         return false
     }
     
-    // UPDATED: startHorizontalSeeking with low-res mode
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
@@ -279,9 +262,7 @@ fun PlayerOverlay(
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
-        
-        // START LOW-RES SEEKING MODE
-        startLowResSeeking()
+        // REMOVED: lastSeekTime = 0L
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
@@ -307,14 +288,10 @@ fun PlayerOverlay(
         performRealTimeSeek(clampedPosition)
     }
     
-    // UPDATED: endHorizontalSeeking with quality restore
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
             performRealTimeSeek(currentPos)
-            
-            // END LOW-RES SEEKING MODE - RESTORE QUALITY
-            endLowResSeeking()
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -389,13 +366,12 @@ fun PlayerOverlay(
     }
     
     LaunchedEffect(Unit) {
-        // SOFTWARE DECODING BASE CONFIG
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
         MPVLib.setPropertyString("profile", "fast")
-        MPVLib.setPropertyString("vd-lavc-threads", "4")
+        MPVLib.setPropertyString("vd-lavc-threads", "0")
         MPVLib.setPropertyString("audio-channels", "auto")
-        MPVLib.setPropertyString("demuxer-lavf-threads", "4")
+        MPVLib.setPropertyString("demuxer-lavf-threads", "0")
         MPVLib.setPropertyString("cache", "yes")
         MPVLib.setPropertyInt("demuxer-max-bytes", 150 * 1024 * 1024)
         MPVLib.setPropertyString("demuxer-readahead-secs", "60")
@@ -405,7 +381,7 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("video-sync", "display-resample")
         MPVLib.setPropertyString("untimed", "yes")
         MPVLib.setPropertyString("hr-seek", "yes")
-        MPVLib.setPropertyString("hr-seek-framedrop", "no") // Show all frames during seek
+        MPVLib.setPropertyString("hr-seek-framedrop", "yes")
         MPVLib.setPropertyString("vd-lavc-fast", "yes")
         MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
         MPVLib.setPropertyString("vd-lavc-skipidct", "all")
@@ -420,10 +396,6 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("audio-samplerate", "auto")
         MPVLib.setPropertyString("deband", "no")
         MPVLib.setPropertyString("video-aspect-override", "no")
-        
-        // QUALITY SCALING SETTINGS FOR NORMAL PLAYBACK
-        MPVLib.setPropertyString("gpu-scale", "mitchell")
-        MPVLib.setPropertyString("gpu-dscale", "mitchell")
     }
     
     LaunchedEffect(Unit) {
@@ -448,7 +420,7 @@ fun PlayerOverlay(
             }
             currentPosition = currentPos
             videoDuration = duration
-            delay(50)
+            delay(33)
         }
     }
     
@@ -457,15 +429,14 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // UPDATED: handleProgressBarDrag with low-res seeking
+    // UPDATED: handleProgressBarDrag with movement threshold
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
-            // START LOW-RES SEEKING MODE
-            startLowResSeeking()
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
+            // REMOVED: lastSeekTime = 0L
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
             }
@@ -482,15 +453,8 @@ fun PlayerOverlay(
         performRealTimeSeek(targetPosition)
     }
     
-    // UPDATED: handleDragFinished with quality restore
     fun handleDragFinished() {
         isDragging = false
-        
-        // END LOW-RES SEEKING MODE - RESTORE QUALITY
-        if (isSeeking) {
-            endLowResSeeking()
-        }
-        
         if (wasPlayingBeforeSeek) {
             coroutineScope.launch {
                 delay(100)
