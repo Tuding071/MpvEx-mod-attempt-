@@ -631,12 +631,13 @@ fun SimpleDraggableProgressBar(
     duration: Float,
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: () -> Unit,
-    getFreshPosition: () -> Float, // NEW: Function to get fresh position
+    getFreshPosition: () -> Float,
     modifier: Modifier = Modifier
 ) {
     var dragStartX by remember { mutableStateOf(0f) }
     var dragStartPosition by remember { mutableStateOf(0f) }
     var hasPassedThreshold by remember { mutableStateOf(false) }
+    var thresholdStartX by remember { mutableStateOf(0f) } // NEW: Track where threshold was passed
     
     // Convert 50dp to pixels for the movement threshold
     val movementThresholdPx = with(LocalDensity.current) { 50.dp.toPx() }
@@ -651,6 +652,7 @@ fun SimpleDraggableProgressBar(
                     // GET FRESH POSITION IMMEDIATELY WHEN DRAG STARTS
                     dragStartPosition = getFreshPosition()
                     hasPassedThreshold = false // Reset threshold flag
+                    thresholdStartX = 0f // Reset threshold start position
                 },
                 onDrag = { change, dragAmount ->
                     change.consume()
@@ -661,20 +663,23 @@ fun SimpleDraggableProgressBar(
                     if (!hasPassedThreshold) {
                         if (totalMovementX > movementThresholdPx) {
                             hasPassedThreshold = true
+                            thresholdStartX = currentX // NEW: Store position where threshold was passed
                         } else {
                             // Haven't passed threshold yet, don't seek
                             return@detectDragGestures
                         }
                     }
                     
-                    // Only calculate and seek if we've passed the threshold
-                    val deltaX = currentX - dragStartX
+                    // Calculate delta from the threshold start position, not the original drag start
+                    val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
+                    val deltaX = currentX - effectiveStartX
                     val deltaPosition = (deltaX / size.width) * duration
                     val newPosition = (dragStartPosition + deltaPosition).coerceIn(0f, duration)
                     onValueChange(newPosition)
                 },
                 onDragEnd = { 
                     hasPassedThreshold = false // Reset for next drag
+                    thresholdStartX = 0f // Reset threshold start
                     onValueChangeFinished() 
                 }
             )
