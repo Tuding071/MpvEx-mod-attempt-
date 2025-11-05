@@ -420,7 +420,7 @@ fun PlayerOverlay(
             }
             currentPosition = currentPos
             videoDuration = duration
-            delay(33)
+            delay(16)
         }
     }
     
