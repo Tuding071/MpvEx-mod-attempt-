@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -427,7 +428,7 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // UPDATED: handleProgressBarDrag without debouncing
+    // UPDATED: handleProgressBarDrag with movement threshold
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
@@ -634,6 +635,10 @@ fun SimpleDraggableProgressBar(
 ) {
     var dragStartX by remember { mutableStateOf(0f) }
     var dragStartPosition by remember { mutableStateOf(0f) }
+    var hasPassedThreshold by remember { mutableStateOf(false) }
+    
+    // Convert 50dp to pixels for the movement threshold
+    val movementThresholdPx = with(LocalDensity.current) { 50.dp.toPx() }
     
     Box(modifier = modifier.height(24.dp)) {
         Box(modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.CenterStart).background(Color.Gray.copy(alpha = 0.6f)))
@@ -644,15 +649,33 @@ fun SimpleDraggableProgressBar(
                     dragStartX = offset.x
                     // GET FRESH POSITION IMMEDIATELY WHEN DRAG STARTS
                     dragStartPosition = getFreshPosition()
+                    hasPassedThreshold = false // Reset threshold flag
                 },
                 onDrag = { change, dragAmount ->
                     change.consume()
-                    val deltaX = change.position.x - dragStartX
+                    val currentX = change.position.x
+                    val totalMovementX = abs(currentX - dragStartX)
+                    
+                    // Check if we've passed the movement threshold
+                    if (!hasPassedThreshold) {
+                        if (totalMovementX > movementThresholdPx) {
+                            hasPassedThreshold = true
+                        } else {
+                            // Haven't passed threshold yet, don't seek
+                            return@detectDragGestures
+                        }
+                    }
+                    
+                    // Only calculate and seek if we've passed the threshold
+                    val deltaX = currentX - dragStartX
                     val deltaPosition = (deltaX / size.width) * duration
                     val newPosition = (dragStartPosition + deltaPosition).coerceIn(0f, duration)
                     onValueChange(newPosition)
                 },
-                onDragEnd = { onValueChangeFinished() }
+                onDragEnd = { 
+                    hasPassedThreshold = false // Reset for next drag
+                    onValueChangeFinished() 
+                }
             )
         })
     }
