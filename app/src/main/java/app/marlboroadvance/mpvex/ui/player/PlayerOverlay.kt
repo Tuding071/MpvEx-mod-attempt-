@@ -639,8 +639,8 @@ fun SimpleDraggableProgressBar(
     var hasPassedThreshold by remember { mutableStateOf(false) }
     var thresholdStartX by remember { mutableStateOf(0f) } // NEW: Track where threshold was passed
     
-    // Convert 50dp to pixels for the movement threshold
-    val movementThresholdPx = with(LocalDensity.current) { 50.dp.toPx() }
+    // Convert 25dp to pixels for the movement threshold
+    val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
     Box(modifier = modifier.height(24.dp)) {
         Box(modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.CenterStart).background(Color.Gray.copy(alpha = 0.6f)))
