@@ -55,6 +55,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import android.content.Intent
 import android.net.Uri
+import kotlin.math.abs
 
 @Composable
 fun PlayerOverlay(
