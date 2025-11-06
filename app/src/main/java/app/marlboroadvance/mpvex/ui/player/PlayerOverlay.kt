@@ -262,7 +262,7 @@ fun PlayerOverlay(
         originalVideoHeight = MPVLib.getPropertyInt("vf-metadata/height") ?: 0
         
         MPVLib.setPropertyDouble("video-zoom", -1.0)
-        MPVLib.setPropertyString("vf", "scale=-2:240")
+        MPVLib.setPropertyString("vf", "scale=-2:144")
     }
     
     fun handleHorizontalSeeking(currentX: Float) {
@@ -411,7 +411,7 @@ fun PlayerOverlay(
             }
             currentPosition = currentPos
             videoDuration = duration
-            delay(1000)
+            delay(33)
         }
     }
     
