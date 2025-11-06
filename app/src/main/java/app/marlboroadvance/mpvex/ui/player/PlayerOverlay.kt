@@ -84,17 +84,14 @@ fun PlayerOverlay(
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
-    // SEEKING OPTIMIZATIONS
+    // REMOVED: lastSeekTime and seekDebounceMs
+    // ADD: Simple throttle control
     var isSeekInProgress by remember { mutableStateOf(false) }
     val seekThrottleMs = 30L // Small delay between seek commands
     
-    // HORIZONTAL SEEKING COOLDOWN
-    var lastHorizontalSeekTime by remember { mutableStateOf(0L) }
-    val horizontalSeekCooldown = 100L // ms - Reduced seek frequency for horizontal
-    
-    // HORIZONTAL SEEKING MOVEMENT THRESHOLD
-    var lastHorizontalSeekPosition by remember { mutableStateOf(0.0) }
-    val horizontalSeekThreshold = 2.0 // Only seek every 2 seconds of movement
+    // MEMORY OPTIMIZATION - Add with your other variables
+    var lastCleanupTime by remember { mutableStateOf(0L) }
+    val cleanupInterval = 10 * 60 * 1000L // 10 minutes
     
     // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
     var touchStartTime by remember { mutableStateOf(0L) }
@@ -128,16 +125,16 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // MPV CLEANUP FUNCTION
-    fun cleanupMPV() {
-        MPVLib.command("stop")
-        MPVLib.setPropertyString("cache", "no")
-        // Note: cache_clear command might not exist in all MPV versions
+    // MEMORY OPTIMIZATION FUNCTION
+    fun gentleCleanup() {
+        // Only reduce cache sizes - don't disable completely
+        MPVLib.setPropertyString("demuxer-readahead-secs", "10") // Reduced from 60
+        MPVLib.setPropertyString("cache-secs", "10") // Reduced from 60
+        MPVLib.setPropertyInt("demuxer-max-bytes", 100 * 1024 * 1024) // Reduced from 150MB
         
-        // Reset critical properties
+        // Reset critical properties without stopping playback
         MPVLib.setPropertyString("video-sync", "display-resample")
         MPVLib.setPropertyString("hr-seek", "yes")
-        MPVLib.setPropertyString("vd-lavc-fast", "yes")
     }
     
     // UPDATED: performRealTimeSeek with throttle
@@ -278,26 +275,19 @@ fun PlayerOverlay(
         cancelAutoHide()
         seekStartX = startX
         seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-        lastHorizontalSeekPosition = seekStartPosition // Initialize movement tracking
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
+        // REMOVED: lastSeekTime = 0L
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
         }
     }
     
-    // UPDATED: handleHorizontalSeeking with cooldown and movement threshold
+    // UPDATED: handleHorizontalSeeking without debouncing
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
-        
-        val currentTimeMs = System.currentTimeMillis()
-        
-        // COOLDOWN CHECK - Skip if too soon since last seek
-        if (currentTimeMs - lastHorizontalSeekTime < horizontalSeekCooldown) {
-            return
-        }
         
         val deltaX = currentX - seekStartX
         val pixelsPerSecond = 6f / 0.033f
@@ -310,13 +300,8 @@ fun PlayerOverlay(
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
         
-        // MOVEMENT THRESHOLD CHECK - Only seek if moved significantly
-        val positionChange = abs(clampedPosition - lastHorizontalSeekPosition)
-        if (positionChange > horizontalSeekThreshold) {
-            performRealTimeSeek(clampedPosition)
-            lastHorizontalSeekPosition = clampedPosition
-            lastHorizontalSeekTime = currentTimeMs
-        }
+        // Send seek command with throttle
+        performRealTimeSeek(clampedPosition)
     }
     
     fun endHorizontalSeeking() {
@@ -335,7 +320,6 @@ fun PlayerOverlay(
             showSeekTime = false
             seekStartX = 0f
             seekStartPosition = 0.0
-            lastHorizontalSeekPosition = 0.0
             wasPlayingBeforeSeek = false
             scheduleSeekbarHide()
         }
@@ -365,60 +349,6 @@ fun PlayerOverlay(
     }
     
     LaunchedEffect(Unit) {
-        // PERFORMANCE CRITICAL - Reset state first
-        cleanupMPV()
-        
-        // HARDWARE & DECODING
-        MPVLib.setPropertyString("hwdec", "no")
-        MPVLib.setPropertyString("vo", "gpu")
-        MPVLib.setPropertyString("profile", "fast")
-        MPVLib.setPropertyString("vd-lavc-threads", "4")
-        MPVLib.setPropertyString("demuxer-lavf-threads", "4")
-        
-        // MEMORY MANAGEMENT - Prevent accumulation
-        MPVLib.setPropertyString("cache", "no")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 50 * 1024 * 1024) // Reduced from 150MB
-        MPVLib.setPropertyString("demuxer-readahead-secs", "2") // Reduced from 60
-        MPVLib.setPropertyString("cache-secs", "2") // Reduced from 60
-        MPVLib.setPropertyString("demuxer-max-back-bytes", "10M") // Reduced from 50M
-        MPVLib.setPropertyString("cache-pause", "no")
-        MPVLib.setPropertyString("cache-initial", "0.2") // Reduced from 0.5
-        
-        // SEEKING PERFORMANCE
-        MPVLib.setPropertyString("hr-seek", "yes")
-        MPVLib.setPropertyString("hr-seek-framedrop", "no")
-        
-        // VIDEO QUALITY
-        MPVLib.setPropertyString("video-sync", "display-resample")
-        MPVLib.setPropertyString("untimed", "yes")
-        
-        // DECODER OPTIMIZATIONS
-        MPVLib.setPropertyString("vd-lavc-fast", "yes")
-        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
-        MPVLib.setPropertyString("vd-lavc-skipidct", "all")
-        MPVLib.setPropertyString("vd-lavc-assemble", "yes")
-        MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
-        
-        // GPU OPTIMIZATIONS
-        MPVLib.setPropertyString("gpu-dumb-mode", "yes")
-        MPVLib.setPropertyString("opengl-pbo", "yes")
-        
-        // NETWORK (Keep minimal for local files)
-        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1")
-        MPVLib.setPropertyString("network-timeout", "10") // Reduced from 30
-        
-        // AUDIO
-        MPVLib.setPropertyString("audio-channels", "auto")
-        MPVLib.setPropertyString("audio-client-name", "MPVEx-Software-4Core")
-        MPVLib.setPropertyString("audio-samplerate", "auto")
-        
-        // DISABLE UNNECESSARY FEATURES
-        MPVLib.setPropertyString("deband", "no")
-        MPVLib.setPropertyString("video-aspect-override", "no")
-        MPVLib.setPropertyString("correct-downscaling", "no")
-        MPVLib.setPropertyString("sigmoid-upscaling", "no")
-        MPVLib.setPropertyString("blend-subtitles", "no")
-        
         val intent = (context as? android.app.Activity)?.intent
         fileName = when {
             intent?.action == Intent.ACTION_SEND -> {
@@ -442,24 +372,74 @@ fun PlayerOverlay(
         scheduleSeekbarHide()
     }
     
-    // PERIODIC CLEANUP
-    LaunchedEffect(Unit) {
-        // Periodic cleanup every 5 minutes
-        while (isActive) {
-            delay(5 * 60 * 1000) // 5 minutes
-            if (!isSeeking && !isDragging) {
-                // Gentle cleanup during idle periods
-                // Note: cache_clear might not be available in all MPV versions
-            }
-        }
-    }
-    
     // Backup speed control
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
             MPVLib.setPropertyDouble("speed", 2.0)
         } else {
             MPVLib.setPropertyDouble("speed", 1.0)
+        }
+    }
+    
+    // OPTIMIZED MPV CONFIGURATION WITH REDUCED CACHE
+    LaunchedEffect(Unit) {
+        MPVLib.setPropertyString("hwdec", "no")
+        MPVLib.setPropertyString("vo", "gpu")
+        MPVLib.setPropertyString("profile", "fast")
+        MPVLib.setPropertyString("vd-lavc-threads", "4")
+        MPVLib.setPropertyString("audio-channels", "auto")
+        MPVLib.setPropertyString("demuxer-lavf-threads", "4")
+        
+        // REDUCED CACHE SIZES - Memory optimization
+        MPVLib.setPropertyString("cache", "yes")
+        MPVLib.setPropertyInt("demuxer-max-bytes", 100 * 1024 * 1024) // Was 150MB
+        MPVLib.setPropertyString("demuxer-readahead-secs", "10") // Was 60
+        MPVLib.setPropertyString("cache-secs", "10") // Was 60
+        
+        MPVLib.setPropertyString("cache-pause", "no")
+        MPVLib.setPropertyString("cache-initial", "0.5")
+        MPVLib.setPropertyString("video-sync", "display-resample")
+        MPVLib.setPropertyString("untimed", "yes")
+        MPVLib.setPropertyString("hr-seek", "yes")
+        MPVLib.setPropertyString("hr-seek-framedrop", "no")
+        MPVLib.setPropertyString("vd-lavc-fast", "yes")
+        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
+        MPVLib.setPropertyString("vd-lavc-skipidct", "all")
+        MPVLib.setPropertyString("vd-lavc-assemble", "yes")
+        MPVLib.setPropertyString("demuxer-max-back-bytes", "50M")
+        MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
+        MPVLib.setPropertyString("gpu-dumb-mode", "yes")
+        MPVLib.setPropertyString("opengl-pbo", "yes")
+        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1")
+        MPVLib.setPropertyString("network-timeout", "30")
+        MPVLib.setPropertyString("audio-client-name", "MPVEx-Software-4Core")
+        MPVLib.setPropertyString("audio-samplerate", "auto")
+        MPVLib.setPropertyString("deband", "no")
+        MPVLib.setPropertyString("video-aspect-override", "no")
+    }
+    
+    // PERIODIC MEMORY MAINTENANCE
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            delay(30 * 1000) // Check every 30 seconds
+            
+            val currentTime = System.currentTimeMillis()
+            if (currentTime - lastCleanupTime > cleanupInterval) {
+                if (!isSeeking && !isDragging && !userInteracting) {
+                    // Safe to perform gentle cleanup
+                    gentleCleanup()
+                    lastCleanupTime = currentTime
+                }
+            }
+        }
+    }
+    
+    // VIDEO END DETECTION FOR CLEANUP
+    LaunchedEffect(currentPosition, videoDuration) {
+        // If we're near the end of video, prepare for cleanup
+        if (videoDuration > 0 && currentPosition > videoDuration - 5) {
+            // Video is ending soon, reduce cache for next video
+            gentleCleanup()
         }
     }
     
@@ -501,6 +481,7 @@ fun PlayerOverlay(
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
+            // REMOVED: lastSeekTime = 0L
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
             }
