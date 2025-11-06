@@ -83,12 +83,16 @@ fun PlayerOverlay(
     var seekStartX by remember { mutableStateOf(0f) }
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
-    var originalVideoScale by remember { mutableStateOf(1.0) }
-    var originalVideoHeight by remember { mutableStateOf(0) }
     
+    // 1-SECOND INTERVAL SEEKING VARIABLES
+    var lastSeekbarSeekTime by remember { mutableStateOf(0L) }
+    val seekbarSeekIntervalMs = 1000L // 1 second between seekbar seeks
+    
+    // Horizontal swipe seeking remains responsive (no interval)
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 30L
+    val swipeSeekThrottleMs = 30L
     
+    // GESTURE STATES
     var touchStartTime by remember { mutableStateOf(0L) }
     var touchStartX by remember { mutableStateOf(0f) }
     var touchStartY by remember { mutableStateOf(0f) }
@@ -97,6 +101,7 @@ fun PlayerOverlay(
     var isHorizontalSwipe by remember { mutableStateOf(false) }
     var longTapJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
+    // THRESHOLDS
     val longTapThreshold = 300L
     val horizontalSwipeThreshold = 30f
     val maxVerticalMovement = 50f
@@ -119,16 +124,36 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    fun performRealTimeSeek(targetPosition: Double) {
+    // SEPARATE SEEK FUNCTIONS FOR DIFFERENT GESTURES
+    
+    // For horizontal swipe: responsive seeking
+    fun performSwipeSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         
         isSeekInProgress = true
         MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
         
         coroutineScope.launch {
-            delay(seekThrottleMs)
+            delay(swipeSeekThrottleMs)
             isSeekInProgress = false
         }
+    }
+    
+    // For seekbar drag: 1-second interval seeking
+    fun performSeekbarSeek(targetPosition: Double) {
+        val currentTime = System.currentTimeMillis()
+        
+        // Only seek if 1 second has passed since last seekbar seek
+        if (currentTime - lastSeekbarSeekTime > seekbarSeekIntervalMs) {
+            MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+            lastSeekbarSeekTime = currentTime
+        }
+        // If less than 1 second, skip the seek (UI still updates)
+    }
+    
+    // Final exact seek when drag ends
+    fun performFinalSeek(targetPosition: Double) {
+        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
     }
     
     fun getFreshPosition(): Float {
@@ -257,12 +282,6 @@ fun PlayerOverlay(
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
         }
-        
-        originalVideoScale = MPVLib.getPropertyDouble("video-zoom") ?: 0.0
-        originalVideoHeight = MPVLib.getPropertyInt("vf-metadata/height") ?: 0
-        
-        MPVLib.setPropertyDouble("video-zoom", -1.0)
-        MPVLib.setPropertyString("vf", "scale=-2:144")
     }
     
     fun handleHorizontalSeeking(currentX: Float) {
@@ -278,16 +297,14 @@ fun PlayerOverlay(
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
         
-        performRealTimeSeek(clampedPosition)
+        // Use responsive seeking for horizontal swipe
+        performSwipeSeek(clampedPosition)
     }
     
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
-            performRealTimeSeek(currentPos)
-            
-            MPVLib.setPropertyDouble("video-zoom", originalVideoScale)
-            MPVLib.setPropertyString("vf", "")
+            performSwipeSeek(currentPos)
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -360,9 +377,9 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
         MPVLib.setPropertyString("profile", "fast")
-        MPVLib.setPropertyString("vd-lavc-threads", "0")
+        MPVLib.setPropertyString("vd-lavc-threads", "4")
         MPVLib.setPropertyString("audio-channels", "auto")
-        MPVLib.setPropertyString("demuxer-lavf-threads", "0")
+        MPVLib.setPropertyString("demuxer-lavf-threads", "4")
         MPVLib.setPropertyString("cache", "yes")
         MPVLib.setPropertyInt("demuxer-max-bytes", 150 * 1024 * 1024)
         MPVLib.setPropertyString("demuxer-readahead-secs", "60")
@@ -411,7 +428,7 @@ fun PlayerOverlay(
             }
             currentPosition = currentPos
             videoDuration = duration
-            delay(33)
+            delay(500)
         }
     }
     
@@ -420,6 +437,7 @@ fun PlayerOverlay(
         else -> ""
     }
     
+    // UPDATED: Seekbar drag handling with 1-second interval
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
@@ -429,26 +447,24 @@ fun PlayerOverlay(
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
             }
-            
-            originalVideoScale = MPVLib.getPropertyDouble("video-zoom") ?: 0.0
-            MPVLib.setPropertyDouble("video-zoom", -1.0)
-            MPVLib.setPropertyString("vf", "scale=-2:144")
         }
         isDragging = true
         seekbarPosition = newPosition
         val targetPosition = newPosition.toDouble()
         
+        // UI updates instantly
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
         
-        performRealTimeSeek(targetPosition)
+        // Use 1-second interval seeking for seekbar drag
+        performSeekbarSeek(targetPosition)
     }
     
     fun handleDragFinished() {
         isDragging = false
         
-        MPVLib.setPropertyDouble("video-zoom", originalVideoScale)
-        MPVLib.setPropertyString("vf", "")
+        // FINAL EXACT SEEK when drag ends
+        performFinalSeek(seekbarPosition.toDouble())
         
         if (wasPlayingBeforeSeek) {
             coroutineScope.launch {
@@ -463,6 +479,7 @@ fun PlayerOverlay(
     }
     
     Box(modifier = modifier.fillMaxSize()) {
+        // MAIN GESTURE AREA
         Box(modifier = Modifier.fillMaxSize()) {
             Box(
                 modifier = Modifier
@@ -535,6 +552,7 @@ fun PlayerOverlay(
             }
         }
         
+        // BOTTOM SEEK BAR AREA
         if (showSeekbar) {
             Box(
                 modifier = Modifier
@@ -568,6 +586,7 @@ fun PlayerOverlay(
             }
         }
         
+        // VIDEO INFO
         if (showVideoInfo != 0) {
             Text(
                 text = displayText,
@@ -580,6 +599,7 @@ fun PlayerOverlay(
             )
         }
         
+        // FEEDBACK AREA
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
                 showVolumeFeedbackState -> Text(
@@ -656,8 +676,7 @@ fun SimpleDraggableProgressBar(
                 },
                 onDragEnd = { 
                     hasPassedThreshold = false
-                    thresholdStartX = 0f
-                    onValueChangeFinished()
+                    onValueChangeFinished() 
                 }
             )
         })
