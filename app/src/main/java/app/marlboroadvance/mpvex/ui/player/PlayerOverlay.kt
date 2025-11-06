@@ -139,12 +139,13 @@ fun PlayerOverlay(
         }
     }
     
-    // For seekbar drag: 1-second interval seeking
+    // For seekbar drag: 1-second interval seeking with INSTANT frame updates
     fun performSeekbarSeek(targetPosition: Double) {
         val currentTime = System.currentTimeMillis()
         
         // Only seek if 1 second has passed since last seekbar seek
         if (currentTime - lastSeekbarSeekTime > seekbarSeekIntervalMs) {
+            // Use exact seeking for instant frame updates
             MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
             lastSeekbarSeekTime = currentTime
         }
@@ -374,6 +375,10 @@ fun PlayerOverlay(
     }
     
     LaunchedEffect(Unit) {
+        // Ensure high-precision seeking for instant frame updates
+        MPVLib.setPropertyString("hr-seek", "yes")
+        MPVLib.setPropertyString("hr-seek-framedrop", "no")
+        
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
         MPVLib.setPropertyString("profile", "fast")
@@ -388,8 +393,6 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("cache-initial", "0.5")
         MPVLib.setPropertyString("video-sync", "display-resample")
         MPVLib.setPropertyString("untimed", "yes")
-        MPVLib.setPropertyString("hr-seek", "yes")
-        MPVLib.setPropertyString("hr-seek-framedrop", "no")
         MPVLib.setPropertyString("vd-lavc-fast", "yes")
         MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
         MPVLib.setPropertyString("vd-lavc-skipidct", "all")
@@ -463,7 +466,7 @@ fun PlayerOverlay(
     fun handleDragFinished() {
         isDragging = false
         
-        // FINAL EXACT SEEK when drag ends
+        // FINAL EXACT SEEK when drag ends - ensure perfect frame accuracy
         performFinalSeek(seekbarPosition.toDouble())
         
         if (wasPlayingBeforeSeek) {
