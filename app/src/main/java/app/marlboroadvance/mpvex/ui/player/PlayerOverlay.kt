@@ -432,7 +432,7 @@ fun PlayerOverlay(
             
             originalVideoScale = MPVLib.getPropertyDouble("video-zoom") ?: 0.0
             MPVLib.setPropertyDouble("video-zoom", -1.0)
-            MPVLib.setPropertyString("vf", "scale=-2:240")
+            MPVLib.setPropertyString("vf", "scale=-2:144")
         }
         isDragging = true
         seekbarPosition = newPosition
