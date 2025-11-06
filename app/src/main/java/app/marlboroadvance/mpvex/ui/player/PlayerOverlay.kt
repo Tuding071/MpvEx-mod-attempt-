@@ -198,37 +198,9 @@ fun PlayerOverlay(
         }
     }
     
-    // PRE-DECODING HELPER FUNCTIONS
-    suspend fun preDecodeChunk(start: Double, end: Double, chunkSize: Double, delayMs: Long, coroutineScope: CoroutineScope) {
-        var decodePos = start
-        while (decodePos <= end && coroutineScope.isActive) {
-            MPVLib.command("seek", decodePos.toString(), "absolute", "exact")
-            delay(delayMs)
-            decodePos += chunkSize
-        }
-    }
-
-    suspend fun preDecodeBackwardSection(currentPos: Double, windowStart: Double, coroutineScope: CoroutineScope) {
-        var decodePos = currentPos - preDecodeChunkSize
-        while (decodePos >= windowStart && coroutineScope.isActive) {
-            MPVLib.command("seek", decodePos.toString(), "absolute", "exact")
-            delay(10) // Reduced delay for faster pre-decoding
-            decodePos -= preDecodeChunkSize
-        }
-    }
-
-    suspend fun preDecodeForwardSection(currentPos: Double, windowEnd: Double, coroutineScope: CoroutineScope) {
-        var decodePos = currentPos + preDecodeChunkSize
-        while (decodePos <= windowEnd && coroutineScope.isActive) {
-            MPVLib.command("seek", decodePos.toString(), "absolute", "exact")
-            delay(10) // Reduced delay for faster pre-decoding
-            decodePos += preDecodeChunkSize
-        }
-    }
-    
-    // ENHANCED PRE-DECODING WITH PRIORITY QUEUE
+    // SIMPLIFIED PRE-DECODING - REMOVED the problematic functions that cause frame flashing
     fun startSmartPreDecoding(currentPos: Double, duration: Double, isBackwardSeek: Boolean = false) {
-        // Cancel any existing pre-decoding
+        // Cancel any existing pre-decoding to prevent conflicts
         preDecodeJob?.cancel()
         
         // Calculate new window
@@ -236,8 +208,9 @@ fun PlayerOverlay(
         val windowEnd = (currentPos + preDecodeWindowSize).coerceAtMost(duration)
         
         // Only start new pre-decoding if window changed significantly
-        if (abs(windowStart - currentDecodeWindowStart) > 2.0 || 
-            abs(windowEnd - currentDecodeWindowEnd) > 2.0) {
+        // AND we're not actively seeking (to prevent frame flashing)
+        if ((abs(windowStart - currentDecodeWindowStart) > 2.0 || 
+            abs(windowEnd - currentDecodeWindowEnd) > 2.0) && !isSeeking) {
             
             currentDecodeWindowStart = windowStart
             currentDecodeWindowEnd = windowEnd
@@ -246,39 +219,34 @@ fun PlayerOverlay(
                 // FORCE FLUSH old cache first
                 forceCacheFlush()
                 
-                // IMMEDIATE AREA: Pre-decode 3 seconds around current position first
-                val immediateStart = (currentPos - 3.0).coerceAtLeast(0.0)
-                val immediateEnd = (currentPos + 3.0).coerceAtMost(duration)
-                
-                // Priority 1: Immediate area around current position (fastest)
-                preDecodeChunk(immediateStart, immediateEnd, 1.0, 5, this)
-                
-                // Priority 2: Rest of the window
-                if (isBackwardSeek) {
-                    // Backward priority
-                    preDecodeChunk(windowStart, immediateStart - 0.1, 2.0, 10, this) // Past section
-                    preDecodeChunk(immediateEnd + 0.1, windowEnd, 2.0, 10, this) // Future section
-                } else {
-                    // Forward priority  
-                    preDecodeChunk(immediateEnd + 0.1, windowEnd, 2.0, 10, this) // Future section
-                    preDecodeChunk(windowStart, immediateStart - 0.1, 2.0, 10, this) // Past section
+                // SIMPLIFIED: Only pre-decode forward during normal playback
+                // Don't pre-decode during seeking to prevent frame flashing
+                if (!isSeeking && !isDragging) {
+                    val immediateEnd = (currentPos + 5.0).coerceAtMost(duration) // Smaller window
+                    if (immediateEnd > currentPos + 1.0) {
+                        // Simple forward pre-decoding only
+                        var decodePos = currentPos + 1.0
+                        while (decodePos <= immediateEnd && this.isActive) {
+                            MPVLib.command("seek", decodePos.toString(), "absolute", "exact")
+                            delay(20) // Slower to prevent conflicts
+                            decodePos += 2.0
+                        }
+                        // Return to current position
+                        MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
+                    }
                 }
-                
-                // Return to exact position and sync frames
-                MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
-                syncFrames()
             }
         }
     }
     
-    // FIXED: performRealTimeSeek - prevents blinking frames by avoiding frame-step during seeking
+    // FIXED: performRealTimeSeek - prevents blinking frames by using keyframes
     fun performRealTimeSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         
         isSeekInProgress = true
         
-        // SIMPLIFIED: Just seek without frame-step to prevent blinking
-        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+        // Use keyframe seeking to prevent frame flashing
+        MPVLib.command("seek", targetPosition.toString(), "absolute", "keyframes")
         
         coroutineScope.launch {
             delay(seekThrottleMs)
@@ -405,7 +373,7 @@ fun PlayerOverlay(
         return false
     }
     
-    // FIXED: startHorizontalSeeking - properly tracks playback state
+    // FIXED: startHorizontalSeeking - properly tracks playback state and disables pre-decoding during seek
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
@@ -421,16 +389,8 @@ fun PlayerOverlay(
         // DISABLE AUDIO DURING SEEKING
         disableAudioTemporarily()
         
-        // DETECT SEEK DIRECTION and pre-decode accordingly
-        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-        
-        // Estimate seek direction based on initial movement
-        val initialDirection = if (startX < touchStartX) "backward" else "forward"
-        val isBackwardSeek = initialDirection == "backward"
-        
-        // PRE-DECODE with priority on expected direction
-        startSmartPreDecoding(currentPos, duration, isBackwardSeek)
+        // CANCEL ANY PRE-DECODING to prevent frame flashing
+        preDecodeJob?.cancel()
         
         // FIX: Only pause if it was playing before seek
         if (wasPlayingBeforeSeek) {
@@ -438,7 +398,7 @@ fun PlayerOverlay(
         }
     }
     
-    // ENHANCED: handleHorizontalSeeking with prediction and real-time pre-decoding
+    // FIXED: handleHorizontalSeeking - simplified to prevent frame flashing
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
@@ -449,25 +409,12 @@ fun PlayerOverlay(
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
-        // PREDICT next position for smoother rendering
-        val currentTimeMs = System.currentTimeMillis()
-        val velocity = (currentX - touchStartX) / (currentTimeMs - touchStartTime)
-        val predictedPosition = if (abs(velocity) > 0.1) {
-            val predictionOffset = velocity * 0.2 // Predict 200ms ahead
-            (clampedPosition + predictionOffset).coerceIn(0.0, duration)
-        } else {
-            clampedPosition
-        }
-        
         // Update UI
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
         
-        // PRE-DECODE with prediction
-        val isBackwardSeek = clampedPosition < seekStartPosition
-        startSmartPreDecoding(predictedPosition, duration, isBackwardSeek)
-        
-        // FORCE SEEK with frame rendering
+        // NO PRE-DECODING during active seeking to prevent frame flashing
+        // Just perform the seek directly
         performRealTimeSeek(clampedPosition)
     }
     
@@ -475,6 +422,8 @@ fun PlayerOverlay(
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
+            
+            // Final seek to ensure we're at the exact position
             performRealTimeSeek(currentPos)
             
             // RE-ENABLE AUDIO WITH SYNC
@@ -581,6 +530,11 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("hr-seek", "yes")
         MPVLib.setPropertyString("hr-seek-framedrop", "no")
         
+        // KEYFRAME SEEKING OPTIMIZATION - Prevents frame flashing
+        MPVLib.setPropertyString("hr-seek", "yes")
+        MPVLib.setPropertyString("correct-pts", "yes")
+        MPVLib.setPropertyString("video-sync", "display-resample")
+        
         // FASTER DECODING FOR SEEKING
         MPVLib.setPropertyString("vd-lavc-fast", "yes")
         MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
@@ -621,7 +575,7 @@ fun PlayerOverlay(
         }
     }
     
-    // CONTINUOUS PRE-DECODING DURING PLAYBACK
+    // CONTINUOUS PRE-DECODING DURING PLAYBACK (BUT NOT DURING SEEKING)
     LaunchedEffect(Unit) {
         var lastPosition = -1.0
         while (coroutineScope.isActive) {
@@ -647,7 +601,7 @@ fun PlayerOverlay(
             currentPosition = currentPos
             videoDuration = duration
             
-            // CONTINUOUS PRE-DECODING - Always maintain the window
+            // CONTINUOUS PRE-DECODING - Only when NOT seeking to prevent frame flashing
             if (!isSeeking && !isDragging && duration > 30) {
                 val positionChanged = abs(currentPos - lastPosition) > 2.0
                 if (positionChanged || preDecodeJob == null) {
@@ -665,7 +619,7 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // FIXED: handleProgressBarDrag - properly tracks playback state
+    // FIXED: handleProgressBarDrag - properly tracks playback state and disables pre-decoding
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
@@ -678,6 +632,9 @@ fun PlayerOverlay(
             
             // DISABLE AUDIO DURING SEEKBAR DRAG
             disableAudioTemporarily()
+            
+            // CANCEL ANY PRE-DECODING to prevent frame flashing
+            preDecodeJob?.cancel()
             
             // FIX: Only pause if it was playing before seek
             if (wasPlayingBeforeSeek) {
@@ -692,12 +649,7 @@ fun PlayerOverlay(
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
         
-        // PRE-DECODE around the target position
-        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-        val isBackwardSeek = targetPosition < currentPosition
-        startSmartPreDecoding(targetPosition, duration, isBackwardSeek)
-        
-        // Send seek command with throttle
+        // NO PRE-DECODING during drag - just seek directly to prevent frame flashing
         performRealTimeSeek(targetPosition)
     }
     
