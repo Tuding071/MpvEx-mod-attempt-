@@ -132,7 +132,7 @@ fun PlayerOverlay(
     fun cleanupMPV() {
         MPVLib.command("stop")
         MPVLib.setPropertyString("cache", "no")
-        MPVLib.command("cache_clear")
+        // Note: cache_clear command might not exist in all MPV versions
         
         // Reset critical properties
         MPVLib.setPropertyString("video-sync", "display-resample")
@@ -292,10 +292,10 @@ fun PlayerOverlay(
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
-        val currentTime = System.currentTimeMillis()
+        val currentTimeMs = System.currentTimeMillis()
         
         // COOLDOWN CHECK - Skip if too soon since last seek
-        if (currentTime - lastHorizontalSeekTime < horizontalSeekCooldown) {
+        if (currentTimeMs - lastHorizontalSeekTime < horizontalSeekCooldown) {
             return
         }
         
@@ -315,7 +315,7 @@ fun PlayerOverlay(
         if (positionChange > horizontalSeekThreshold) {
             performRealTimeSeek(clampedPosition)
             lastHorizontalSeekPosition = clampedPosition
-            lastHorizontalSeekTime = currentTime
+            lastHorizontalSeekTime = currentTimeMs
         }
     }
     
@@ -418,21 +418,7 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("correct-downscaling", "no")
         MPVLib.setPropertyString("sigmoid-upscaling", "no")
         MPVLib.setPropertyString("blend-subtitles", "no")
-    }
-    
-    // PERIODIC CLEANUP
-    LaunchedEffect(Unit) {
-        // Periodic cleanup every 5 minutes
-        while (isActive) {
-            delay(5 * 60 * 1000) // 5 minutes
-            if (!isSeeking && !isDragging) {
-                // Gentle cleanup during idle periods
-                MPVLib.command("cache_clear")
-            }
-        }
-    }
-    
-    LaunchedEffect(Unit) {
+        
         val intent = (context as? android.app.Activity)?.intent
         fileName = when {
             intent?.action == Intent.ACTION_SEND -> {
@@ -454,6 +440,18 @@ fun PlayerOverlay(
             showVideoInfo = 0
         }
         scheduleSeekbarHide()
+    }
+    
+    // PERIODIC CLEANUP
+    LaunchedEffect(Unit) {
+        // Periodic cleanup every 5 minutes
+        while (isActive) {
+            delay(5 * 60 * 1000) // 5 minutes
+            if (!isSeeking && !isDragging) {
+                // Gentle cleanup during idle periods
+                // Note: cache_clear might not be available in all MPV versions
+            }
+        }
     }
     
     // Backup speed control
@@ -488,18 +486,6 @@ fun PlayerOverlay(
             currentPosition = currentPos
             videoDuration = duration
             delay(500)
-        }
-    }
-    
-    // CLEANUP ON DISPOSE
-    DisposableEffect(Unit) {
-        onDispose {
-            videoInfoJob?.cancel()
-            hideSeekbarJob?.cancel()
-            playbackFeedbackJob?.cancel()
-            volumeFeedbackJob?.cancel()
-            longTapJob?.cancel()
-            cleanupMPV()
         }
     }
     
