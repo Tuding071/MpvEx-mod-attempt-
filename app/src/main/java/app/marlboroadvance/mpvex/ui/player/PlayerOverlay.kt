@@ -84,10 +84,19 @@ fun PlayerOverlay(
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
+    // ADD: Audio control during seeking
+    var wasAudioEnabled by remember { mutableStateOf(true) }
+    var audioReenableJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    
     // REMOVED: lastSeekTime and seekDebounceMs
     // ADD: Simple throttle control
     var isSeekInProgress by remember { mutableStateOf(false) }
     val seekThrottleMs = 30L // Small delay between seek commands
+    
+    // ADD: Direction tracking with throttle
+    var currentSeekDirection by remember { mutableStateOf("none") } // "forward", "backward", "none"
+    var lastDirectionChangeX by remember { mutableStateOf(0f) }
+    val directionChangeThreshold = 25f // pixels
     
     // MEMORY OPTIMIZATION - Add with your other variables
     var lastCleanupTime by remember { mutableStateOf(0L) }
@@ -131,6 +140,31 @@ fun PlayerOverlay(
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
+    
+    // NEW: Audio control functions
+    fun disableAudioTemporarily() {
+        wasAudioEnabled = MPVLib.getPropertyBoolean("mute") == false
+        if (wasAudioEnabled) {
+            MPVLib.setPropertyBoolean("mute", true)
+        }
+        // Cancel any pending re-enable
+        audioReenableJob?.cancel()
+    }
+    
+    fun reenableAudioWithSync() {
+        audioReenableJob?.cancel()
+        audioReenableJob = coroutineScope.launch {
+            delay(150) // Small delay to ensure seek is complete
+            if (wasAudioEnabled) {
+                MPVLib.setPropertyBoolean("mute", false)
+                // Force audio resync
+                MPVLib.setPropertyString("audio-pitch-correction", "yes")
+                delay(50)
+                MPVLib.setPropertyString("audio-pitch-correction", "no")
+            }
+            wasAudioEnabled = true // Reset flag
+        }
+    }
     
     // MEMORY OPTIMIZATION FUNCTION
     fun gentleCleanup() {
@@ -194,7 +228,7 @@ fun PlayerOverlay(
         }
     }
     
-    // ENHANCED PRE-DECODING WITH PRIORITY QUEUE
+    // ENHANCED PRE-DECODING WITH PRIORITY QUEUE AND DIRECTION THROTTLE
     fun startSmartPreDecoding(currentPos: Double, duration: Double, isBackwardSeek: Boolean = false) {
         // Cancel any existing pre-decoding
         preDecodeJob?.cancel()
@@ -204,9 +238,11 @@ fun PlayerOverlay(
         val windowEnd = (currentPos + preDecodeWindowSize).coerceAtMost(duration)
         
         // Only start new pre-decoding if window changed significantly
-        if (abs(windowStart - currentDecodeWindowStart) > 2.0 || 
-            abs(windowEnd - currentDecodeWindowEnd) > 2.0) {
-            
+        // OR if we have a clear direction (thanks to throttle)
+        val significantChange = abs(windowStart - currentDecodeWindowStart) > 2.0 || 
+                              abs(windowEnd - currentDecodeWindowEnd) > 2.0
+        
+        if (significantChange || currentSeekDirection != "none") {
             currentDecodeWindowStart = windowStart
             currentDecodeWindowEnd = windowEnd
             
@@ -219,17 +255,19 @@ fun PlayerOverlay(
                 val immediateEnd = (currentPos + 3.0).coerceAtMost(duration)
                 
                 // Priority 1: Immediate area around current position (fastest)
-                preDecodeChunk(immediateStart, immediateEnd, 1.0, 5, this) // 1-second chunks, 5ms delay
+                preDecodeChunk(immediateStart, immediateEnd, 1.0, 5, this)
                 
-                // Priority 2: Rest of the window
-                if (isBackwardSeek) {
-                    // Backward priority
-                    preDecodeChunk(windowStart, immediateStart - 0.1, 2.0, 10, this) // Past section
-                    preDecodeChunk(immediateEnd + 0.1, windowEnd, 2.0, 10, this) // Future section
+                // Priority 2: Direction-aware pre-decoding (SIMPLER now with throttle)
+                if (isBackwardSeek && currentSeekDirection == "backward") {
+                    // Focus on backward section
+                    preDecodeChunk(windowStart, immediateStart - 0.1, 2.0, 10, this)
+                } else if (!isBackwardSeek && currentSeekDirection == "forward") {
+                    // Focus on forward section  
+                    preDecodeChunk(immediateEnd + 0.1, windowEnd, 2.0, 10, this)
                 } else {
-                    // Forward priority  
-                    preDecodeChunk(immediateEnd + 0.1, windowEnd, 2.0, 10, this) // Future section
-                    preDecodeChunk(windowStart, immediateStart - 0.1, 2.0, 10, this) // Past section
+                    // Neutral - decode both sides equally
+                    preDecodeChunk(windowStart, immediateStart - 0.1, 2.0, 15, this)
+                    preDecodeChunk(immediateEnd + 0.1, windowEnd, 2.0, 15, this)
                 }
                 
                 // Return to exact position and sync frames
@@ -239,7 +277,7 @@ fun PlayerOverlay(
         }
     }
     
-    // ENHANCED: performRealTimeSeek with forced rendering
+    // ENHANCED: performRealTimeSeek with forced rendering and audio control
     fun performRealTimeSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         
@@ -391,7 +429,7 @@ fun PlayerOverlay(
         return false
     }
     
-    // Enhanced startHorizontalSeeking with direction-aware pre-decoding
+    // Enhanced startHorizontalSeeking with direction-aware pre-decoding and audio control
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
@@ -401,23 +439,25 @@ fun PlayerOverlay(
         isSeeking = true
         showSeekTime = true
         
-        // DETECT SEEK DIRECTION and pre-decode accordingly
+        // DISABLE AUDIO DURING SEEKING
+        disableAudioTemporarily()
+        
+        // INITIALIZE DIRECTION TRACKING
+        lastDirectionChangeX = startX
+        currentSeekDirection = "none" // Reset direction
+        
         val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         
-        // Estimate seek direction based on initial movement
-        val initialDirection = if (startX < touchStartX) "backward" else "forward"
-        val isBackwardSeek = initialDirection == "backward"
-        
-        // PRE-DECODE with priority on expected direction
-        startSmartPreDecoding(currentPos, duration, isBackwardSeek)
+        // Start with neutral pre-decoding until direction is established
+        startSmartPreDecoding(currentPos, duration, false) // Default to forward
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
         }
     }
     
-    // ENHANCED: handleHorizontalSeeking with prediction and real-time pre-decoding
+    // ENHANCED: handleHorizontalSeeking with direction throttle
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
@@ -428,32 +468,44 @@ fun PlayerOverlay(
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
-        // PREDICT next position for smoother rendering
-        val currentTimeMs = System.currentTimeMillis()
-        val velocity = (currentX - touchStartX) / (currentTimeMs - touchStartTime)
-        val predictedPosition = if (abs(velocity) > 0.1) {
-            val predictionOffset = velocity * 0.2 // Predict 200ms ahead
-            (clampedPosition + predictionOffset).coerceIn(0.0, duration)
-        } else {
-            clampedPosition
+        // DIRECTION THROTTLE LOGIC
+        val newDirection = if (deltaX > 0) "forward" else "backward"
+        
+        if (currentSeekDirection != newDirection) {
+            // Check if we've moved enough to change direction
+            val movementSinceLastChange = abs(currentX - lastDirectionChangeX)
+            if (movementSinceLastChange < directionChangeThreshold) {
+                // Not enough movement - maintain current direction for prediction
+                // This makes pre-decoding much more stable
+            } else {
+                // Enough movement - update direction
+                currentSeekDirection = newDirection
+                lastDirectionChangeX = currentX
+            }
         }
+        
+        // Use throttled direction for prediction (simpler and more stable)
+        val isBackwardSeek = currentSeekDirection == "backward"
         
         // Update UI
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
         
-        // PRE-DECODE with prediction
-        val isBackwardSeek = clampedPosition < seekStartPosition
-        startSmartPreDecoding(predictedPosition, duration, isBackwardSeek)
+        // STABLE PRE-DECODING with throttled direction
+        startSmartPreDecoding(clampedPosition, duration, isBackwardSeek)
         
         // FORCE SEEK with frame rendering
         performRealTimeSeek(clampedPosition)
     }
     
+    // ENHANCED: endHorizontalSeeking with audio re-enable
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
             performRealTimeSeek(currentPos)
+            
+            // RE-ENABLE AUDIO WITH SYNC
+            reenableAudioWithSync()
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -467,6 +519,7 @@ fun PlayerOverlay(
             seekStartX = 0f
             seekStartPosition = 0.0
             wasPlayingBeforeSeek = false
+            currentSeekDirection = "none" // RESET direction
             scheduleSeekbarHide()
         }
     }
@@ -527,7 +580,7 @@ fun PlayerOverlay(
         }
     }
     
-    // OPTIMIZED MPV CONFIGURATION FOR FASTER SEEKING
+    // OPTIMIZED MPV CONFIGURATION FOR FASTER SEEKING WITH AUDIO CONTROL
     LaunchedEffect(Unit) {
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
@@ -542,7 +595,7 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("demuxer-readahead-secs", "20") // Reduced from 30
         MPVLib.setPropertyString("cache-secs", "20") // Reduced from 30
         
-        // AGGRESSIVE SEEKING SETTINGS
+        // AGGRESSIVE SEEKING SETTINGS WITH AUDIO OPTIMIZATION
         MPVLib.setPropertyString("cache-pause", "no")
         MPVLib.setPropertyString("cache-initial", "0.5")
         MPVLib.setPropertyString("video-sync", "display-resample")
@@ -557,6 +610,11 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("vd-lavc-assemble", "yes")
         MPVLib.setPropertyString("demuxer-max-back-bytes", "100M") // Increased for backward seeking
         MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
+        
+        // AUDIO OPTIMIZATIONS FOR SEEKING
+        MPVLib.setPropertyString("audio-pitch-correction", "no") // Disable during normal playback
+        MPVLib.setPropertyString("audio-stream-silence", "no")
+        MPVLib.setPropertyString("audio-fallback-to-null", "no")
         
         // GPU OPTIMIZATIONS
         MPVLib.setPropertyString("gpu-dumb-mode", "yes")
@@ -629,14 +687,17 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // UPDATED: handleProgressBarDrag with movement threshold
+    // UPDATED: handleProgressBarDrag with movement threshold and audio control
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
-            // REMOVED: lastSeekTime = 0L
+            
+            // DISABLE AUDIO DURING SEEKBAR DRAG
+            disableAudioTemporarily()
+            
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
             }
@@ -658,8 +719,13 @@ fun PlayerOverlay(
         performRealTimeSeek(targetPosition)
     }
     
+    // UPDATED: handleDragFinished with audio re-enable
     fun handleDragFinished() {
         isDragging = false
+        
+        // RE-ENABLE AUDIO WITH SYNC
+        reenableAudioWithSync()
+        
         if (wasPlayingBeforeSeek) {
             coroutineScope.launch {
                 delay(100)
