@@ -87,15 +87,11 @@ fun PlayerOverlay(
     // REMOVED: lastSeekTime and seekDebounceMs
     // ADD: Simple throttle control
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 20L // Reduced for faster local file seeking
+    val seekThrottleMs = 30L // Small delay between seek commands
     
     // MEMORY OPTIMIZATION - Add with your other variables
     var lastCleanupTime by remember { mutableStateOf(0L) }
-    val cleanupInterval = 20 * 1000L // 20 seconds for more aggressive cleanup
-    
-    // PERFORMANCE MODE VARIABLES
-    var performanceMode by remember { mutableStateOf(false) }
-    var memoryWarningShown by remember { mutableStateOf(false) }
+    val cleanupInterval = 3 * 60 * 1000L // CHANGED: 10 minutes to 3 minutes
     
     // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
     var touchStartTime by remember { mutableStateOf(0L) }
@@ -129,60 +125,29 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // AGGRESSIVE MEMORY OPTIMIZATION FUNCTION
-    fun aggressiveCleanup() {
-        // DRAMATICALLY REDUCED CACHE
-        MPVLib.setPropertyString("demuxer-readahead-secs", "3")
-        MPVLib.setPropertyString("cache-secs", "3")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 40 * 1024 * 1024)
-        MPVLib.setPropertyString("demuxer-max-back-bytes", "10M")
-        MPVLib.setPropertyString("cache-backbuffer", "1")
-        
-        // Force garbage collection
-        try {
-            System.gc()
-        } catch (e: Exception) {
-            // Ignore
-        }
-    }
-    
-    // NORMAL MEMORY OPTIMIZATION FUNCTION
+    // MEMORY OPTIMIZATION FUNCTION
     fun gentleCleanup() {
-        MPVLib.setPropertyString("demuxer-readahead-secs", "8")
-        MPVLib.setPropertyString("cache-secs", "8")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 80 * 1024 * 1024)
-        MPVLib.setPropertyString("demuxer-max-back-bytes", "40M")
-        MPVLib.setPropertyString("cache-backbuffer", "3")
+        // Only reduce cache sizes - don't disable completely
+        MPVLib.setPropertyString("demuxer-readahead-secs", "10") // Reduced from 60
+        MPVLib.setPropertyString("cache-secs", "10") // Reduced from 60
+        MPVLib.setPropertyInt("demuxer-max-bytes", 100 * 1024 * 1024) // Reduced from 150MB
+        
+        // Reset critical properties without stopping playback
+        MPVLib.setPropertyString("video-sync", "display-resample")
+        MPVLib.setPropertyString("hr-seek", "yes")
     }
     
-    // ULTRA-FAST SEEKING FOR LOCAL FILES
+    // UPDATED: performRealTimeSeek with throttle
     fun performRealTimeSeek(targetPosition: Double) {
-        if (isSeekInProgress) return
+        if (isSeekInProgress) return // Skip if we're already processing a seek
         
         isSeekInProgress = true
+        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
         
-        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-        val isBackwardSeek = targetPosition < currentPos
-        
-        if (isBackwardSeek) {
-            // OPTIMIZED BACKWARD SEEKING
-            MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
-            
-            // Force immediate frame update for backward seeks
-            coroutineScope.launch {
-                delay(5) // Very short delay for local files
-                MPVLib.command("frame-step")
-                delay(seekThrottleMs - 5)
-                isSeekInProgress = false
-            }
-        } else {
-            // Forward seeking
-            MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
-            
-            coroutineScope.launch {
-                delay(seekThrottleMs)
-                isSeekInProgress = false
-            }
+        // Reset after throttle period
+        coroutineScope.launch {
+            delay(seekThrottleMs)
+            isSeekInProgress = false
         }
     }
     
@@ -313,6 +278,7 @@ fun PlayerOverlay(
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
+        // REMOVED: lastSeekTime = 0L
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
@@ -415,110 +381,68 @@ fun PlayerOverlay(
         }
     }
     
-    // ULTRA-OPTIMIZED MPV CONFIGURATION FOR FAST SEEKING
+    // OPTIMIZED MPV CONFIGURATION WITH REDUCED CACHE
     LaunchedEffect(Unit) {
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
         MPVLib.setPropertyString("profile", "fast")
-        
-        // AGGRESSIVE DECODING SETTINGS
         MPVLib.setPropertyString("vd-lavc-threads", "4")
+        MPVLib.setPropertyString("audio-channels", "auto")
         MPVLib.setPropertyString("demuxer-lavf-threads", "4")
-        MPVLib.setPropertyString("vd-lavc-fast", "yes")
-        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
-        MPVLib.setPropertyString("vd-lavc-skipidct", "all")
-        MPVLib.setPropertyString("vd-lavc-assemble", "yes")
         
-        // OPTIMIZED CACHE FOR FAST BACKWARD SEEKING
+        // REDUCED CACHE SIZES - Memory optimization
         MPVLib.setPropertyString("cache", "yes")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 80 * 1024 * 1024)
-        MPVLib.setPropertyString("demuxer-readahead-secs", "8")
-        MPVLib.setPropertyString("cache-secs", "8")
+        MPVLib.setPropertyInt("demuxer-max-bytes", 100 * 1024 * 1024) // Was 150MB
+        MPVLib.setPropertyString("demuxer-readahead-secs", "10") // Was 60
+        MPVLib.setPropertyString("cache-secs", "10") // Was 60
         
-        // CRITICAL FOR BACKWARD SEEKING PERFORMANCE
-        MPVLib.setPropertyString("demuxer-max-back-bytes", "80M")
-        MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
-        MPVLib.setPropertyString("cache-backbuffer", "5")
-        
-        // AGGRESSIVE RENDERING SETTINGS
+        MPVLib.setPropertyString("cache-pause", "no")
+        MPVLib.setPropertyString("cache-initial", "0.5")
         MPVLib.setPropertyString("video-sync", "display-resample")
         MPVLib.setPropertyString("untimed", "yes")
         MPVLib.setPropertyString("hr-seek", "yes")
         MPVLib.setPropertyString("hr-seek-framedrop", "no")
-        MPVLib.setPropertyString("correct-pts", "yes")
-        
-        // MAXIMUM PERFORMANCE SCALING
-        MPVLib.setPropertyString("scale", "bilinear")
-        MPVLib.setPropertyString("dscale", "bilinear")
-        MPVLib.setPropertyString("cscale", "bilinear")
-        MPVLib.setPropertyString("scale-blur", "0")
-        MPVLib.setPropertyString("scale-cutoff", "0")
-        MPVLib.setPropertyString("scale-param1", "0")
-        MPVLib.setPropertyString("scale-param2", "0")
-        
-        // NETWORK AND I/O OPTIMIZATIONS (PRESERVED FOR ONLINE)
-        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1:fflags=+fastseek")
-        MPVLib.setPropertyString("network-timeout", "20")
-        
-        // AUDIO OPTIMIZATIONS
-        MPVLib.setPropertyString("audio-channels", "auto")
-        MPVLib.setPropertyString("audio-client-name", "MPVEx-FastSeek")
+        MPVLib.setPropertyString("vd-lavc-fast", "yes")
+        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
+        MPVLib.setPropertyString("vd-lavc-skipidct", "all")
+        MPVLib.setPropertyString("vd-lavc-assemble", "yes")
+        MPVLib.setPropertyString("demuxer-max-back-bytes", "50M")
+        MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
+        MPVLib.setPropertyString("gpu-dumb-mode", "yes")
+        MPVLib.setPropertyString("opengl-pbo", "yes")
+        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1")
+        MPVLib.setPropertyString("network-timeout", "30")
+        MPVLib.setPropertyString("audio-client-name", "MPVEx-Software-4Core")
         MPVLib.setPropertyString("audio-samplerate", "auto")
-        
-        // DISABLE UNNECESSARY EFFECTS
         MPVLib.setPropertyString("deband", "no")
         MPVLib.setPropertyString("video-aspect-override", "no")
-        MPVLib.setPropertyString("blend-subtitles", "no")
-        MPVLib.setPropertyString("interpolation", "no")
-        MPVLib.setPropertyString("tscale", "box")
-        MPVLib.setPropertyString("tscale-blur", "0")
-        MPVLib.setPropertyString("tscale-cutoff", "0")
-        MPVLib.setPropertyString("tscale-param1", "0")
-        MPVLib.setPropertyString("tscale-clamp", "0")
     }
     
-    // PERFORMANCE-AWARE MEMORY MANAGEMENT
+    // PERIODIC MEMORY MAINTENANCE - CHANGED: 30 seconds to 15 seconds
     LaunchedEffect(Unit) {
         while (isActive) {
-            delay(cleanupInterval)
+            delay(15 * 1000) // CHANGED: Check every 15 seconds (was 30)
             
             val currentTime = System.currentTimeMillis()
-            val isLowActivity = !isSeeking && !isDragging && !userInteracting
-            
-            if (isLowActivity) {
-                // Memory pressure detection
-                val runtime = Runtime.getRuntime()
-                val usedMemory = runtime.totalMemory() - runtime.freeMemory()
-                val maxMemory = runtime.maxMemory()
-                val memoryUsagePercent = (usedMemory.toDouble() / maxMemory.toDouble()) * 100
-                
-                if (memoryUsagePercent > 60 || performanceMode) {
-                    aggressiveCleanup()
-                    if (!memoryWarningShown) {
-                        memoryWarningShown = true
-                    }
-                } else {
+            if (currentTime - lastCleanupTime > cleanupInterval) { // cleanupInterval = 3 minutes
+                if (!isSeeking && !isDragging && !userInteracting) {
+                    // Safe to perform gentle cleanup
                     gentleCleanup()
-                    memoryWarningShown = false
+                    lastCleanupTime = currentTime
                 }
-                lastCleanupTime = currentTime
             }
         }
     }
     
-    // VIDEO END DETECTION FOR AGGRESSIVE CLEANUP
+    // VIDEO END DETECTION FOR CLEANUP
     LaunchedEffect(currentPosition, videoDuration) {
-        if (videoDuration > 0 && currentPosition > videoDuration - 10) {
-            aggressiveCleanup()
-        }
-        
-        // Auto-performance mode for long videos
-        if (videoDuration > 1800) {
-            performanceMode = true
+        // If we're near the end of video, prepare for cleanup
+        if (videoDuration > 0 && currentPosition > videoDuration - 5) {
+            // Video is ending soon, reduce cache for next video
+            gentleCleanup()
         }
     }
     
-    // CONTINUOUS POSITION UPDATES
     LaunchedEffect(Unit) {
         var lastSeconds = -1
         while (isActive) {
@@ -557,6 +481,7 @@ fun PlayerOverlay(
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
+            // REMOVED: lastSeekTime = 0L
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
             }
@@ -696,7 +621,7 @@ fun PlayerOverlay(
                             duration = seekbarDuration,
                             onValueChange = { handleProgressBarDrag(it) },
                             onValueChangeFinished = { handleDragFinished() },
-                            getFreshPosition = { getFreshPosition() },
+                            getFreshPosition = { getFreshPosition() }, // NEW: Pass fresh position function
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -743,6 +668,29 @@ fun PlayerOverlay(
             }
         }
     }
+
+    // ADDED: PROPER CLEANUP WHEN EXITING PLAYER
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            // This runs INSTANTLY when you exit/back out of the player
+            coroutineScope.coroutineContext.cancelChildren() // Stop all coroutines
+            
+            // Force MPV to stop and release everything
+            MPVLib.command("stop")
+            
+            // Aggressive memory cleanup
+            MPVLib.setPropertyString("cache", "no")
+            MPVLib.setPropertyString("demuxer-readahead-secs", "0")
+            MPVLib.setPropertyString("cache-secs", "0")
+            
+            // Force final garbage collection
+            try {
+                System.gc()
+            } catch (e: Exception) {
+                // Ignore
+            }
+        }
+    }
 }
 
 @Composable
@@ -757,7 +705,7 @@ fun SimpleDraggableProgressBar(
     var dragStartX by remember { mutableStateOf(0f) }
     var dragStartPosition by remember { mutableStateOf(0f) }
     var hasPassedThreshold by remember { mutableStateOf(false) }
-    var thresholdStartX by remember { mutableStateOf(0f) }
+    var thresholdStartX by remember { mutableStateOf(0f) } // NEW: Track where threshold was passed
     
     // Convert 25dp to pixels for the movement threshold
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
@@ -771,8 +719,8 @@ fun SimpleDraggableProgressBar(
                     dragStartX = offset.x
                     // GET FRESH POSITION IMMEDIATELY WHEN DRAG STARTS
                     dragStartPosition = getFreshPosition()
-                    hasPassedThreshold = false
-                    thresholdStartX = 0f
+                    hasPassedThreshold = false // Reset threshold flag
+                    thresholdStartX = 0f // Reset threshold start position
                 },
                 onDrag = { change, dragAmount ->
                     change.consume()
@@ -783,13 +731,14 @@ fun SimpleDraggableProgressBar(
                     if (!hasPassedThreshold) {
                         if (totalMovementX > movementThresholdPx) {
                             hasPassedThreshold = true
-                            thresholdStartX = currentX
+                            thresholdStartX = currentX // NEW: Store position where threshold was passed
                         } else {
+                            // Haven't passed threshold yet, don't seek
                             return@detectDragGestures
                         }
                     }
                     
-                    // Calculate delta from the threshold start position
+                    // Calculate delta from the threshold start position, not the original drag start
                     val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
                     val deltaX = currentX - effectiveStartX
                     val deltaPosition = (deltaX / size.width) * duration
@@ -797,8 +746,8 @@ fun SimpleDraggableProgressBar(
                     onValueChange(newPosition)
                 },
                 onDragEnd = { 
-                    hasPassedThreshold = false
-                    thresholdStartX = 0f
+                    hasPassedThreshold = false // Reset for next drag
+                    thresholdStartX = 0f // Reset threshold start
                     onValueChangeFinished() 
                 }
             )
