@@ -88,6 +88,9 @@ fun PlayerOverlay(
     var wasAudioEnabled by remember { mutableStateOf(true) }
     var audioReenableJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
+    // FIX: Track the exact playback state before seeking
+    var playbackStateBeforeSeek by remember { mutableStateOf(false) } // true = playing, false = paused
+    
     // REMOVED: lastSeekTime and seekDebounceMs
     // ADD: Simple throttle control
     var isSeekInProgress by remember { mutableStateOf(false) }
@@ -268,36 +271,18 @@ fun PlayerOverlay(
         }
     }
     
-    // ENHANCED: performRealTimeSeek with forced rendering and audio control
+    // FIXED: performRealTimeSeek - prevents blinking frames by avoiding frame-step during seeking
     fun performRealTimeSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         
         isSeekInProgress = true
         
-        // FORCE FRAME RENDER by doing a tiny seek back and forth
-        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-        val isBackwardSeek = targetPosition < currentPos
+        // SIMPLIFIED: Just seek without frame-step to prevent blinking
+        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
         
-        if (isBackwardSeek) {
-            // For backward seeks, force immediate frame update
-            MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
-            // Force frame step to ensure rendering
-            coroutineScope.launch {
-                delay(15)
-                MPVLib.command("frame-step")
-                delay(5)
-                isSeekInProgress = false
-            }
-        } else {
-            // Normal forward seek with frame forcing
-            MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
-            // Force frame render
-            MPVLib.command("frame-step")
-            
-            coroutineScope.launch {
-                delay(seekThrottleMs)
-                isSeekInProgress = false
-            }
+        coroutineScope.launch {
+            delay(seekThrottleMs)
+            isSeekInProgress = false
         }
     }
     
@@ -420,7 +405,7 @@ fun PlayerOverlay(
         return false
     }
     
-    // Enhanced startHorizontalSeeking with direction-aware pre-decoding and audio control
+    // FIXED: startHorizontalSeeking - properly tracks playback state
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
@@ -429,6 +414,9 @@ fun PlayerOverlay(
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
+        
+        // FIX: Store the exact playback state before seeking
+        playbackStateBeforeSeek = !(MPVLib.getPropertyBoolean("pause") ?: true)
         
         // DISABLE AUDIO DURING SEEKING
         disableAudioTemporarily()
@@ -444,6 +432,7 @@ fun PlayerOverlay(
         // PRE-DECODE with priority on expected direction
         startSmartPreDecoding(currentPos, duration, isBackwardSeek)
         
+        // FIX: Only pause if it was playing before seek
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
         }
@@ -482,7 +471,7 @@ fun PlayerOverlay(
         performRealTimeSeek(clampedPosition)
     }
     
-    // ENHANCED: endHorizontalSeeking with audio re-enable
+    // FIXED: endHorizontalSeeking - respects original playback state
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
@@ -491,11 +480,16 @@ fun PlayerOverlay(
             // RE-ENABLE AUDIO WITH SYNC
             reenableAudioWithSync()
             
-            if (wasPlayingBeforeSeek) {
+            // FIX: Restore the exact playback state that was there before seeking
+            // Only resume if it was playing AND we want it to resume
+            if (wasPlayingBeforeSeek && playbackStateBeforeSeek) {
                 coroutineScope.launch {
-                    delay(100)
+                    delay(100) // Small delay to ensure seek is complete
                     MPVLib.setPropertyBoolean("pause", false)
                 }
+            } else {
+                // Ensure it stays paused if it was paused before seeking
+                MPVLib.setPropertyBoolean("pause", true)
             }
             
             isSeeking = false
@@ -503,6 +497,7 @@ fun PlayerOverlay(
             seekStartX = 0f
             seekStartPosition = 0.0
             wasPlayingBeforeSeek = false
+            playbackStateBeforeSeek = false // Reset
             scheduleSeekbarHide()
         }
     }
@@ -670,7 +665,7 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // UPDATED: handleProgressBarDrag with movement threshold and audio control
+    // FIXED: handleProgressBarDrag - properly tracks playback state
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
@@ -678,9 +673,13 @@ fun PlayerOverlay(
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
             
+            // FIX: Store the exact playback state before seeking
+            playbackStateBeforeSeek = !(MPVLib.getPropertyBoolean("pause") ?: true)
+            
             // DISABLE AUDIO DURING SEEKBAR DRAG
             disableAudioTemporarily()
             
+            // FIX: Only pause if it was playing before seek
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
             }
@@ -702,22 +701,28 @@ fun PlayerOverlay(
         performRealTimeSeek(targetPosition)
     }
     
-    // UPDATED: handleDragFinished with audio re-enable
+    // FIXED: handleDragFinished - respects original playback state
     fun handleDragFinished() {
         isDragging = false
         
         // RE-ENABLE AUDIO WITH SYNC
         reenableAudioWithSync()
         
-        if (wasPlayingBeforeSeek) {
+        // FIX: Restore the exact playback state that was there before seeking
+        if (wasPlayingBeforeSeek && playbackStateBeforeSeek) {
             coroutineScope.launch {
-                delay(100)
+                delay(100) // Small delay to ensure seek is complete
                 MPVLib.setPropertyBoolean("pause", false)
             }
+        } else {
+            // Ensure it stays paused if it was paused before seeking
+            MPVLib.setPropertyBoolean("pause", true)
         }
+        
         isSeeking = false
         showSeekTime = false
         wasPlayingBeforeSeek = false
+        playbackStateBeforeSeek = false // Reset
         scheduleSeekbarHide()
     }
     
