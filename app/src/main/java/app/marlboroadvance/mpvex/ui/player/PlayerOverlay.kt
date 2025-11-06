@@ -93,11 +93,6 @@ fun PlayerOverlay(
     var isSeekInProgress by remember { mutableStateOf(false) }
     val seekThrottleMs = 30L // Small delay between seek commands
     
-    // ADD: Direction tracking with throttle
-    var currentSeekDirection by remember { mutableStateOf("none") } // "forward", "backward", "none"
-    var lastDirectionChangeX by remember { mutableStateOf(0f) }
-    val directionChangeThreshold = 25f // pixels
-    
     // MEMORY OPTIMIZATION - Add with your other variables
     var lastCleanupTime by remember { mutableStateOf(0L) }
     val cleanupInterval = 10 * 60 * 1000L // 10 minutes
@@ -228,7 +223,7 @@ fun PlayerOverlay(
         }
     }
     
-    // ENHANCED PRE-DECODING WITH PRIORITY QUEUE AND DIRECTION THROTTLE
+    // ENHANCED PRE-DECODING WITH PRIORITY QUEUE
     fun startSmartPreDecoding(currentPos: Double, duration: Double, isBackwardSeek: Boolean = false) {
         // Cancel any existing pre-decoding
         preDecodeJob?.cancel()
@@ -238,11 +233,9 @@ fun PlayerOverlay(
         val windowEnd = (currentPos + preDecodeWindowSize).coerceAtMost(duration)
         
         // Only start new pre-decoding if window changed significantly
-        // OR if we have a clear direction (thanks to throttle)
-        val significantChange = abs(windowStart - currentDecodeWindowStart) > 2.0 || 
-                              abs(windowEnd - currentDecodeWindowEnd) > 2.0
-        
-        if (significantChange || currentSeekDirection != "none") {
+        if (abs(windowStart - currentDecodeWindowStart) > 2.0 || 
+            abs(windowEnd - currentDecodeWindowEnd) > 2.0) {
+            
             currentDecodeWindowStart = windowStart
             currentDecodeWindowEnd = windowEnd
             
@@ -257,17 +250,15 @@ fun PlayerOverlay(
                 // Priority 1: Immediate area around current position (fastest)
                 preDecodeChunk(immediateStart, immediateEnd, 1.0, 5, this)
                 
-                // Priority 2: Direction-aware pre-decoding (SIMPLER now with throttle)
-                if (isBackwardSeek && currentSeekDirection == "backward") {
-                    // Focus on backward section
-                    preDecodeChunk(windowStart, immediateStart - 0.1, 2.0, 10, this)
-                } else if (!isBackwardSeek && currentSeekDirection == "forward") {
-                    // Focus on forward section  
-                    preDecodeChunk(immediateEnd + 0.1, windowEnd, 2.0, 10, this)
+                // Priority 2: Rest of the window
+                if (isBackwardSeek) {
+                    // Backward priority
+                    preDecodeChunk(windowStart, immediateStart - 0.1, 2.0, 10, this) // Past section
+                    preDecodeChunk(immediateEnd + 0.1, windowEnd, 2.0, 10, this) // Future section
                 } else {
-                    // Neutral - decode both sides equally
-                    preDecodeChunk(windowStart, immediateStart - 0.1, 2.0, 15, this)
-                    preDecodeChunk(immediateEnd + 0.1, windowEnd, 2.0, 15, this)
+                    // Forward priority  
+                    preDecodeChunk(immediateEnd + 0.1, windowEnd, 2.0, 10, this) // Future section
+                    preDecodeChunk(windowStart, immediateStart - 0.1, 2.0, 10, this) // Past section
                 }
                 
                 // Return to exact position and sync frames
@@ -442,22 +433,23 @@ fun PlayerOverlay(
         // DISABLE AUDIO DURING SEEKING
         disableAudioTemporarily()
         
-        // INITIALIZE DIRECTION TRACKING
-        lastDirectionChangeX = startX
-        currentSeekDirection = "none" // Reset direction
-        
+        // DETECT SEEK DIRECTION and pre-decode accordingly
         val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         
-        // Start with neutral pre-decoding until direction is established
-        startSmartPreDecoding(currentPos, duration, false) // Default to forward
+        // Estimate seek direction based on initial movement
+        val initialDirection = if (startX < touchStartX) "backward" else "forward"
+        val isBackwardSeek = initialDirection == "backward"
+        
+        // PRE-DECODE with priority on expected direction
+        startSmartPreDecoding(currentPos, duration, isBackwardSeek)
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
         }
     }
     
-    // ENHANCED: handleHorizontalSeeking with direction throttle
+    // ENHANCED: handleHorizontalSeeking with prediction and real-time pre-decoding
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
@@ -468,31 +460,23 @@ fun PlayerOverlay(
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
-        // DIRECTION THROTTLE LOGIC
-        val newDirection = if (deltaX > 0) "forward" else "backward"
-        
-        if (currentSeekDirection != newDirection) {
-            // Check if we've moved enough to change direction
-            val movementSinceLastChange = abs(currentX - lastDirectionChangeX)
-            if (movementSinceLastChange < directionChangeThreshold) {
-                // Not enough movement - maintain current direction for prediction
-                // This makes pre-decoding much more stable
-            } else {
-                // Enough movement - update direction
-                currentSeekDirection = newDirection
-                lastDirectionChangeX = currentX
-            }
+        // PREDICT next position for smoother rendering
+        val currentTimeMs = System.currentTimeMillis()
+        val velocity = (currentX - touchStartX) / (currentTimeMs - touchStartTime)
+        val predictedPosition = if (abs(velocity) > 0.1) {
+            val predictionOffset = velocity * 0.2 // Predict 200ms ahead
+            (clampedPosition + predictionOffset).coerceIn(0.0, duration)
+        } else {
+            clampedPosition
         }
-        
-        // Use throttled direction for prediction (simpler and more stable)
-        val isBackwardSeek = currentSeekDirection == "backward"
         
         // Update UI
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
         
-        // STABLE PRE-DECODING with throttled direction
-        startSmartPreDecoding(clampedPosition, duration, isBackwardSeek)
+        // PRE-DECODE with prediction
+        val isBackwardSeek = clampedPosition < seekStartPosition
+        startSmartPreDecoding(predictedPosition, duration, isBackwardSeek)
         
         // FORCE SEEK with frame rendering
         performRealTimeSeek(clampedPosition)
@@ -519,7 +503,6 @@ fun PlayerOverlay(
             seekStartX = 0f
             seekStartPosition = 0.0
             wasPlayingBeforeSeek = false
-            currentSeekDirection = "none" // RESET direction
             scheduleSeekbarHide()
         }
     }
