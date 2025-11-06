@@ -672,9 +672,6 @@ fun PlayerOverlay(
     // ADDED: PROPER CLEANUP WHEN EXITING PLAYER
     androidx.compose.runtime.DisposableEffect(Unit) {
         onDispose {
-            // This runs INSTANTLY when you exit/back out of the player
-            coroutineScope.coroutineContext.cancelChildren() // Stop all coroutines
-            
             // Force MPV to stop and release everything
             MPVLib.command("stop")
             
