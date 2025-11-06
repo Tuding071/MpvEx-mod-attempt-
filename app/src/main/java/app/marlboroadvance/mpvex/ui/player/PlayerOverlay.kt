@@ -144,7 +144,38 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("hr-seek", "yes")
     }
     
-    // PRE-DECODING FUNCTIONS
+    // FORCE CACHE FLUSHING
+    fun forceCacheFlush() {
+        // Reduce cache to minimum to force flush, then restore
+        MPVLib.setPropertyString("cache-secs", "1")
+        MPVLib.setPropertyString("demuxer-readahead-secs", "1")
+        coroutineScope.launch {
+            delay(50)
+            MPVLib.setPropertyString("cache-secs", "20")
+            MPVLib.setPropertyString("demuxer-readahead-secs", "20")
+        }
+    }
+    
+    // FRAME SYNCHRONIZATION
+    fun syncFrames() {
+        // Force MPV to sync frames properly
+        MPVLib.setPropertyString("video-sync", "audio") // Temporary switch
+        coroutineScope.launch {
+            delay(20)
+            MPVLib.setPropertyString("video-sync", "display-resample") // Switch back
+        }
+    }
+    
+    // PRE-DECODING HELPER FUNCTIONS
+    suspend fun preDecodeChunk(start: Double, end: Double, chunkSize: Double, delayMs: Long, coroutineScope: CoroutineScope) {
+        var decodePos = start
+        while (decodePos <= end && coroutineScope.isActive) {
+            MPVLib.command("seek", decodePos.toString(), "absolute", "exact")
+            delay(delayMs)
+            decodePos += chunkSize
+        }
+    }
+
     suspend fun preDecodeBackwardSection(currentPos: Double, windowStart: Double, coroutineScope: CoroutineScope) {
         var decodePos = currentPos - preDecodeChunkSize
         while (decodePos >= windowStart && coroutineScope.isActive) {
@@ -163,7 +194,7 @@ fun PlayerOverlay(
         }
     }
     
-    // Faster pre-decoding with priority on current direction
+    // ENHANCED PRE-DECODING WITH PRIORITY QUEUE
     fun startSmartPreDecoding(currentPos: Double, duration: Double, isBackwardSeek: Boolean = false) {
         // Cancel any existing pre-decoding
         preDecodeJob?.cancel()
@@ -173,41 +204,71 @@ fun PlayerOverlay(
         val windowEnd = (currentPos + preDecodeWindowSize).coerceAtMost(duration)
         
         // Only start new pre-decoding if window changed significantly
-        if (abs(windowStart - currentDecodeWindowStart) > 3.0 || 
-            abs(windowEnd - currentDecodeWindowEnd) > 3.0) {
+        if (abs(windowStart - currentDecodeWindowStart) > 2.0 || 
+            abs(windowEnd - currentDecodeWindowEnd) > 2.0) {
             
             currentDecodeWindowStart = windowStart
             currentDecodeWindowEnd = windowEnd
             
             preDecodeJob = coroutineScope.launch {
-                // PRIORITY: Pre-decode the direction we're most likely to seek first
+                // FORCE FLUSH old cache first
+                forceCacheFlush()
+                
+                // IMMEDIATE AREA: Pre-decode 3 seconds around current position first
+                val immediateStart = (currentPos - 3.0).coerceAtLeast(0.0)
+                val immediateEnd = (currentPos + 3.0).coerceAtMost(duration)
+                
+                // Priority 1: Immediate area around current position (fastest)
+                preDecodeChunk(immediateStart, immediateEnd, 1.0, 5, this) // 1-second chunks, 5ms delay
+                
+                // Priority 2: Rest of the window
                 if (isBackwardSeek) {
-                    // Backward seek - prioritize past section first
-                    preDecodeBackwardSection(currentPos, windowStart, this)
-                    preDecodeForwardSection(currentPos, windowEnd, this)
+                    // Backward priority
+                    preDecodeChunk(windowStart, immediateStart - 0.1, 2.0, 10, this) // Past section
+                    preDecodeChunk(immediateEnd + 0.1, windowEnd, 2.0, 10, this) // Future section
                 } else {
-                    // Forward seek - prioritize future section first  
-                    preDecodeForwardSection(currentPos, windowEnd, this)
-                    preDecodeBackwardSection(currentPos, windowStart, this)
+                    // Forward priority  
+                    preDecodeChunk(immediateEnd + 0.1, windowEnd, 2.0, 10, this) // Future section
+                    preDecodeChunk(windowStart, immediateStart - 0.1, 2.0, 10, this) // Past section
                 }
                 
-                // Return to current position
+                // Return to exact position and sync frames
                 MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
+                syncFrames()
             }
         }
     }
     
-    // UPDATED: performRealTimeSeek with throttle
+    // ENHANCED: performRealTimeSeek with forced rendering
     fun performRealTimeSeek(targetPosition: Double) {
-        if (isSeekInProgress) return // Skip if we're already processing a seek
+        if (isSeekInProgress) return
         
         isSeekInProgress = true
-        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
         
-        // Reset after throttle period
-        coroutineScope.launch {
-            delay(seekThrottleMs)
-            isSeekInProgress = false
+        // FORCE FRAME RENDER by doing a tiny seek back and forth
+        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+        val isBackwardSeek = targetPosition < currentPos
+        
+        if (isBackwardSeek) {
+            // For backward seeks, force immediate frame update
+            MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+            // Force frame step to ensure rendering
+            coroutineScope.launch {
+                delay(15)
+                MPVLib.command("frame-step")
+                delay(5)
+                isSeekInProgress = false
+            }
+        } else {
+            // Normal forward seek with frame forcing
+            MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+            // Force frame render
+            MPVLib.command("frame-step")
+            
+            coroutineScope.launch {
+                delay(seekThrottleMs)
+                isSeekInProgress = false
+            }
         }
     }
     
@@ -356,7 +417,7 @@ fun PlayerOverlay(
         }
     }
     
-    // Enhanced handleHorizontalSeeking with real-time pre-decoding
+    // ENHANCED: handleHorizontalSeeking with prediction and real-time pre-decoding
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
@@ -367,15 +428,25 @@ fun PlayerOverlay(
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
-        // ALWAYS update UI instantly
+        // PREDICT next position for smoother rendering
+        val currentTimeMs = System.currentTimeMillis()
+        val velocity = (currentX - touchStartX) / (currentTimeMs - touchStartTime)
+        val predictedPosition = if (abs(velocity) > 0.1) {
+            val predictionOffset = velocity * 0.2 // Predict 200ms ahead
+            (clampedPosition + predictionOffset).coerceIn(0.0, duration)
+        } else {
+            clampedPosition
+        }
+        
+        // Update UI
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
         
-        // REAL-TIME PRE-DECODING during seek
+        // PRE-DECODE with prediction
         val isBackwardSeek = clampedPosition < seekStartPosition
-        startSmartPreDecoding(clampedPosition, duration, isBackwardSeek)
+        startSmartPreDecoding(predictedPosition, duration, isBackwardSeek)
         
-        // Send seek command with throttle
+        // FORCE SEEK with frame rendering
         performRealTimeSeek(clampedPosition)
     }
     
@@ -456,7 +527,7 @@ fun PlayerOverlay(
         }
     }
     
-    // OPTIMIZED MPV CONFIGURATION WITH LARGER CACHE FOR PRE-DECODING
+    // OPTIMIZED MPV CONFIGURATION FOR FASTER SEEKING
     LaunchedEffect(Unit) {
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
@@ -465,24 +536,29 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("audio-channels", "auto")
         MPVLib.setPropertyString("demuxer-lavf-threads", "4")
         
-        // LARGER CACHE FOR PRE-DECODING (30s window)
+        // OPTIMIZED CACHE FOR FAST SEEKING
         MPVLib.setPropertyString("cache", "yes")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 200 * 1024 * 1024) // 200MB cache
-        MPVLib.setPropertyString("demuxer-readahead-secs", "30") // 30 seconds
-        MPVLib.setPropertyString("cache-secs", "30") // 30 seconds
+        MPVLib.setPropertyInt("demuxer-max-bytes", 150 * 1024 * 1024) // Reduced from 200MB
+        MPVLib.setPropertyString("demuxer-readahead-secs", "20") // Reduced from 30
+        MPVLib.setPropertyString("cache-secs", "20") // Reduced from 30
         
+        // AGGRESSIVE SEEKING SETTINGS
         MPVLib.setPropertyString("cache-pause", "no")
         MPVLib.setPropertyString("cache-initial", "0.5")
         MPVLib.setPropertyString("video-sync", "display-resample")
         MPVLib.setPropertyString("untimed", "yes")
         MPVLib.setPropertyString("hr-seek", "yes")
         MPVLib.setPropertyString("hr-seek-framedrop", "no")
+        
+        // FASTER DECODING FOR SEEKING
         MPVLib.setPropertyString("vd-lavc-fast", "yes")
         MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
         MPVLib.setPropertyString("vd-lavc-skipidct", "all")
         MPVLib.setPropertyString("vd-lavc-assemble", "yes")
         MPVLib.setPropertyString("demuxer-max-back-bytes", "100M") // Increased for backward seeking
         MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
+        
+        // GPU OPTIMIZATIONS
         MPVLib.setPropertyString("gpu-dumb-mode", "yes")
         MPVLib.setPropertyString("opengl-pbo", "yes")
         MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1")
