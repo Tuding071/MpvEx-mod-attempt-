@@ -145,18 +145,18 @@ fun PlayerOverlay(
     }
     
     // PRE-DECODING FUNCTIONS
-    suspend fun preDecodeBackwardSection(currentPos: Double, windowStart: Double) {
+    suspend fun preDecodeBackwardSection(currentPos: Double, windowStart: Double, coroutineScope: CoroutineScope) {
         var decodePos = currentPos - preDecodeChunkSize
-        while (decodePos >= windowStart && isActive) {
+        while (decodePos >= windowStart && coroutineScope.isActive) {
             MPVLib.command("seek", decodePos.toString(), "absolute", "exact")
             delay(10) // Reduced delay for faster pre-decoding
             decodePos -= preDecodeChunkSize
         }
     }
 
-    suspend fun preDecodeForwardSection(currentPos: Double, windowEnd: Double) {
+    suspend fun preDecodeForwardSection(currentPos: Double, windowEnd: Double, coroutineScope: CoroutineScope) {
         var decodePos = currentPos + preDecodeChunkSize
-        while (decodePos <= windowEnd && isActive) {
+        while (decodePos <= windowEnd && coroutineScope.isActive) {
             MPVLib.command("seek", decodePos.toString(), "absolute", "exact")
             delay(10) // Reduced delay for faster pre-decoding
             decodePos += preDecodeChunkSize
@@ -183,12 +183,12 @@ fun PlayerOverlay(
                 // PRIORITY: Pre-decode the direction we're most likely to seek first
                 if (isBackwardSeek) {
                     // Backward seek - prioritize past section first
-                    preDecodeBackwardSection(currentPos, windowStart)
-                    preDecodeForwardSection(currentPos, windowEnd)
+                    preDecodeBackwardSection(currentPos, windowStart, this)
+                    preDecodeForwardSection(currentPos, windowEnd, this)
                 } else {
                     // Forward seek - prioritize future section first  
-                    preDecodeForwardSection(currentPos, windowEnd)
-                    preDecodeBackwardSection(currentPos, windowStart)
+                    preDecodeForwardSection(currentPos, windowEnd, this)
+                    preDecodeBackwardSection(currentPos, windowStart, this)
                 }
                 
                 // Return to current position
@@ -495,7 +495,7 @@ fun PlayerOverlay(
     
     // PERIODIC MEMORY MAINTENANCE
     LaunchedEffect(Unit) {
-        while (isActive) {
+        while (coroutineScope.isActive) {
             delay(30 * 1000) // Check every 30 seconds
             
             val currentTime = System.currentTimeMillis()
@@ -512,7 +512,7 @@ fun PlayerOverlay(
     // CONTINUOUS PRE-DECODING DURING PLAYBACK
     LaunchedEffect(Unit) {
         var lastPosition = -1.0
-        while (isActive) {
+        while (coroutineScope.isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
             val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
             val currentSeconds = currentPos.toInt()
