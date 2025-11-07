@@ -84,6 +84,11 @@ fun PlayerOverlay(
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
+    // FRAME LOCKING STATES
+    var isFrameLocked by remember { mutableStateOf(false) }
+    var frameLockJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val frameLockDuration = 900L // ms to lock frame after release
+    
     // REMOVED: lastSeekTime and seekDebounceMs
     // ADD: Simple throttle control
     var isSeekInProgress by remember { mutableStateOf(false) }
@@ -129,9 +134,24 @@ fun PlayerOverlay(
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
+
+    // FRAME LOCKING FUNCTION
+    fun lockFrameAtCurrentPosition() {
+        frameLockJob?.cancel()
+        isFrameLocked = true
+        
+        // Force pause to lock the current frame
+        MPVLib.setPropertyBoolean("pause", true)
+        
+        // Schedule auto-unlock
+        frameLockJob = coroutineScope.launch {
+            delay(frameLockDuration)
+            isFrameLocked = false
+        }
+    }
     
     // PRE-DECODING HELPER FUNCTIONS
-    suspend fun preDecodeChunk(start: Double, end: Double, chunkSize: Double, delayMs: Long, coroutineScope: CoroutineScope) {
+    suspend fun preDecodeChunk(start: Double, end: Double, chunkSize: Double, delayMs: Long) {
         var decodePos = start
         while (decodePos <= end && coroutineScope.isActive && isPreDecodingActive) {
             MPVLib.command("seek", decodePos.toString(), "absolute", "exact")
@@ -155,7 +175,7 @@ fun PlayerOverlay(
             
             // Pre-decode 15 seconds ahead (future)
             if (windowEnd > currentPos + 1.0) {
-                preDecodeChunk(currentPos + 1.0, windowEnd, 2.0, 15, this)
+                preDecodeChunk(currentPos + 1.0, windowEnd, 2.0, 15)
             }
             
             // Pre-decode 15 seconds behind (past)
@@ -274,6 +294,11 @@ fun PlayerOverlay(
     
     fun handleTap() {
         val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
+        
+        // Cancel any frame lock when tapping
+        frameLockJob?.cancel()
+        isFrameLocked = false
+        
         if (currentPaused) {
             coroutineScope.launch {
                 val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
@@ -363,16 +388,31 @@ fun PlayerOverlay(
         performRealTimeSeek(clampedPosition)
     }
     
-    // UPDATED: endHorizontalSeeking - RESUME PRE-DECODING AFTER SEEK
+    // UPDATED: endHorizontalSeeking - LOCK FRAME ON RELEASE
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
+            
+            // Seek to exact release position first
             performRealTimeSeek(currentPos)
+            
+            // LOCK THE FRAME IMMEDIATELY AT RELEASE POSITION
+            lockFrameAtCurrentPosition()
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
-                    delay(100)
-                    MPVLib.setPropertyBoolean("pause", false)
+                    // Wait for frame lock to expire, then resume
+                    delay(frameLockDuration + 50) // Extra 50ms buffer
+                    if (!isFrameLocked) {
+                        MPVLib.setPropertyBoolean("pause", false)
+                    }
+                }
+            } else {
+                // If was paused, ensure frame lock is cleared after duration
+                coroutineScope.launch {
+                    delay(frameLockDuration)
+                    frameLockJob?.cancel()
+                    isFrameLocked = false
                 }
             }
             
@@ -429,6 +469,11 @@ fun PlayerOverlay(
             delay(4000)
             showVideoInfo = 0
         }
+        
+        // Ensure no frame lock on startup
+        frameLockJob?.cancel()
+        isFrameLocked = false
+        
         scheduleSeekbarHide()
     }
     
@@ -438,6 +483,18 @@ fun PlayerOverlay(
             MPVLib.setPropertyDouble("speed", 2.0)
         } else {
             MPVLib.setPropertyDouble("speed", 1.0)
+        }
+    }
+    
+    // Backup frame lock cleanup
+    LaunchedEffect(isFrameLocked) {
+        if (isFrameLocked) {
+            // Auto-unlock after maximum time (safety net)
+            frameLockJob?.cancel()
+            frameLockJob = coroutineScope.launch {
+                delay(1000) // Maximum 1 second lock
+                isFrameLocked = false
+            }
         }
     }
     
@@ -480,7 +537,7 @@ fun PlayerOverlay(
     
     // PERIODIC MEMORY MAINTENANCE
     LaunchedEffect(Unit) {
-        while (isActive) {
+        while (coroutineScope.isActive) {
             delay(30 * 1000) // Check every 30 seconds
             
             val currentTime = System.currentTimeMillis()
@@ -508,7 +565,7 @@ fun PlayerOverlay(
         var lastSeconds = -1
         var lastPreDecodePosition = -1.0
         
-        while (isActive) {
+        while (coroutineScope.isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
             val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
             val currentSeconds = currentPos.toInt()
@@ -541,7 +598,7 @@ fun PlayerOverlay(
                 }
             }
             
-            delay(16)
+            delay(500)
         }
     }
     
@@ -577,15 +634,30 @@ fun PlayerOverlay(
         performRealTimeSeek(targetPosition)
     }
     
-    // UPDATED: handleDragFinished - RESUME PRE-DECODING AFTER SEEK
+    // UPDATED: handleDragFinished - LOCK FRAME ON RELEASE
     fun handleDragFinished() {
         isDragging = false
+        
+        // LOCK THE FRAME IMMEDIATELY AT RELEASE POSITION
+        lockFrameAtCurrentPosition()
+        
         if (wasPlayingBeforeSeek) {
             coroutineScope.launch {
-                delay(100)
-                MPVLib.setPropertyBoolean("pause", false)
+                // Wait for frame lock to expire, then resume
+                delay(frameLockDuration + 50) // Extra 50ms buffer
+                if (!isFrameLocked) {
+                    MPVLib.setPropertyBoolean("pause", false)
+                }
+            }
+        } else {
+            // If was paused, ensure frame lock is cleared after duration
+            coroutineScope.launch {
+                delay(frameLockDuration)
+                frameLockJob?.cancel()
+                isFrameLocked = false
             }
         }
+        
         isSeeking = false
         showSeekTime = false
         wasPlayingBeforeSeek = false
