@@ -46,11 +46,6 @@ import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import `is`.xyz.mpv.MPVLib
-import `is`.xyz.mpv.Utils
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import android.content.Intent
@@ -84,21 +79,26 @@ fun PlayerOverlay(
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
-    // PRE-DECODING STATES
-    var isPreDecodingActive by remember { mutableStateOf(true) }
-    var lastPreDecodePosition by remember { mutableStateOf(0.0) }
-    var preDecodeJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    // FRAME LOCKING STATES
+    var isFrameLocked by remember { mutableStateOf(false) }
+    var frameLockJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val frameLockDuration = 200L // ms to lock frame after release
     
-    // SIMPLE THROTTLE CONTROL
+    // REMOVED: lastSeekTime and seekDebounceMs
+    // ADD: Simple throttle control
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 30L
+    val seekThrottleMs = 30L // Small delay between seek commands
     
-    // MEMORY OPTIMIZATION VARIABLES
+    // PRE-DECODING VARIABLES - FOR BACKGROUND PRE-DECODING ONLY
+    var preDecodeJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var isPreDecodingActive by remember { mutableStateOf(false) }
+    val preDecodeWindowSize = 15.0 // seconds on each side
+    
+    // MEMORY OPTIMIZATION - Add with your other variables
     var lastCleanupTime by remember { mutableStateOf(0L) }
-    var lastCleanPosition by remember { mutableStateOf(0.0) }
-    val cleanupInterval = 5 * 60 * 1000L // 5 minutes
+    val cleanupInterval = 10 * 60 * 1000L // 10 minutes
     
-    // GESTURE STATES
+    // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
     var touchStartTime by remember { mutableStateOf(0L) }
     var touchStartX by remember { mutableStateOf(0f) }
     var touchStartY by remember { mutableStateOf(0f) }
@@ -108,9 +108,9 @@ fun PlayerOverlay(
     var longTapJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     // THRESHOLDS
-    val longTapThreshold = 300L
-    val horizontalSwipeThreshold = 30f
-    val maxVerticalMovement = 50f
+    val longTapThreshold = 300L // ms
+    val horizontalSwipeThreshold = 30f // pixels - minimum horizontal movement to trigger seeking
+    val maxVerticalMovement = 50f // pixels - maximum vertical movement allowed for horizontal swipe
     
     var showVideoInfo by remember { mutableStateOf(0) }
     var videoTitle by remember { mutableStateOf("Video") }
@@ -128,120 +128,104 @@ fun PlayerOverlay(
     var currentVolume by remember { mutableStateOf(viewModel.currentVolume.value) }
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
+    val coroutineScope = remember { kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main) }
 
-    // =========================================================================
-    // PRE-DECODING MANAGEMENT FUNCTIONS
-    // =========================================================================
-    
-    fun startPreDecoding() {
-        isPreDecodingActive = true
-        // Set aggressive cache for pre-decoding
-        MPVLib.setPropertyString("demuxer-readahead-secs", "15")
-        MPVLib.setPropertyString("cache-secs", "15")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 150 * 1024 * 1024)
-        MPVLib.setPropertyString("cache-pause", "no")
-    }
-    
-    fun stopPreDecoding() {
-        isPreDecodingActive = false
-        preDecodeJob?.cancel()
-        // Reduce cache during seeking
-        MPVLib.setPropertyString("demuxer-readahead-secs", "5")
-        MPVLib.setPropertyString("cache-secs", "5")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 50 * 1024 * 1024)
-        MPVLib.setPropertyString("cache-pause", "yes")
-    }
-    
-    // SIMPLIFIED PRE-DECODING - Based on your concept
-    fun updatePreDecoding(position: Double, duration: Double) {
-        if (!isPreDecodingActive || isSeeking || isDragging || isSpeedingUp) return
+    // FRAME LOCKING FUNCTION
+    fun lockFrameAtCurrentPosition() {
+        frameLockJob?.cancel()
+        isFrameLocked = true
         
-        // Only update if position changed significantly
-        if (abs(position - lastPreDecodePosition) > 2.0) {
-            lastPreDecodePosition = position
-            
-            // Cancel any existing pre-decode job
-            preDecodeJob?.cancel()
-            
-            // Start new pre-decode job
-            preDecodeJob = coroutineScope.launch {
-                // Set aggressive caching for the current window
-                val windowStart = (position - 15.0).coerceAtLeast(0.0)
-                val windowEnd = (position + 15.0).coerceAtMost(duration)
-                
-                // Force MPV to cache this range
-                MPVLib.setPropertyString("demuxer-readahead-secs", "15")
-                MPVLib.setPropertyString("cache-secs", "15")
-                MPVLib.setPropertyInt("demuxer-max-bytes", 150 * 1024 * 1024)
-                
-                // Pre-decode key areas by seeking to them briefly
-                val keyPoints = listOf(
-                    position, // Current position
-                    (position - 5.0).coerceAtLeast(0.0), // 5 seconds back
-                    (position + 5.0).coerceAtMost(duration), // 5 seconds forward
-                    (position - 10.0).coerceAtLeast(0.0), // 10 seconds back  
-                    (position + 10.0).coerceAtMost(duration), // 10 seconds forward
-                )
-                
-                for (point in keyPoints.distinct()) {
-                    if (!isActive) break
-                    MPVLib.command("seek", point.toString(), "absolute", "exact")
-                    delay(10) // Brief delay
-                }
-                
-                // Return to actual position
-                MPVLib.command("seek", position.toString(), "absolute", "exact")
-            }
+        // Force pause to lock the current frame
+        MPVLib.setPropertyBoolean("pause", true)
+        
+        // Schedule auto-unlock
+        frameLockJob = coroutineScope.launch {
+            delay(frameLockDuration)
+            isFrameLocked = false
+        }
+    }
+    
+    // PRE-DECODING HELPER FUNCTIONS
+    suspend fun preDecodeChunk(start: Double, end: Double, chunkSize: Double, delayMs: Long, coroutineScope: kotlinx.coroutines.CoroutineScope) {
+        var decodePos = start
+        while (decodePos <= end && coroutineScope.isActive && isPreDecodingActive) {
+            MPVLib.command("seek", decodePos.toString(), "absolute", "exact")
+            delay(delayMs)
+            decodePos += chunkSize
         }
     }
 
-    // =========================================================================
-    // MEMORY MANAGEMENT FUNCTIONS
-    // =========================================================================
+    // BACKGROUND PRE-DECODING - ONLY DURING NORMAL PLAYBACK/PAUSE
+    fun startBackgroundPreDecoding(currentPos: Double, duration: Double) {
+        // Don't start if we're already pre-decoding or if we're seeking
+        if (isPreDecodingActive || isSeeking || isDragging) return
+        
+        preDecodeJob?.cancel()
+        isPreDecodingActive = true
+        
+        preDecodeJob = coroutineScope.launch {
+            // Calculate window for pre-decoding
+            val windowStart = (currentPos - preDecodeWindowSize).coerceAtLeast(0.0)
+            val windowEnd = (currentPos + preDecodeWindowSize).coerceAtMost(duration)
+            
+            // Pre-decode 15 seconds ahead (future)
+            if (windowEnd > currentPos + 1.0) {
+                preDecodeChunk(currentPos + 1.0, windowEnd, 2.0, 15, this)
+            }
+            
+            // Pre-decode 15 seconds behind (past)
+            if (windowStart < currentPos - 1.0) {
+                var decodePos = currentPos - 2.0
+                while (decodePos >= windowStart && this.isActive && isPreDecodingActive) {
+                    MPVLib.command("seek", decodePos.toString(), "absolute", "exact")
+                    delay(15)
+                    decodePos -= 2.0
+                }
+            }
+            
+            // Return to current position after pre-decoding
+            if (this.isActive && isPreDecodingActive) {
+                MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
+            }
+        }
+    }
     
+    // STOP PRE-DECODING - CALLED WHEN SEEKING STARTS
+    fun stopPreDecoding() {
+        isPreDecodingActive = false
+        preDecodeJob?.cancel()
+    }
+    
+    // MEMORY OPTIMIZATION FUNCTION
     fun gentleCleanup() {
-        MPVLib.setPropertyString("demuxer-readahead-secs", "10")
-        MPVLib.setPropertyString("cache-secs", "10")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 80 * 1024 * 1024)
+        // Only reduce cache sizes - don't disable completely
+        MPVLib.setPropertyString("demuxer-readahead-secs", "10") // Reduced from 60
+        MPVLib.setPropertyString("cache-secs", "10") // Reduced from 60
+        MPVLib.setPropertyInt("demuxer-max-bytes", 100 * 1024 * 1024) // Reduced from 150MB
+        
+        // Reset critical properties without stopping playback
+        MPVLib.setPropertyString("video-sync", "display-resample")
+        MPVLib.setPropertyString("hr-seek", "yes")
     }
     
-    fun moderateCleanup() {
-        MPVLib.setPropertyString("demuxer-readahead-secs", "5")
-        MPVLib.setPropertyString("cache-secs", "5")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 40 * 1024 * 1024)
-    }
-    
-    fun aggressiveCleanup() {
-        MPVLib.setPropertyString("demuxer-readahead-secs", "0")
-        MPVLib.setPropertyString("cache-secs", "0")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 10 * 1024 * 1024)
-        try { System.gc() } catch (e: Exception) { }
-    }
-
-    // =========================================================================
-    // SEEKING FUNCTIONS
-    // =========================================================================
-    
+    // UPDATED: performRealTimeSeek with throttle
     fun performRealTimeSeek(targetPosition: Double) {
-        if (isSeekInProgress) return
+        if (isSeekInProgress) return // Skip if we're already processing a seek
         
         isSeekInProgress = true
         MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
         
+        // Reset after throttle period
         coroutineScope.launch {
             delay(seekThrottleMs)
             isSeekInProgress = false
         }
     }
     
+    // NEW: Function to get fresh position from MPV
     fun getFreshPosition(): Float {
         return (MPVLib.getPropertyDouble("time-pos") ?: 0.0).toFloat()
     }
-
-    // =========================================================================
-    // GESTURE HANDLERS (UPDATED WITH PRE-DECODING COORDINATION)
-    // =========================================================================
     
     fun toggleVideoInfo() {
         showVideoInfo = if (showVideoInfo == 0) 1 else 0
@@ -260,6 +244,13 @@ fun PlayerOverlay(
         volumeFeedbackJob = coroutineScope.launch {
             delay(1000)
             showVolumeFeedbackState = false
+        }
+    }
+    
+    kotlinx.coroutines.LaunchedEffect(viewModel.currentVolume) {
+        viewModel.currentVolume.collect { volume ->
+            currentVolume = volume
+            showVolumeFeedback(volume)
         }
     }
     
@@ -298,22 +289,23 @@ fun PlayerOverlay(
     
     fun handleTap() {
         val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
+        
+        // Cancel any frame lock when tapping
+        frameLockJob?.cancel()
+        isFrameLocked = false
+        
         if (currentPaused) {
-            // Resume playback - restart pre-decoding
             coroutineScope.launch {
                 val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
                 MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
                 delay(100)
                 MPVLib.setPropertyBoolean("pause", false)
-                startPreDecoding() // Restart pre-decoding on resume
             }
             showPlaybackFeedback("Resume")
         } else {
-            // Pause playback - maintain pre-decoding for potential seeking
             MPVLib.setPropertyBoolean("pause", true)
             showPlaybackFeedback("Pause")
         }
-        
         if (showSeekbar) {
             showSeekbar = false
         } else {
@@ -331,31 +323,31 @@ fun PlayerOverlay(
             if (isTouching && !isHorizontalSwipe) {
                 isLongTap = true
                 isSpeedingUp = true
-                // Stop pre-decoding during 2x speed
-                stopPreDecoding()
                 MPVLib.setPropertyDouble("speed", 2.0)
             }
         }
     }
     
     fun checkForHorizontalSwipe(currentX: Float, currentY: Float): Boolean {
-        if (isHorizontalSwipe || isLongTap) return false
+        if (isHorizontalSwipe || isLongTap) return false // Already determined or long tap active
         
         val deltaX = kotlin.math.abs(currentX - touchStartX)
         val deltaY = kotlin.math.abs(currentY - touchStartY)
         
+        // Only trigger horizontal swipe if:
+        // 1. Horizontal movement is significant (> threshold)
+        // 2. Horizontal movement is greater than vertical movement (primarily horizontal)
+        // 3. Vertical movement is within acceptable limits
         if (deltaX > horizontalSwipeThreshold && deltaX > deltaY && deltaY < maxVerticalMovement) {
             isHorizontalSwipe = true
-            longTapJob?.cancel()
+            longTapJob?.cancel() // Cancel long tap detection
             return true
         }
         return false
     }
     
+    // UPDATED: startHorizontalSeeking - STOP PRE-DECODING
     fun startHorizontalSeeking(startX: Float) {
-        // STOP pre-decoding when seeking starts
-        stopPreDecoding()
-        
         isHorizontalSwipe = true
         cancelAutoHide()
         seekStartX = startX
@@ -364,11 +356,15 @@ fun PlayerOverlay(
         isSeeking = true
         showSeekTime = true
         
+        // STOP PRE-DECODING WHEN SEEKING STARTS
+        stopPreDecoding()
+        
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
         }
     }
     
+    // UPDATED: handleHorizontalSeeking without debouncing
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
@@ -379,27 +375,40 @@ fun PlayerOverlay(
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
+        // ALWAYS update UI instantly
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
         
+        // Send seek command with throttle
         performRealTimeSeek(clampedPosition)
     }
     
+    // UPDATED: endHorizontalSeeking - LOCK FRAME ON RELEASE
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
+            
+            // Seek to exact release position first
             performRealTimeSeek(currentPos)
             
-            // RESTART pre-decoding after seeking ends
+            // LOCK THE FRAME IMMEDIATELY AT RELEASE POSITION
+            lockFrameAtCurrentPosition()
+            
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
-                    delay(100)
-                    MPVLib.setPropertyBoolean("pause", false)
-                    startPreDecoding() // Restart pre-decoding after seek
+                    // Wait for frame lock to expire, then resume
+                    delay(frameLockDuration + 50) // Extra 50ms buffer
+                    if (!isFrameLocked) {
+                        MPVLib.setPropertyBoolean("pause", false)
+                    }
                 }
             } else {
-                // If was paused, still restart pre-decoding for potential future seeks
-                startPreDecoding()
+                // If was paused, ensure frame lock is cleared after duration
+                coroutineScope.launch {
+                    delay(frameLockDuration)
+                    frameLockJob?.cancel()
+                    isFrameLocked = false
+                }
             }
             
             isSeeking = false
@@ -417,125 +426,24 @@ fun PlayerOverlay(
         longTapJob?.cancel()
         
         if (isLongTap) {
-            // Long tap ended - reset speed and RESTART pre-decoding
+            // Long tap ended - reset speed
             isLongTap = false
             isSpeedingUp = false
             MPVLib.setPropertyDouble("speed", 1.0)
-            startPreDecoding() // Restart pre-decoding after 2x speed ends
         } else if (isHorizontalSwipe) {
             // Horizontal swipe ended
             endHorizontalSeeking()
             isHorizontalSwipe = false
         } else if (touchDuration < 150) {
-            // Short tap
+            // Short tap (less than 150ms)
             handleTap()
         }
-        
+        // Reset all gesture states
         isHorizontalSwipe = false
         isLongTap = false
     }
-
-    // =========================================================================
-    // PROGRESS BAR DRAG HANDLERS (UPDATED WITH PRE-DECODING)
-    // =========================================================================
     
-    fun handleProgressBarDrag(newPosition: Float) {
-        cancelAutoHide()
-        if (!isSeeking) {
-            // STOP pre-decoding when seekbar drag starts
-            stopPreDecoding()
-            
-            isSeeking = true
-            wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
-            showSeekTime = true
-            if (wasPlayingBeforeSeek) {
-                MPVLib.setPropertyBoolean("pause", true)
-            }
-        }
-        isDragging = true
-        seekbarPosition = newPosition
-        val targetPosition = newPosition.toDouble()
-        
-        seekTargetTime = formatTimeSimple(targetPosition)
-        currentTime = formatTimeSimple(targetPosition)
-        
-        performRealTimeSeek(targetPosition)
-    }
-    
-    fun handleDragFinished() {
-        isDragging = false
-        
-        // RESTART pre-decoding after seekbar drag ends
-        if (wasPlayingBeforeSeek) {
-            coroutineScope.launch {
-                delay(100)
-                MPVLib.setPropertyBoolean("pause", false)
-                startPreDecoding() // Restart pre-decoding
-            }
-        } else {
-            // If was paused, still restart pre-decoding
-            startPreDecoding()
-        }
-        
-        isSeeking = false
-        showSeekTime = false
-        wasPlayingBeforeSeek = false
-        scheduleSeekbarHide()
-    }
-
-    // =========================================================================
-    // LAUNCHED EFFECTS - CORE LOGIC
-    // =========================================================================
-    
-    LaunchedEffect(viewModel.currentVolume) {
-        viewModel.currentVolume.collect { volume ->
-            currentVolume = volume
-            showVolumeFeedback(volume)
-        }
-    }
-    
-    // SMART PRE-DECODING MANAGEMENT - SIMPLIFIED
-    LaunchedEffect(currentPosition, videoDuration, isSeeking, isDragging, isSpeedingUp) {
-        val shouldPreDecode = isPreDecodingActive && 
-                             !isSeeking && 
-                             !isDragging && 
-                             !isSpeedingUp
-        
-        if (shouldPreDecode && videoDuration > 0) {
-            updatePreDecoding(currentPosition, videoDuration)
-        }
-    }
-    
-    // SMART MEMORY CLEANUP (Event-based)
-    LaunchedEffect(currentPosition, videoDuration, isPausing) {
-        val currentTime = System.currentTimeMillis()
-        
-        // Condition 1: Video completed
-        if (videoDuration > 0 && currentPosition >= videoDuration - 2) {
-            gentleCleanup()
-            lastCleanupTime = currentTime
-        }
-        // Condition 2: Large seek (more than 30 seconds)
-        else if (abs(currentPosition - lastCleanPosition) > 30) {
-            gentleCleanup()
-            lastCleanPosition = currentPosition
-            lastCleanupTime = currentTime
-        }
-        // Condition 3: Paused for 3+ minutes
-        else if (isPausing && currentTime - lastCleanupTime > 3 * 60 * 1000) {
-            moderateCleanup()
-            lastCleanupTime = currentTime
-        }
-        // Condition 4: Periodic (every 5 minutes) but only if not interacting
-        else if (currentTime - lastCleanupTime > 5 * 60 * 1000 && 
-                !userInteracting && !isSeeking && !isDragging) {
-            gentleCleanup()
-            lastCleanupTime = currentTime
-        }
-    }
-    
-    // INITIAL SETUP
-    LaunchedEffect(Unit) {
+    kotlinx.coroutines.LaunchedEffect(Unit) {
         val intent = (context as? android.app.Activity)?.intent
         fileName = when {
             intent?.action == Intent.ACTION_SEND -> {
@@ -557,24 +465,36 @@ fun PlayerOverlay(
             showVideoInfo = 0
         }
         
-        // START pre-decoding initially
-        startPreDecoding()
+        // Ensure no frame lock on startup
+        frameLockJob?.cancel()
+        isFrameLocked = false
+        
         scheduleSeekbarHide()
     }
     
-    // BACKUP SPEED CONTROL WITH PRE-DECODING COORDINATION
-    LaunchedEffect(isSpeedingUp) {
+    // Backup speed control
+    kotlinx.coroutines.LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
-            stopPreDecoding() // Stop pre-decoding during 2x speed
             MPVLib.setPropertyDouble("speed", 2.0)
         } else {
             MPVLib.setPropertyDouble("speed", 1.0)
-            startPreDecoding() // Restart pre-decoding when returning to normal speed
         }
     }
     
-    // OPTIMIZED MPV CONFIGURATION
-    LaunchedEffect(Unit) {
+    // Backup frame lock cleanup
+    kotlinx.coroutines.LaunchedEffect(isFrameLocked) {
+        if (isFrameLocked) {
+            // Auto-unlock after maximum time (safety net)
+            frameLockJob?.cancel()
+            frameLockJob = coroutineScope.launch {
+                delay(1000) // Maximum 1 second lock
+                isFrameLocked = false
+            }
+        }
+    }
+    
+    // OPTIMIZED MPV CONFIGURATION WITH REDUCED CACHE
+    kotlinx.coroutines.LaunchedEffect(Unit) {
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
         MPVLib.setPropertyString("profile", "fast")
@@ -582,8 +502,12 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("audio-channels", "auto")
         MPVLib.setPropertyString("demuxer-lavf-threads", "4")
         
-        // Initial cache settings (will be overridden by pre-decoding)
+        // REDUCED CACHE SIZES - Memory optimization
         MPVLib.setPropertyString("cache", "yes")
+        MPVLib.setPropertyInt("demuxer-max-bytes", 100 * 1024 * 1024) // Was 150MB
+        MPVLib.setPropertyString("demuxer-readahead-secs", "10") // Was 60
+        MPVLib.setPropertyString("cache-secs", "10") // Was 60
+        
         MPVLib.setPropertyString("cache-pause", "no")
         MPVLib.setPropertyString("cache-initial", "0.5")
         MPVLib.setPropertyString("video-sync", "display-resample")
@@ -606,13 +530,42 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("video-aspect-override", "no")
     }
     
-    // POSITION UPDATES
-    LaunchedEffect(Unit) {
+    // PERIODIC MEMORY MAINTENANCE
+    kotlinx.coroutines.LaunchedEffect(Unit) {
+        while (isActive) {
+            delay(30 * 1000) // Check every 30 seconds
+            
+            val currentTime = System.currentTimeMillis()
+            if (currentTime - lastCleanupTime > cleanupInterval) {
+                if (!isSeeking && !isDragging && !userInteracting) {
+                    // Safe to perform gentle cleanup
+                    gentleCleanup()
+                    lastCleanupTime = currentTime
+                }
+            }
+        }
+    }
+    
+    // VIDEO END DETECTION FOR CLEANUP
+    kotlinx.coroutines.LaunchedEffect(currentPosition, videoDuration) {
+        // If we're near the end of video, prepare for cleanup
+        if (videoDuration > 0 && currentPosition > videoDuration - 5) {
+            // Video is ending soon, reduce cache for next video
+            gentleCleanup()
+        }
+    }
+    
+    // CONTINUOUS POSITION UPDATES AND PRE-DECODING MANAGEMENT
+    kotlinx.coroutines.LaunchedEffect(Unit) {
         var lastSeconds = -1
+        var lastPreDecodePosition = -1.0
+        
         while (isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
             val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
             val currentSeconds = currentPos.toInt()
+            
+            // Update UI
             if (isSeeking) {
                 currentTime = seekTargetTime
                 totalTime = formatTimeSimple(duration)
@@ -623,12 +576,23 @@ fun PlayerOverlay(
                     lastSeconds = currentSeconds
                 }
             }
+            
             if (!isDragging) {
                 seekbarPosition = currentPos.toFloat()
                 seekbarDuration = duration.toFloat()
             }
             currentPosition = currentPos
             videoDuration = duration
+            
+            // BACKGROUND PRE-DECODING - ONLY WHEN NOT SEEKING AND VIDEO IS LONG ENOUGH
+            if (!isSeeking && !isDragging && duration > 30) {
+                val positionChanged = abs(currentPos - lastPreDecodePosition) > 5.0
+                if (positionChanged || !isPreDecodingActive) {
+                    startBackgroundPreDecoding(currentPos, duration)
+                    lastPreDecodePosition = currentPos
+                }
+            }
+            
             delay(500)
         }
     }
@@ -637,13 +601,66 @@ fun PlayerOverlay(
         1 -> fileName
         else -> ""
     }
-
-    // =========================================================================
-    // UI COMPOSITION
-    // =========================================================================
+    
+    // UPDATED: handleProgressBarDrag - STOP PRE-DECODING
+    fun handleProgressBarDrag(newPosition: Float) {
+        cancelAutoHide()
+        if (!isSeeking) {
+            isSeeking = true
+            wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
+            showSeekTime = true
+            
+            // STOP PRE-DECODING WHEN SEEKING STARTS
+            stopPreDecoding()
+            
+            if (wasPlayingBeforeSeek) {
+                MPVLib.setPropertyBoolean("pause", true)
+            }
+        }
+        isDragging = true
+        seekbarPosition = newPosition
+        val targetPosition = newPosition.toDouble()
+        
+        // ALWAYS update UI instantly
+        seekTargetTime = formatTimeSimple(targetPosition)
+        currentTime = formatTimeSimple(targetPosition)
+        
+        // Send seek command with throttle
+        performRealTimeSeek(targetPosition)
+    }
+    
+    // UPDATED: handleDragFinished - LOCK FRAME ON RELEASE
+    fun handleDragFinished() {
+        isDragging = false
+        
+        // LOCK THE FRAME IMMEDIATELY AT RELEASE POSITION
+        lockFrameAtCurrentPosition()
+        
+        if (wasPlayingBeforeSeek) {
+            coroutineScope.launch {
+                // Wait for frame lock to expire, then resume
+                delay(frameLockDuration + 50) // Extra 50ms buffer
+                if (!isFrameLocked) {
+                    MPVLib.setPropertyBoolean("pause", false)
+                }
+            }
+        } else {
+            // If was paused, ensure frame lock is cleared after duration
+            coroutineScope.launch {
+                delay(frameLockDuration)
+                frameLockJob?.cancel()
+                isFrameLocked = false
+            }
+        }
+        
+        isSeeking = false
+        showSeekTime = false
+        wasPlayingBeforeSeek = false
+        scheduleSeekbarHide()
+    }
     
     Box(modifier = modifier.fillMaxSize()) {
-        // MAIN GESTURE AREA
+        // MAIN GESTURE AREA - Full screen divided into areas
         Box(modifier = Modifier.fillMaxSize()) {
             // TOP 5% - Ignore area
             Box(
@@ -673,12 +690,13 @@ fun PlayerOverlay(
                         )
                 )
                 
-                // CENTER 90% - All gestures
+                // CENTER 90% - All gestures (tap, long tap, horizontal swipe)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.9f)
                         .fillMaxHeight()
                         .align(Alignment.Center)
+                        // USE SINGLE pointerInteropFilter FOR ALL GESTURES TO AVOID CONFLICTS
                         .pointerInteropFilter { event ->
                             when (event.action) {
                                 MotionEvent.ACTION_DOWN -> {
@@ -689,12 +707,15 @@ fun PlayerOverlay(
                                 }
                                 MotionEvent.ACTION_MOVE -> {
                                     if (!isHorizontalSwipe && !isLongTap) {
+                                        // Check if this should become a horizontal swipe
                                         if (checkForHorizontalSwipe(event.x, event.y)) {
                                             startHorizontalSeeking(event.x)
                                         }
                                     } else if (isHorizontalSwipe) {
+                                        // Continue horizontal seeking
                                         handleHorizontalSeeking(event.x)
                                     }
+                                    // If it's a long tap, ignore movement (allow slight finger movement during hold)
                                     true
                                 }
                                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -747,7 +768,7 @@ fun PlayerOverlay(
                             duration = seekbarDuration,
                             onValueChange = { handleProgressBarDrag(it) },
                             onValueChangeFinished = { handleDragFinished() },
-                            getFreshPosition = { getFreshPosition() },
+                            getFreshPosition = { getFreshPosition() }, // NEW: Pass fresh position function
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -794,15 +815,104 @@ fun PlayerOverlay(
             }
         }
     }
+}
 
-    // CLEANUP ON EXIT
-    androidx.compose.runtime.DisposableEffect(Unit) {
-        onDispose {
-            // Aggressive cleanup when exiting
-            MPVLib.command("stop")
-            aggressiveCleanup()
-        }
+@Composable
+fun SimpleDraggableProgressBar(
+    position: Float,
+    duration: Float,
+    onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit,
+    getFreshPosition: () -> Float,
+    modifier: Modifier = Modifier
+) {
+    var dragStartX by remember { mutableStateOf(0f) }
+    var dragStartPosition by remember { mutableStateOf(0f) }
+    var hasPassedThreshold by remember { mutableStateOf(false) }
+    var thresholdStartX by remember { mutableStateOf(0f) } // NEW: Track where threshold was passed
+    
+    // Convert 25dp to pixels for the movement threshold
+    val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
+    
+    Box(modifier = modifier.height(24.dp)) {
+        Box(modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.CenterStart).background(Color.Gray.copy(alpha = 0.6f)))
+        Box(modifier = Modifier.fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f).height(4.dp).align(Alignment.CenterStart).background(Color.White))
+        Box(modifier = Modifier.fillMaxWidth().height(24.dp).align(Alignment.CenterStart).pointerInput(Unit) {
+            detectDragGestures(
+                onDragStart = { offset ->
+                    dragStartX = offset.x
+                    // GET FRESH POSITION IMMEDIATELY WHEN DRAG STARTS
+                    dragStartPosition = getFreshPosition()
+                    hasPassedThreshold = false // Reset threshold flag
+                    thresholdStartX = 0f // Reset threshold start position
+                },
+                onDrag = { change, dragAmount ->
+                    change.consume()
+                    val currentX = change.position.x
+                    val totalMovementX = abs(currentX - dragStartX)
+                    
+                    // Check if we've passed the movement threshold
+                    if (!hasPassedThreshold) {
+                        if (totalMovementX > movementThresholdPx) {
+                            hasPassedThreshold = true
+                            thresholdStartX = currentX // NEW: Store position where threshold was passed
+                        } else {
+                            // Haven't passed threshold yet, don't seek
+                            return@detectDragGestures
+                        }
+                    }
+                    
+                    // Calculate delta from the threshold start position, not the original drag start
+                    val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
+                    val deltaX = currentX - effectiveStartX
+                    val deltaPosition = (deltaX / size.width) * duration
+                    val newPosition = (dragStartPosition + deltaPosition).coerceIn(0f, duration)
+                    onValueChange(newPosition)
+                },
+                onDragEnd = { 
+                    hasPassedThreshold = false // Reset for next drag
+                    thresholdStartX = 0f // Reset threshold start
+                    onValueChangeFinished() 
+                }
+            )
+        })
     }
 }
 
-// ... rest of your existing code (SimpleDraggableProgressBar and utility functions) remains the same ...
+private fun formatTimeSimple(seconds: Double): String {
+    val totalSeconds = seconds.toInt()
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val secs = totalSeconds % 60
+    return if (hours > 0) String.format("%02d:%02d:%02d", hours, minutes, secs) else String.format("%02d:%02d", minutes, secs)
+}
+
+private fun getFileNameFromUri(uri: Uri?, context: android.content.Context): String {
+    if (uri == null) return getBestAvailableFileName(context)
+    return when {
+        uri.scheme == "file" -> uri.lastPathSegment?.substringBeforeLast(".") ?: getBestAvailableFileName(context)
+        uri.scheme == "content" -> getDisplayNameFromContentUri(uri, context) ?: getBestAvailableFileName(context)
+        uri.scheme in listOf("http", "https") -> uri.lastPathSegment?.substringBeforeLast(".") ?: "Online Video"
+        else -> getBestAvailableFileName(context)
+    }
+}
+
+private fun getDisplayNameFromContentUri(uri: Uri, context: android.content.Context): String? {
+    return try {
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val displayNameIndex = cursor.getColumnIndex("_display_name")
+                val displayName = if (displayNameIndex != -1) cursor.getString(displayNameIndex)?.substringBeforeLast(".") else null
+                displayName ?: uri.lastPathSegment?.substringBeforeLast(".")
+            } else null
+        }
+    } catch (e: Exception) { null }
+}
+
+private fun getBestAvailableFileName(context: android.content.Context): String {
+    val mediaTitle = MPVLib.getPropertyString("media-title")
+    if (mediaTitle != null && mediaTitle != "Video" && mediaTitle.isNotBlank()) return mediaTitle.substringBeforeLast(".")
+    val mpvPath = MPVLib.getPropertyString("path")
+    if (mpvPath != null && mpvPath.isNotBlank()) return mpvPath.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "Video" }
+    return "Video"
+}
