@@ -598,7 +598,7 @@ fun PlayerOverlay(
                 }
             }
             
-            delay(500)
+            delay(16)
         }
     }
     
