@@ -135,7 +135,7 @@ fun PlayerOverlay(
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
 
     // =========================================================================
-    // PRE-DECODING MANAGEMENT FUNCTIONS
+    // PRE-DECODING MANAGEMENT FUNCTIONS - MOVED TO TOP
     // =========================================================================
     
     fun startPreDecoding() {
