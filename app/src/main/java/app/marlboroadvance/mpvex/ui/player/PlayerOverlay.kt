@@ -133,7 +133,7 @@ fun PlayerOverlay(
     var currentVolume by remember { mutableStateOf(viewModel.currentVolume.value) }
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    val coroutineScope = remember { kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main) }
+    val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
 
     // FRAME LOCKING FUNCTION
     fun lockFrameAtCurrentPosition() {
@@ -151,7 +151,7 @@ fun PlayerOverlay(
     }
     
     // PRE-DECODING HELPER FUNCTIONS
-    suspend fun preDecodeChunk(start: Double, end: Double, chunkSize: Double, delayMs: Long, coroutineScope: kotlinx.coroutines.CoroutineScope) {
+    suspend fun preDecodeChunk(start: Double, end: Double, chunkSize: Double, delayMs: Long) {
         var decodePos = start
         while (decodePos <= end && coroutineScope.isActive && isPreDecodingActive) {
             MPVLib.command("seek", decodePos.toString(), "absolute", "exact")
@@ -175,7 +175,7 @@ fun PlayerOverlay(
             
             // Pre-decode 15 seconds ahead (future)
             if (windowEnd > currentPos + 1.0) {
-                preDecodeChunk(currentPos + 1.0, windowEnd, 2.0, 15, this)
+                preDecodeChunk(currentPos + 1.0, windowEnd, 2.0, 15)
             }
             
             // Pre-decode 15 seconds behind (past)
@@ -252,7 +252,7 @@ fun PlayerOverlay(
         }
     }
     
-    kotlinx.coroutines.LaunchedEffect(viewModel.currentVolume) {
+    LaunchedEffect(viewModel.currentVolume) {
         viewModel.currentVolume.collect { volume ->
             currentVolume = volume
             showVolumeFeedback(volume)
@@ -448,7 +448,7 @@ fun PlayerOverlay(
         isLongTap = false
     }
     
-    kotlinx.coroutines.LaunchedEffect(Unit) {
+    LaunchedEffect(Unit) {
         val intent = (context as? android.app.Activity)?.intent
         fileName = when {
             intent?.action == Intent.ACTION_SEND -> {
@@ -478,7 +478,7 @@ fun PlayerOverlay(
     }
     
     // Backup speed control
-    kotlinx.coroutines.LaunchedEffect(isSpeedingUp) {
+    LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
             MPVLib.setPropertyDouble("speed", 2.0)
         } else {
@@ -487,7 +487,7 @@ fun PlayerOverlay(
     }
     
     // Backup frame lock cleanup
-    kotlinx.coroutines.LaunchedEffect(isFrameLocked) {
+    LaunchedEffect(isFrameLocked) {
         if (isFrameLocked) {
             // Auto-unlock after maximum time (safety net)
             frameLockJob?.cancel()
@@ -499,7 +499,7 @@ fun PlayerOverlay(
     }
     
     // OPTIMIZED MPV CONFIGURATION WITH REDUCED CACHE
-    kotlinx.coroutines.LaunchedEffect(Unit) {
+    LaunchedEffect(Unit) {
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
         MPVLib.setPropertyString("profile", "fast")
@@ -536,8 +536,8 @@ fun PlayerOverlay(
     }
     
     // PERIODIC MEMORY MAINTENANCE
-    kotlinx.coroutines.LaunchedEffect(Unit) {
-        while (isActive) {
+    LaunchedEffect(Unit) {
+        while (coroutineScope.isActive) {
             delay(30 * 1000) // Check every 30 seconds
             
             val currentTime = System.currentTimeMillis()
@@ -552,7 +552,7 @@ fun PlayerOverlay(
     }
     
     // VIDEO END DETECTION FOR CLEANUP
-    kotlinx.coroutines.LaunchedEffect(currentPosition, videoDuration) {
+    LaunchedEffect(currentPosition, videoDuration) {
         // If we're near the end of video, prepare for cleanup
         if (videoDuration > 0 && currentPosition > videoDuration - 5) {
             // Video is ending soon, reduce cache for next video
@@ -561,11 +561,11 @@ fun PlayerOverlay(
     }
     
     // CONTINUOUS POSITION UPDATES AND PRE-DECODING MANAGEMENT
-    kotlinx.coroutines.LaunchedEffect(Unit) {
+    LaunchedEffect(Unit) {
         var lastSeconds = -1
         var lastPreDecodePosition = -1.0
         
-        while (isActive) {
+        while (coroutineScope.isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
             val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
             val currentSeconds = currentPos.toInt()
