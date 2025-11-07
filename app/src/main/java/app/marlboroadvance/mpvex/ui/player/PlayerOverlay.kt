@@ -140,6 +140,30 @@ fun PlayerOverlay(
         }
     }
     
+    // PRE-LOAD THE SEEK BUFFER - FIXED VERSION
+    suspend fun preloadSeekBuffer(start: Double, end: Double, currentPos: Double, coroutineScope: CoroutineScope) {
+        // Pre-load ahead (future) - from current+1s to buffer end
+        var preloadPos = currentPos + 1.0
+        while (preloadPos <= end && coroutineScope.isActive && isSeekBufferActive) {
+            MPVLib.command("seek", preloadPos.toString(), "absolute", "exact")
+            delay(8) // Short delay
+            preloadPos += 2.0
+        }
+        
+        // Pre-load behind (past) - from current-1s to buffer start
+        preloadPos = currentPos - 1.0
+        while (preloadPos >= start && coroutineScope.isActive && isSeekBufferActive) {
+            MPVLib.command("seek", preloadPos.toString(), "absolute", "exact")
+            delay(8)
+            preloadPos -= 2.0
+        }
+        
+        // ALWAYS return to current position after pre-loading
+        if (coroutineScope.isActive && isSeekBufferActive) {
+            MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
+        }
+    }
+    
     // SLIDING WINDOW BUFFER FOR HORIZONTAL SEEKING
     fun startSeekBuffer() {
         if (isSeekBufferActive) return
@@ -157,35 +181,11 @@ fun PlayerOverlay(
                 val bufferEnd = (currentPos + seekBufferSize).coerceAtMost(duration)
                 
                 // Pre-load this window for smooth horizontal seeking
-                preloadSeekBuffer(bufferStart, bufferEnd, currentPos)
+                preloadSeekBuffer(bufferStart, bufferEnd, currentPos, this)
                 
                 // Update buffer every 500ms
                 delay(500)
             }
-        }
-    }
-    
-    // PRE-LOAD THE SEEK BUFFER
-    suspend fun preloadSeekBuffer(start: Double, end: Double, currentPos: Double) {
-        // Pre-load ahead (future) - from current+1s to buffer end
-        var preloadPos = currentPos + 1.0
-        while (preloadPos <= end && this.isActive && isSeekBufferActive) {
-            MPVLib.command("seek", preloadPos.toString(), "absolute", "exact")
-            delay(8) // Short delay
-            preloadPos += 2.0
-        }
-        
-        // Pre-load behind (past) - from current-1s to buffer start
-        preloadPos = currentPos - 1.0
-        while (preloadPos >= start && this.isActive && isSeekBufferActive) {
-            MPVLib.command("seek", preloadPos.toString(), "absolute", "exact")
-            delay(8)
-            preloadPos -= 2.0
-        }
-        
-        // ALWAYS return to current position after pre-loading
-        if (this.isActive && isSeekBufferActive) {
-            MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
         }
     }
     
@@ -554,7 +554,10 @@ fun PlayerOverlay(
     // CLEANUP WHEN COMPOSABLE IS DESTROYED
     LaunchedEffect(Unit) {
         try {
-            awaitCancellation()
+            // Keep the coroutine running until cancelled
+            while (isActive) {
+                delay(1000)
+            }
         } finally {
             stopSeekBuffer()
         }
