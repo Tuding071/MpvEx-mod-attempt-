@@ -94,7 +94,7 @@ fun PlayerOverlay(
     var preDecodingRestartJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) } // NEW: Restart control
     val preDecodeWindowSize = 15.0
     var lastUserSeekTime by remember { mutableStateOf(0L) }
-    val userSeekCooldown = 200L // Only 200ms cooldown!
+    val userSeekCooldown = 3000L // Only 3000ms cooldown!
     
     // MEMORY OPTIMIZATION
     var lastCleanupTime by remember { mutableStateOf(0L) }
@@ -425,11 +425,11 @@ fun PlayerOverlay(
                 // STEP 5: Start pre-decoding after 100ms (but it's invisible)
                 preDecodingRestartJob?.cancel()
                 preDecodingRestartJob = coroutineScope.launch {
-                    delay(100) // Wait 100ms before starting pre-decoding
+                    delay(50) // Wait 50ms before starting pre-decoding
                     startBackgroundPreDecoding(targetPosition, videoDuration)
                     
                     // Make pre-decoding visible again after 300ms total
-                    delay(200) // Remaining 200ms of invisibility
+                    delay(2950) // Remaining 2950ms of invisibility
                     isPreDecodingVisible = true
                 }
                 
