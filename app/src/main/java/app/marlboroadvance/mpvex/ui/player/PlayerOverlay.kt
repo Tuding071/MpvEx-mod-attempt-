@@ -85,29 +85,37 @@ fun PlayerOverlay(
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 33L // Frame debounce time
+    val frameDebounceMs = 16L // Smoother 62.5fps rate
     
     // FRAME SCRUBBING VARIABLES
     var isFrameScrubbing by remember { mutableStateOf(false) }
     var lastFrameSeekTime by remember { mutableStateOf(0L) }
     var currentFrame by remember { mutableStateOf(0) }
     var totalFrames by remember { mutableStateOf(0) }
-    var videoFPS by remember { mutableStateOf(30.0) } // Default, will detect actual FPS
+    var videoFPS by remember { mutableStateOf(30.0) }
     
-    // Frame scrubbing constants
-    val pixelsPerFrame = 48 // Sensitivity - higher = less sensitive
-    val frameDebounceMs = 33L // ~30fps command rate
-    val preDecodeWindowSeconds = 3.0 // 3 seconds past and future
+    // Enhanced sensitivity calculation for 15-second full swipe
+    val screenWidthPixels = 1000f // Approximate screen width
+    val fullSwipeSeconds = 15.0
+    val framesInFullSwipe = (fullSwipeSeconds * videoFPS).toInt()
+    val pixelsPerFrame = (screenWidthPixels / framesInFullSwipe).coerceAtLeast(4f)
     
     // DIRECTIONAL FRAME SCRUBBING VARIABLES
     var accumulatedPixels by remember { mutableStateOf(0f) }
-    var lastDirection by remember { mutableStateOf(0) } // -1 = left, 1 = right, 0 = none
+    var lastDirection by remember { mutableStateOf(0) }
+    var scrubStartX by remember { mutableStateOf(0f) }
     
-    // FRAME PRE-DECODING SYSTEM
+    // ENHANCED FRAME PRE-DECODING SYSTEM - 60-FRAME CAROUSEL
     var framePreDecodeJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var isFramePreDecodingActive by remember { mutableStateOf(false) }
     var lastPreDecodePosition by remember { mutableStateOf(0.0) }
-    var frameCache by remember { mutableStateOf<MutableSet<Double>>(mutableSetOf()) }
+    var frameCache by remember { mutableStateOf<MutableSet<Int>>(mutableSetOf()) } // Store frame numbers
+    
+    // Frame buffer sizes
+    val normalBufferPast = 30
+    val normalBufferFuture = 30
+    val scrubbingChunkSize = 10
+    val scrubbingChunksAhead = 5
     
     // MEMORY OPTIMIZATION
     var lastCleanupTime by remember { mutableStateOf(0L) }
@@ -145,7 +153,7 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // ADD THE MISSING FUNCTIONS
+    // UTILITY FUNCTIONS
     fun scheduleSeekbarHide() {
         if (userInteracting) return
         hideSeekbarJob?.cancel()
@@ -194,16 +202,19 @@ fun PlayerOverlay(
         currentFrame = frame.coerceIn(0, totalFrames)
     }
     
+    fun canSeekDueToDebounce(): Boolean {
+        return System.currentTimeMillis() - lastFrameSeekTime >= frameDebounceMs
+    }
+    
     fun seekToExactFrameDebounced(frame: Int) {
-        val currentTime = System.currentTimeMillis()
-        if (currentTime - lastFrameSeekTime >= frameDebounceMs) {
+        if (canSeekDueToDebounce()) {
             seekToExactFrame(frame)
-            lastFrameSeekTime = currentTime
+            lastFrameSeekTime = System.currentTimeMillis()
         }
     }
     
-    // FRAME PRE-DECODING SYSTEM
-    fun startFramePreDecoding() {
+    // ENHANCED FRAME PRE-DECODING SYSTEM - 60-FRAME CAROUSEL
+    fun startNormalFrameCarousel() {
         if (isFramePreDecodingActive) return
         
         framePreDecodeJob?.cancel()
@@ -213,45 +224,97 @@ fun PlayerOverlay(
             while (this.isActive && isFramePreDecodingActive) {
                 val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
                 val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
+                val currentFrameNum = calculateFrameFromTime(currentPos)
                 
-                // Skip if user is actively frame scrubbing
+                // Skip if user is actively interacting
                 if (isFrameScrubbing || isSeeking || isDragging || userInteracting) {
                     delay(50)
                     continue
                 }
                 
-                // Only update pre-decode window if position changed significantly
+                // Only update if position changed significantly
                 if (abs(currentPos - lastPreDecodePosition) > 0.5) {
                     lastPreDecodePosition = currentPos
                     
-                    val windowStart = (currentPos - preDecodeWindowSeconds).coerceAtLeast(0.0)
-                    val windowEnd = (currentPos + preDecodeWindowSeconds).coerceAtMost(duration)
+                    // Calculate 60-frame window: 30 past + current + 30 future
+                    val startFrame = (currentFrameNum - normalBufferPast).coerceAtLeast(0)
+                    val endFrame = (currentFrameNum + normalBufferFuture).coerceAtMost(totalFrames)
                     
-                    // Clear old frame cache
-                    frameCache.clear()
+                    // Clear frames outside our 60-frame window
+                    frameCache.removeAll { frame -> frame < startFrame || frame > endFrame }
                     
-                    // Pre-decode frames in the window - FAST AND CONTINUOUS
-                    var decodePos = windowStart
-                    while (decodePos <= windowEnd && this.isActive && isFramePreDecodingActive) {
-                        if (!isFrameScrubbing && !isSeeking && !isDragging && !userInteracting) {
-                            // Fast frame pre-decoding without visual disruption
-                            MPVLib.command("seek", decodePos.toString(), "absolute", "exact", "keyframes")
-                            frameCache.add(decodePos)
-                            delay(16) // Fast continuous decoding - ~60fps rate
-                        } else {
-                            break
+                    // Pre-decode frames in the 60-frame window
+                    for (frame in startFrame..endFrame) {
+                        if (!isFramePreDecodingActive) break
+                        if (frame !in frameCache) {
+                            val frameTime = calculateTimeFromFrame(frame)
+                            MPVLib.command("seek", frameTime.toString(), "absolute", "exact", "keyframes")
+                            frameCache.add(frame)
+                            delay(8) // Fast decoding for 60-frame carousel
                         }
-                        decodePos += 0.033 // ~1 frame at 30fps
                     }
                     
                     // Return to current position
-                    if (this.isActive && isFramePreDecodingActive && !isFrameScrubbing) {
+                    if (this.isActive && isFramePreDecodingActive) {
                         MPVLib.command("seek", currentPos.toString(), "absolute", "exact", "keyframes")
                     }
                 }
                 
-                // Small delay before next check
                 delay(100)
+            }
+        }
+    }
+    
+    fun startScrubbingFramePipeline(currentFrame: Int, direction: Int) {
+        coroutineScope.launch(Dispatchers.IO) {
+            // Clear existing cache and load directional pipeline
+            frameCache.clear()
+            
+            // Load initial chunk around current frame
+            val initialStart = (currentFrame - 5).coerceAtLeast(0)
+            val initialEnd = (currentFrame + 5).coerceAtMost(totalFrames)
+            
+            for (frame in initialStart..initialEnd) {
+                if (!isFrameScrubbing) break
+                val frameTime = calculateTimeFromFrame(frame)
+                MPVLib.command("seek", frameTime.toString(), "absolute", "exact", "keyframes")
+                frameCache.add(frame)
+                delay(8)
+            }
+            
+            // Load directional pipeline chunks
+            for (chunk in 1..scrubbingChunksAhead) {
+                if (!isFrameScrubbing) break
+                
+                val chunkStart = if (direction == 1) {
+                    currentFrame + (chunk * scrubbingChunkSize) + 1
+                } else {
+                    currentFrame - (chunk * scrubbingChunkSize) - 1
+                }
+                
+                val chunkEnd = if (direction == 1) {
+                    chunkStart + scrubbingChunkSize - 1
+                } else {
+                    chunkStart - scrubbingChunkSize + 1
+                }.coerceIn(0, totalFrames)
+                
+                val range = if (direction == 1) chunkStart..chunkEnd else chunkEnd downTo chunkStart
+                
+                for (frame in range) {
+                    if (!isFrameScrubbing) break
+                    if (frame in 0..totalFrames) {
+                        val frameTime = calculateTimeFromFrame(frame)
+                        MPVLib.command("seek", frameTime.toString(), "absolute", "exact", "keyframes")
+                        frameCache.add(frame)
+                        delay(8)
+                    }
+                }
+            }
+            
+            // Return to current position
+            if (isFrameScrubbing) {
+                val currentTime = calculateTimeFromFrame(currentFrame)
+                MPVLib.command("seek", currentTime.toString(), "absolute", "exact", "keyframes")
             }
         }
     }
@@ -267,98 +330,85 @@ fun PlayerOverlay(
         stopFramePreDecoding()
         coroutineScope.launch {
             delay(100)
-            startFramePreDecoding()
+            startNormalFrameCarousel()
         }
     }
     
-    // FRAME SCRUBBING FUNCTIONS WITH DIRECTIONAL PIXEL ACCUMULATION
+    // FRAME SCRUBBING FUNCTIONS WITH DISCRETE CYCLES
     fun startFrameScrubbing(startX: Float) {
         isFrameScrubbing = true
         isHorizontalSwipe = true
         cancelAutoHide()
-        seekStartX = startX
+        scrubStartX = startX
         seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         currentFrame = calculateFrameFromTime(seekStartPosition)
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         showSeekTime = true
         
-        // RESET DIRECTIONAL VARIABLES
+        // Reset directional variables for discrete cycles
         accumulatedPixels = 0f
         lastDirection = 0
         
-        // Stop continuous pre-decoding during frame scrubbing
+        // Stop normal carousel and start scrubbing pipeline
         stopFramePreDecoding()
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
-        }
-        
-        // Pre-load frames around current position for smooth scrubbing
-        coroutineScope.launch(Dispatchers.IO) {
-            val currentPos = seekStartPosition
-            val windowStart = (currentPos - 2.0).coerceAtLeast(0.0)
-            val windowEnd = (currentPos + 2.0).coerceAtMost(videoDuration)
-            
-            var decodePos = windowStart
-            while (decodePos <= windowEnd && isFrameScrubbing) {
-                MPVLib.command("seek", decodePos.toString(), "absolute", "exact", "keyframes")
-                frameCache.add(decodePos)
-                decodePos += 0.033 // 1 frame at 30fps
-            }
-            
-            // Return to start position
-            if (isFrameScrubbing) {
-                MPVLib.command("seek", seekStartPosition.toString(), "absolute", "exact", "keyframes")
-            }
         }
     }
     
     fun handleFrameScrubbing(currentX: Float) {
         if (!isFrameScrubbing) return
         
-        val deltaX = currentX - seekStartX
-        val currentDirection = if (deltaX > 0) 1 else if (deltaX < 0) -1 else 0
+        val deltaX = currentX - scrubStartX
+        val currentDirection = if (deltaX > 1) 1 else if (deltaX < -1) -1 else 0
         
-        // Reset accumulation if direction changes
+        // If no direction yet, wait for clear movement
+        if (currentDirection == 0) return
+        
+        // If direction changed, reset for new cycle
         if (currentDirection != 0 && currentDirection != lastDirection) {
             accumulatedPixels = 0f
-            seekStartX = currentX // Reset start position for new direction
+            scrubStartX = currentX
             lastDirection = currentDirection
+            
+            // Start directional pipeline for new direction
+            startScrubbingFramePipeline(currentFrame, currentDirection)
         }
         
         val pixelDelta = abs(deltaX)
-        accumulatedPixels += pixelDelta
+        accumulatedPixels = pixelDelta // Track from new start point
         
-        // Only advance frames when threshold is reached
+        // Discrete cycle: when threshold reached, advance frame and reset
         if (accumulatedPixels >= pixelsPerFrame) {
-            val framesToAdvance = (accumulatedPixels / pixelsPerFrame).toInt()
-            accumulatedPixels %= pixelsPerFrame // Keep remainder for smooth scrubbing
-            
             val targetFrame = if (currentDirection == 1) {
-                currentFrame + framesToAdvance
+                currentFrame + 1
             } else {
-                currentFrame - framesToAdvance
+                currentFrame - 1
             }.coerceIn(0, totalFrames)
             
             seekTargetTime = formatTimeSimple(calculateTimeFromFrame(targetFrame))
             currentTime = formatTimeSimple(calculateTimeFromFrame(targetFrame))
             
             seekToExactFrameDebounced(targetFrame)
+            
+            // DISCRETE CYCLE RESET
+            accumulatedPixels = 0f
+            scrubStartX = currentX // Reset start to current position
         }
     }
     
     fun endFrameScrubbing() {
         if (isFrameScrubbing) {
             val finalFrame = currentFrame
-            val targetTime = calculateTimeFromFrame(finalFrame)
             
             coroutineScope.launch {
-                // Clear frame cache and directional variables
+                // Clear and reset
                 frameCache.clear()
                 accumulatedPixels = 0f
                 lastDirection = 0
                 
-                // Seek to final frame position
+                // Seek to final position
                 seekToExactFrame(finalFrame)
                 
                 // Resume playback if needed
@@ -366,16 +416,16 @@ fun PlayerOverlay(
                     MPVLib.setPropertyBoolean("pause", false)
                 }
                 
-                // Restart frame pre-decoding
+                // Restart normal frame carousel
                 if (videoDuration > 0) {
-                    startFramePreDecoding()
+                    startNormalFrameCarousel()
                 }
                 
                 // Reset states
                 isFrameScrubbing = false
                 isHorizontalSwipe = false
                 showSeekTime = false
-                seekStartX = 0f
+                scrubStartX = 0f
                 seekStartPosition = 0.0
                 wasPlayingBeforeSeek = false
                 scheduleSeekbarHide()
@@ -383,7 +433,7 @@ fun PlayerOverlay(
         }
     }
     
-    // SIMPLE CACHE CLEARING FUNCTION
+    // CACHE CLEARING FUNCTION
     fun clearVideoCache() {
         MPVLib.setPropertyString("cache", "no")
         MPVLib.setPropertyString("demuxer-readahead-secs", "0")
@@ -468,8 +518,8 @@ fun PlayerOverlay(
                 isLongTap = true
                 isSpeedingUp = true
                 MPVLib.setPropertyDouble("speed", 2.0)
-                // Reset frame pre-decoding for speed change
-                resetFramePreDecoding()
+                // Clean frames and restart
+                stopFramePreDecoding()
             }
         }
     }
@@ -497,7 +547,6 @@ fun PlayerOverlay(
             isLongTap = false
             isSpeedingUp = false
             MPVLib.setPropertyDouble("speed", 1.0)
-            // Reset frame pre-decoding when returning to normal speed
             resetFramePreDecoding()
         } else if (isHorizontalSwipe) {
             endFrameScrubbing()
@@ -536,7 +585,6 @@ fun PlayerOverlay(
     
     // DETECT VIDEO FPS AND SETUP FRAME SYSTEM
     LaunchedEffect(Unit) {
-        // Wait for video to load
         delay(1000)
         
         val detectedFPS = MPVLib.getPropertyDouble("container-fps") ?: 
@@ -546,9 +594,9 @@ fun PlayerOverlay(
         val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
         totalFrames = calculateFrameFromTime(duration)
         
-        // Start frame pre-decoding system
+        // Start 60-frame carousel
         if (duration > 5) {
-            startFramePreDecoding()
+            startNormalFrameCarousel()
         }
     }
     
@@ -561,18 +609,31 @@ fun PlayerOverlay(
         }
     }
     
-    // Backup speed control with frame system reset
+    // Speed control with frame system reset
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
             MPVLib.setPropertyDouble("speed", 2.0)
-            resetFramePreDecoding()
+            stopFramePreDecoding()
         } else {
             MPVLib.setPropertyDouble("speed", 1.0)
             resetFramePreDecoding()
         }
     }
     
-    // OPTIMIZED MPV CONFIGURATION FOR FRAME-ACCURATE SEEKING
+    // Seekbar seeking - clean frames
+    LaunchedEffect(isDragging) {
+        if (isDragging) {
+            stopFramePreDecoding()
+        }
+    }
+    
+    LaunchedEffect(isSeeking) {
+        if (isSeeking) {
+            stopFramePreDecoding()
+        }
+    }
+    
+    // OPTIMIZED MPV CONFIGURATION
     LaunchedEffect(Unit) {
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
@@ -581,13 +642,13 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("audio-channels", "auto")
         MPVLib.setPropertyString("demuxer-lavf-threads", "4")
         
-        // Enhanced cache for frame pre-decoding
+        // Enhanced cache for frame system
         MPVLib.setPropertyString("cache", "yes")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 300 * 1024 * 1024) // 300MB for frame cache
+        MPVLib.setPropertyInt("demuxer-max-bytes", 300 * 1024 * 1024)
         MPVLib.setPropertyString("demuxer-readahead-secs", "30")
         MPVLib.setPropertyString("cache-secs", "30")
         
-        // Frame-accurate seeking configuration
+        // Frame-accurate seeking
         MPVLib.setPropertyString("cache-pause", "no")
         MPVLib.setPropertyString("cache-initial", "0.5")
         MPVLib.setPropertyString("video-sync", "display-resample")
@@ -605,12 +666,12 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("opengl-pbo", "yes")
         MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1")
         MPVLib.setPropertyString("network-timeout", "30")
-        MPVLib.setPropertyString("audio-client-name", "MPVEx-FrameScrub")
+        MPVLib.setPropertyString("audio-client-name", "MPVEx-EnhancedFrames")
         MPVLib.setPropertyString("audio-samplerate", "auto")
         MPVLib.setPropertyString("deband", "no")
         MPVLib.setPropertyString("video-aspect-override", "no")
         
-        // Additional frame optimization
+        // Additional optimization
         MPVLib.setPropertyString("correct-pts", "yes")
         MPVLib.setPropertyString("audio-pitch-correction", "yes")
         MPVLib.setPropertyString("video-latency-hacks", "yes")
@@ -631,7 +692,7 @@ fun PlayerOverlay(
         }
     }
     
-    // VIDEO END DETECTION FOR CLEANUP
+    // VIDEO END DETECTION
     LaunchedEffect(currentPosition, videoDuration) {
         if (videoDuration > 0 && currentPosition > videoDuration - 5) {
             gentleCleanup()
@@ -639,7 +700,7 @@ fun PlayerOverlay(
         }
     }
     
-    // CONTINUOUS POSITION UPDATES AND FRAME MANAGEMENT
+    // CONTINUOUS POSITION UPDATES
     LaunchedEffect(Unit) {
         var lastSeconds = -1
         
@@ -648,7 +709,7 @@ fun PlayerOverlay(
             val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
             val currentSeconds = currentPos.toInt()
             
-            // Update UI and frame counter
+            // Update UI
             if (isFrameScrubbing) {
                 currentTime = seekTargetTime
                 totalTime = formatTimeSimple(duration)
@@ -668,9 +729,9 @@ fun PlayerOverlay(
             currentPosition = currentPos
             videoDuration = duration
             
-            // Auto-start frame pre-decoding if not active
-            if (!isFramePreDecodingActive && duration > 5 && !isFrameScrubbing) {
-                startFramePreDecoding()
+            // Auto-restart frame carousel if needed
+            if (!isFramePreDecodingActive && duration > 5 && !isFrameScrubbing && !isDragging && !isSeeking) {
+                startNormalFrameCarousel()
             }
             
             delay(500)
@@ -690,7 +751,6 @@ fun PlayerOverlay(
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
             
-            // Stop frame pre-decoding during seekbar drag
             stopFramePreDecoding()
             
             if (wasPlayingBeforeSeek) {
@@ -705,7 +765,6 @@ fun PlayerOverlay(
         currentTime = formatTimeSimple(targetPosition)
         currentFrame = calculateFrameFromTime(targetPosition)
         
-        // Use frame-accurate seeking during drag
         seekToExactFrameDebounced(currentFrame)
     }
     
@@ -713,7 +772,6 @@ fun PlayerOverlay(
         isDragging = false
         
         coroutineScope.launch {
-            // Clear cache
             clearVideoCache()
             delay(16)
             
@@ -721,9 +779,8 @@ fun PlayerOverlay(
                 MPVLib.setPropertyBoolean("pause", false)
             }
             
-            // Restart frame pre-decoding
             if (videoDuration > 0) {
-                startFramePreDecoding()
+                startNormalFrameCarousel()
             }
             
             isSeeking = false
@@ -832,7 +889,7 @@ fun PlayerOverlay(
                             )
                             if (isFrameScrubbing) {
                                 Text(
-                                    text = "Frame: $currentFrame/$totalFrames",
+                                    text = "Frame: $currentFrame/$totalFrames (${pixelsPerFrame.toInt()}px/frame)",
                                     style = TextStyle(color = Color.Yellow, fontSize = 12.sp, fontWeight = FontWeight.Medium),
                                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 8.dp, vertical = 2.dp)
                                 )
