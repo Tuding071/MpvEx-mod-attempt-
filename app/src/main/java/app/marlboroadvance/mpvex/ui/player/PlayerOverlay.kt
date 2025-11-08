@@ -1,6 +1,7 @@
 package app.marlboroadvance.mpvex.ui.player
 
 import android.view.MotionEvent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -42,6 +43,13 @@ import android.content.Intent
 import android.net.Uri
 import kotlin.math.abs
 
+// Frame Command Data Class - moved outside the composable
+data class FrameCommand(
+    val direction: Int, // 1 for forward, -1 for backward
+    val frameCount: Int,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
 @Composable
 fun PlayerOverlay(
     viewModel: PlayerViewModel,
@@ -62,6 +70,7 @@ fun PlayerOverlay(
     
     var isDragging by remember { mutableStateOf(false) }
     var isSeeking by remember { mutableStateOf(false) }
+    var seekStartPosition by remember { mutableStateOf(0.0) } // ADDED THIS
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
     // FRAME SCRUBBING WITH INTELLIGENT DEBOUNCING
@@ -72,7 +81,7 @@ fun PlayerOverlay(
     
     // DEBOUNCING SYSTEM VARIABLES
     var lastFrameCommandTime by remember { mutableStateOf(0L) }
-    var pendingFrameCommand by remember { mutableStateOf<FrameCommand?>(null) }
+    var pendingFrameCommand by remember { mutableStateOf<FrameCommand?>(null) } // FIXED TYPE
     var frameCommandJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     // VELOCITY TRACKING
@@ -116,13 +125,6 @@ fun PlayerOverlay(
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
-    
-    // FRAME COMMAND DATA CLASS
-    data class FrameCommand(
-        val direction: Int, // 1 for forward, -1 for backward
-        val frameCount: Int,
-        val timestamp: Long = System.currentTimeMillis()
-    )
     
     // UTILITY FUNCTIONS
     fun scheduleSeekbarHide() {
@@ -642,7 +644,9 @@ fun PlayerOverlay(
                                 color = Color.White,
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Medium,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                                modifier = Modifier
+                                    .background(Color.DarkGray.copy(alpha = 0.8f))
+                                    .padding(horizontal = 12.dp, vertical = 4.dp)
                             )
                             if (isFrameScrubbing) {
                                 Text(
@@ -650,7 +654,9 @@ fun PlayerOverlay(
                                     color = Color.Yellow,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Medium,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                    modifier = Modifier
+                                        .background(Color.DarkGray.copy(alpha = 0.8f))
+                                        .padding(horizontal = 8.dp, vertical = 2.dp)
                                 )
                             }
                         }
@@ -680,6 +686,7 @@ fun PlayerOverlay(
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .offset(x = 60.dp, y = 20.dp)
+                    .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 6.dp)
             )
         }
@@ -692,35 +699,45 @@ fun PlayerOverlay(
                     color = Color.White,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    modifier = Modifier
+                        .background(Color.DarkGray.copy(alpha = 0.8f))
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
                 )
                 isSpeedingUp -> Text(
                     text = "2X",
                     color = Color.White,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    modifier = Modifier
+                        .background(Color.DarkGray.copy(alpha = 0.8f))
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
                 )
                 showSeekTime -> Text(
                     text = if (isFrameScrubbing) "Frame: $currentFrame" else seekTargetTime,
                     color = Color.White,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    modifier = Modifier
+                        .background(Color.DarkGray.copy(alpha = 0.8f))
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
                 )
                 showPlaybackFeedback -> Text(
                     text = playbackFeedbackText,
                     color = Color.White,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    modifier = Modifier
+                        .background(Color.DarkGray.copy(alpha = 0.8f))
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
                 )
                 isFrameScrubbing -> Text(
                     text = "Frame Scrubbing (Debounced)",
                     color = Color.Yellow,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    modifier = Modifier
+                        .background(Color.DarkGray.copy(alpha = 0.8f))
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
                 )
             }
         }
