@@ -95,9 +95,13 @@ fun PlayerOverlay(
     var videoFPS by remember { mutableStateOf(30.0) } // Default, will detect actual FPS
     
     // Frame scrubbing constants
-    val pixelsPerFrame = 384
+    val pixelsPerFrame = 6 // Sensitivity - higher = less sensitive
     val frameDebounceMs = 33L // ~30fps command rate
     val preDecodeWindowSeconds = 3.0 // 3 seconds past and future
+    
+    // DIRECTIONAL FRAME SCRUBBING VARIABLES
+    var accumulatedPixels by remember { mutableStateOf(0f) }
+    var lastDirection by remember { mutableStateOf(0) } // -1 = left, 1 = right, 0 = none
     
     // FRAME PRE-DECODING SYSTEM
     var framePreDecodeJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -267,7 +271,7 @@ fun PlayerOverlay(
         }
     }
     
-    // FRAME SCRUBBING FUNCTIONS
+    // FRAME SCRUBBING FUNCTIONS WITH DIRECTIONAL PIXEL ACCUMULATION
     fun startFrameScrubbing(startX: Float) {
         isFrameScrubbing = true
         isHorizontalSwipe = true
@@ -277,6 +281,10 @@ fun PlayerOverlay(
         currentFrame = calculateFrameFromTime(seekStartPosition)
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         showSeekTime = true
+        
+        // RESET DIRECTIONAL VARIABLES
+        accumulatedPixels = 0f
+        lastDirection = 0
         
         // Stop continuous pre-decoding during frame scrubbing
         stopFramePreDecoding()
@@ -309,14 +317,34 @@ fun PlayerOverlay(
         if (!isFrameScrubbing) return
         
         val deltaX = currentX - seekStartX
-        val frameDelta = (deltaX / pixelsPerFrame).toInt()
-        val targetFrame = (currentFrame + frameDelta).coerceIn(0, totalFrames)
+        val currentDirection = if (deltaX > 0) 1 else if (deltaX < 0) -1 else 0
         
-        seekTargetTime = formatTimeSimple(calculateTimeFromFrame(targetFrame))
-        currentTime = formatTimeSimple(calculateTimeFromFrame(targetFrame))
+        // Reset accumulation if direction changes
+        if (currentDirection != 0 && currentDirection != lastDirection) {
+            accumulatedPixels = 0f
+            seekStartX = currentX // Reset start position for new direction
+            lastDirection = currentDirection
+        }
         
-        // Debounced frame seeking for smooth scrubbing
-        seekToExactFrameDebounced(targetFrame)
+        val pixelDelta = abs(deltaX)
+        accumulatedPixels += pixelDelta
+        
+        // Only advance frames when threshold is reached
+        if (accumulatedPixels >= pixelsPerFrame) {
+            val framesToAdvance = (accumulatedPixels / pixelsPerFrame).toInt()
+            accumulatedPixels %= pixelsPerFrame // Keep remainder for smooth scrubbing
+            
+            val targetFrame = if (currentDirection == 1) {
+                currentFrame + framesToAdvance
+            } else {
+                currentFrame - framesToAdvance
+            }.coerceIn(0, totalFrames)
+            
+            seekTargetTime = formatTimeSimple(calculateTimeFromFrame(targetFrame))
+            currentTime = formatTimeSimple(calculateTimeFromFrame(targetFrame))
+            
+            seekToExactFrameDebounced(targetFrame)
+        }
     }
     
     fun endFrameScrubbing() {
@@ -325,8 +353,10 @@ fun PlayerOverlay(
             val targetTime = calculateTimeFromFrame(finalFrame)
             
             coroutineScope.launch {
-                // Clear frame cache
+                // Clear frame cache and directional variables
                 frameCache.clear()
+                accumulatedPixels = 0f
+                lastDirection = 0
                 
                 // Seek to final frame position
                 seekToExactFrame(finalFrame)
