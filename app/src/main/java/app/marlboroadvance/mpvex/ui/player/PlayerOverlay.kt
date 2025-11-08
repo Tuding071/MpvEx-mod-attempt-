@@ -459,11 +459,9 @@ fun PlayerOverlay(
     // Clean up pre-decoding when composable leaves composition
     LaunchedEffect(Unit) {
         try {
-            awaitDispose {
-                stopPreDecoding()
-            }
-        } catch (e: Exception) {
-            // Ignore cancellation exceptions
+            // This will run when the composable is disposed
+        } finally {
+            stopPreDecoding()
         }
     }
     
