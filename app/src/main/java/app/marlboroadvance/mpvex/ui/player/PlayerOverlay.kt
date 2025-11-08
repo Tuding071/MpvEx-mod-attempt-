@@ -205,6 +205,39 @@ fun PlayerOverlay(
         currentFrame = frame.coerceIn(0, totalFrames)
     }
     
+    // PREDICTIVE PRE-DECODING SYSTEM - MOVED UP TO FIX COMPILATION ERROR
+    fun triggerPredictivePreDecoding(currentFrame: Int, direction: Int) {
+        coroutineScope.launch(Dispatchers.IO) {
+            val chunkSize = nextChunkSize
+            val chunkStart = if (direction == 1) {
+                currentFrame + 1
+            } else {
+                currentFrame - chunkSize
+            }.coerceAtLeast(0)
+            
+            val chunkEnd = if (direction == 1) {
+                currentFrame + chunkSize
+            } else {
+                currentFrame - 1
+            }.coerceAtMost(totalFrames)
+            
+            // Pre-decode the chunk
+            val range = if (direction == 1) chunkStart..chunkEnd else chunkEnd downTo chunkStart
+            for (frame in range) {
+                if (!isFrameScrubbing) break
+                if (frame in 0..totalFrames && frame !in frameCache) {
+                    val frameTime = calculateTimeFromFrame(frame)
+                    MPVLib.command("seek", frameTime.toString(), "absolute", "exact", "keyframes")
+                    frameCache.add(frame)
+                    delay(12) // Balanced decoding speed
+                }
+            }
+            
+            // Alternate chunk sizes for next trigger (1, 2, 1, 2 pattern)
+            nextChunkSize = if (nextChunkSize == chunk1Size) chunk2Size else chunk1Size
+        }
+    }
+    
     // ENHANCED DEBOUNCING FOR HORIZONTAL SCRUBBING
     fun canSeekDueToDebounce(): Boolean {
         val currentTime = System.currentTimeMillis()
@@ -235,39 +268,6 @@ fun PlayerOverlay(
                 triggerPredictivePreDecoding(currentFrame, lastChunkDirection)
                 consecutiveDirectionCommands = 0 // Reset counter after triggering
             }
-        }
-    }
-    
-    // PREDICTIVE PRE-DECODING SYSTEM
-    fun triggerPredictivePreDecoding(currentFrame: Int, direction: Int) {
-        coroutineScope.launch(Dispatchers.IO) {
-            val chunkSize = nextChunkSize
-            val chunkStart = if (direction == 1) {
-                currentFrame + 1
-            } else {
-                currentFrame - chunkSize
-            }.coerceAtLeast(0)
-            
-            val chunkEnd = if (direction == 1) {
-                currentFrame + chunkSize
-            } else {
-                currentFrame - 1
-            }.coerceAtMost(totalFrames)
-            
-            // Pre-decode the chunk
-            val range = if (direction == 1) chunkStart..chunkEnd else chunkEnd downTo chunkStart
-            for (frame in range) {
-                if (!isFrameScrubbing) break
-                if (frame in 0..totalFrames && frame !in frameCache) {
-                    val frameTime = calculateTimeFromFrame(frame)
-                    MPVLib.command("seek", frameTime.toString(), "absolute", "exact", "keyframes")
-                    frameCache.add(frame)
-                    delay(12) // Balanced decoding speed
-                }
-            }
-            
-            // Alternate chunk sizes for next trigger (1, 2, 1, 2 pattern)
-            nextChunkSize = if (nextChunkSize == chunk1Size) chunk2Size else chunk1Size
         }
     }
     
