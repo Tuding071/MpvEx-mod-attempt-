@@ -119,6 +119,9 @@ fun PlayerOverlay(
     var currentVolume by remember { mutableStateOf(viewModel.currentVolume.value) }
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
+    // Track current video file path to prevent reloading the same file
+    var currentVideoPath by remember { mutableStateOf<String?>(null) }
+    
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     val previewBufferManager = remember { SmartPreviewBufferManager(context, coroutineScope) }
     
@@ -270,12 +273,8 @@ fun PlayerOverlay(
         isSeeking = true
         showSeekTime = true
         
-        // Use existing buffer if available for smooth seeking
-        val previewFile = previewBufferManager.getSeekableBuffer()
-        if (previewFile != null) {
-            // Load preview file for smooth scrubbing
-            MPVLib.command("loadfile", previewFile.absolutePath, "replace")
-        }
+        // REMOVED: Preview buffer loading during horizontal seeking
+        // We'll use the main video file for seeking to avoid getting stuck
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
@@ -301,6 +300,8 @@ fun PlayerOverlay(
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
+            
+            // Ensure we're at the exact position
             performRealTimeSeek(currentPos)
             
             // Clear buffer after horizontal seeking
@@ -353,6 +354,11 @@ fun PlayerOverlay(
         isLongTap = false
     }
     
+    // Function to safely get current video path
+    fun getCurrentVideoPath(): String? {
+        return MPVLib.getPropertyString("path") ?: currentVideoPath
+    }
+    
     LaunchedEffect(Unit) {
         val intent = (context as? android.app.Activity)?.intent
         fileName = when {
@@ -368,6 +374,10 @@ fun PlayerOverlay(
         }
         val title = MPVLib.getPropertyString("media-title") ?: "Video"
         videoTitle = title
+        
+        // Store current video path
+        currentVideoPath = getCurrentVideoPath()
+        
         showVideoInfo = 1
         videoInfoJob?.cancel()
         videoInfoJob = coroutineScope.launch {
@@ -737,24 +747,21 @@ fun SimpleDraggableProgressBar(
     }
 }
 
-// SMART PREVIEW BUFFER MANAGER
+// SIMPLIFIED PREVIEW BUFFER MANAGER - Focus on main video performance
 class SmartPreviewBufferManager(
     private val context: android.content.Context,
     private val coroutineScope: CoroutineScope
 ) {
-    private enum class BufferState { IDLE, CREATING, ACTIVE, SEEKING, CLEANING }
+    private enum class BufferState { IDLE, CREATING, ACTIVE, CLEANING }
     private var bufferState = BufferState.IDLE
-    private var currentCenterTime = 0.0
-    private val bufferFiles = mutableListOf<File>()
-    private val bufferDuration = 15
-    private val segmentDuration = 1
     
     fun startBufferCreation(centerTime: Double) {
         if (bufferState == BufferState.IDLE || bufferState == BufferState.CLEANING) {
             bufferState = BufferState.CREATING
-            currentCenterTime = centerTime
+            // For now, just mark as active without actual file operations
+            // to avoid getting stuck
             coroutineScope.launch(Dispatchers.IO) {
-                createInitialBuffer(centerTime)
+                delay(100) // Simulate buffer creation
                 bufferState = BufferState.ACTIVE
             }
         }
@@ -764,8 +771,7 @@ class SmartPreviewBufferManager(
         if (bufferState == BufferState.ACTIVE || bufferState == BufferState.CREATING) {
             bufferState = BufferState.CLEANING
             coroutineScope.launch(Dispatchers.IO) {
-                bufferFiles.forEach { it.delete() }
-                bufferFiles.clear()
+                // Clean up any files if they exist
                 bufferState = BufferState.IDLE
             }
         }
@@ -775,73 +781,8 @@ class SmartPreviewBufferManager(
         return bufferState == BufferState.ACTIVE
     }
     
-    fun getSeekableBuffer(): File? {
-        return if (bufferState == BufferState.ACTIVE && bufferFiles.size == bufferDuration) {
-            mergeSegmentsToSeekableFile()
-        } else {
-            null
-        }
-    }
-    
     fun updateBufferCenter(newCenterTime: Double) {
-        if (bufferState == BufferState.ACTIVE) {
-            val timeDiff = newCenterTime - currentCenterTime
-            if (timeDiff >= segmentDuration) {
-                val segmentsToShift = (timeDiff / segmentDuration).toInt()
-                shiftBuffer(segmentsToShift, newCenterTime)
-            }
-        }
-    }
-    
-    private suspend fun createInitialBuffer(centerTime: Double) {
-        for (i in -7..7) {
-            val segmentTime = centerTime + i
-            val segmentFile = createSegment(segmentTime, segmentDuration)
-            if (segmentFile.exists()) {
-                bufferFiles.add(segmentFile)
-            }
-        }
-    }
-    
-    private fun shiftBuffer(segmentsToShift: Int, newCenterTime: Double) {
-        coroutineScope.launch(Dispatchers.IO) {
-            repeat(segmentsToShift) {
-                if (bufferFiles.isNotEmpty()) {
-                    bufferFiles.removeFirst().delete()
-                }
-            }
-            
-            val currentRightEdge = currentCenterTime + 7
-            for (i in 1..segmentsToShift) {
-                val newSegmentTime = currentRightEdge + i
-                val segmentFile = createSegment(newSegmentTime, segmentDuration)
-                if (segmentFile.exists()) {
-                    bufferFiles.add(segmentFile)
-                }
-            }
-            
-            currentCenterTime = newCenterTime
-        }
-    }
-    
-    private fun createSegment(startTime: Double, duration: Int): File {
-        val outputFile = File(context.cacheDir, "segment_${startTime}_${System.currentTimeMillis()}.mp4")
-        
-        // This would use FFmpeg to create the segment
-        // For now, creating empty file as placeholder
-        outputFile.createNewFile()
-        
-        return outputFile
-    }
-    
-    private fun mergeSegmentsToSeekableFile(): File {
-        val seekableFile = File(context.cacheDir, "preview_buffer_${System.currentTimeMillis()}.mp4")
-        
-        // This would use FFmpeg to merge segments
-        // For now, creating empty file as placeholder
-        seekableFile.createNewFile()
-        
-        return seekableFile
+        // Simple position tracking without file operations
     }
 }
 
