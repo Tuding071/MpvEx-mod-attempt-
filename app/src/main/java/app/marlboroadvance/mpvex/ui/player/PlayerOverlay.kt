@@ -57,6 +57,8 @@ import android.content.Intent
 import android.net.Uri
 import kotlin.math.abs
 import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
 
 @Composable
 fun PlayerOverlay(
@@ -119,11 +121,16 @@ fun PlayerOverlay(
     var currentVolume by remember { mutableStateOf(viewModel.currentVolume.value) }
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    // Track current video file path to prevent reloading the same file
-    var currentVideoPath by remember { mutableStateOf<String?>(null) }
+    // Track if we're using preview buffer for seeking
+    var isUsingPreviewBuffer by remember { mutableStateOf(false) }
+    var originalVideoPath by remember { mutableStateOf<String?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
-    val previewBufferManager = remember { SmartPreviewBufferManager(context, coroutineScope) }
+    val previewBufferManager = remember { 
+        RealPreviewBufferManager(context, coroutineScope) { originalPath ->
+            originalVideoPath = originalPath
+        }
+    }
     
     fun gentleCleanup() {
         previewBufferManager.clearBuffer()
@@ -244,6 +251,7 @@ fun PlayerOverlay(
                 
                 // CLEAR BUFFER IMMEDIATELY for 2x speed
                 previewBufferManager.clearBuffer()
+                isUsingPreviewBuffer = false
                 
                 MPVLib.setPropertyDouble("speed", 2.0)
             }
@@ -273,8 +281,13 @@ fun PlayerOverlay(
         isSeeking = true
         showSeekTime = true
         
-        // REMOVED: Preview buffer loading during horizontal seeking
-        // We'll use the main video file for seeking to avoid getting stuck
+        // Switch to preview buffer for smooth seeking if available
+        val previewFile = previewBufferManager.getSeekableBuffer()
+        if (previewFile != null && previewFile.exists()) {
+            isUsingPreviewBuffer = true
+            MPVLib.command("loadfile", previewFile.absolutePath, "replace")
+            showPlaybackFeedback("Smooth Seek")
+        }
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
@@ -301,8 +314,18 @@ fun PlayerOverlay(
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
             
-            // Ensure we're at the exact position
-            performRealTimeSeek(currentPos)
+            // Switch back to original video
+            if (isUsingPreviewBuffer && originalVideoPath != null) {
+                MPVLib.command("loadfile", originalVideoPath!!, "replace")
+                // Seek to exact position in original video
+                coroutineScope.launch {
+                    delay(200)
+                    performRealTimeSeek(currentPos)
+                }
+                isUsingPreviewBuffer = false
+            } else {
+                performRealTimeSeek(currentPos)
+            }
             
             // Clear buffer after horizontal seeking
             previewBufferManager.clearBuffer()
@@ -354,11 +377,6 @@ fun PlayerOverlay(
         isLongTap = false
     }
     
-    // Function to safely get current video path
-    fun getCurrentVideoPath(): String? {
-        return MPVLib.getPropertyString("path") ?: currentVideoPath
-    }
-    
     LaunchedEffect(Unit) {
         val intent = (context as? android.app.Activity)?.intent
         fileName = when {
@@ -375,8 +393,8 @@ fun PlayerOverlay(
         val title = MPVLib.getPropertyString("media-title") ?: "Video"
         videoTitle = title
         
-        // Store current video path
-        currentVideoPath = getCurrentVideoPath()
+        // Store original video path
+        originalVideoPath = MPVLib.getPropertyString("path")
         
         showVideoInfo = 1
         videoInfoJob?.cancel()
@@ -386,9 +404,12 @@ fun PlayerOverlay(
         }
         scheduleSeekbarHide()
         
-        // Start initial buffer creation
+        // Start initial buffer creation with original video path
         val initialPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-        previewBufferManager.startBufferCreation(initialPos)
+        if (originalVideoPath != null) {
+            previewBufferManager.setOriginalVideoPath(originalVideoPath!!)
+            previewBufferManager.startBufferCreation(initialPos)
+        }
     }
     
     LaunchedEffect(isSpeedingUp) {
@@ -463,12 +484,12 @@ fun PlayerOverlay(
             
             // AUTO-RECREATE BUFFER when conditions are met
             if (!isSeeking && !isSpeedingUp && !isDragging && 
-                !previewBufferManager.hasActiveBuffer()) {
+                !previewBufferManager.hasActiveBuffer() && !isUsingPreviewBuffer) {
                 previewBufferManager.startBufferCreation(currentPos)
             }
             
             // Update buffer position during normal playback
-            if (previewBufferManager.hasActiveBuffer()) {
+            if (previewBufferManager.hasActiveBuffer() && !isUsingPreviewBuffer) {
                 previewBufferManager.updateBufferCenter(currentPos)
             }
             
@@ -506,6 +527,7 @@ fun PlayerOverlay(
             
             // CLEAR BUFFER when seekbar drag passes threshold
             previewBufferManager.clearBuffer()
+            isUsingPreviewBuffer = false
             
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
@@ -536,7 +558,7 @@ fun PlayerOverlay(
         // DELAYED BUFFER RECREATION - 1000ms after seekbar release
         coroutineScope.launch {
             delay(1000)
-            if (!isSeeking && !isSpeedingUp) {
+            if (!isSeeking && !isSpeedingUp && !isUsingPreviewBuffer) {
                 val currentPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
                 previewBufferManager.startBufferCreation(currentPosition)
             }
@@ -685,6 +707,11 @@ fun PlayerOverlay(
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
+                isUsingPreviewBuffer -> Text(
+                    text = "Smooth Seek",
+                    style = TextStyle(color = Color.Yellow, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                )
             }
         }
     }
@@ -747,22 +774,44 @@ fun SimpleDraggableProgressBar(
     }
 }
 
-// SIMPLIFIED PREVIEW BUFFER MANAGER - Focus on main video performance
-class SmartPreviewBufferManager(
+// REAL PREVIEW BUFFER MANAGER THAT ACTUALLY CREATES VIDEO COPIES
+class RealPreviewBufferManager(
     private val context: android.content.Context,
-    private val coroutineScope: CoroutineScope
+    private val coroutineScope: CoroutineScope,
+    private val onOriginalPathDetected: (String) -> Unit
 ) {
-    private enum class BufferState { IDLE, CREATING, ACTIVE, CLEANING }
+    private enum class BufferState { IDLE, CREATING, ACTIVE, SEEKING, CLEANING }
     private var bufferState = BufferState.IDLE
+    private var currentCenterTime = 0.0
+    private val bufferFiles = mutableListOf<File>()
+    private val bufferDuration = 15 // 15 seconds total
+    private val segmentDuration = 1 // 1 second per segment
+    private var originalVideoPath: String? = null
+    
+    fun setOriginalVideoPath(path: String) {
+        originalVideoPath = path
+        onOriginalPathDetected(path)
+    }
     
     fun startBufferCreation(centerTime: Double) {
         if (bufferState == BufferState.IDLE || bufferState == BufferState.CLEANING) {
-            bufferState = BufferState.CREATING
-            // For now, just mark as active without actual file operations
-            // to avoid getting stuck
-            coroutineScope.launch(Dispatchers.IO) {
-                delay(100) // Simulate buffer creation
-                bufferState = BufferState.ACTIVE
+            if (originalVideoPath == null) {
+                // Try to get original path from MPV
+                originalVideoPath = MPVLib.getPropertyString("path")
+                originalVideoPath?.let { onOriginalPathDetected(it) }
+            }
+            
+            if (originalVideoPath != null) {
+                bufferState = BufferState.CREATING
+                currentCenterTime = centerTime
+                coroutineScope.launch(Dispatchers.IO) {
+                    createInitialBuffer(centerTime)
+                    if (bufferFiles.size >= 10) { // At least 10 segments created
+                        bufferState = BufferState.ACTIVE
+                    } else {
+                        bufferState = BufferState.IDLE
+                    }
+                }
             }
         }
     }
@@ -771,7 +820,8 @@ class SmartPreviewBufferManager(
         if (bufferState == BufferState.ACTIVE || bufferState == BufferState.CREATING) {
             bufferState = BufferState.CLEANING
             coroutineScope.launch(Dispatchers.IO) {
-                // Clean up any files if they exist
+                bufferFiles.forEach { it.delete() }
+                bufferFiles.clear()
                 bufferState = BufferState.IDLE
             }
         }
@@ -781,8 +831,135 @@ class SmartPreviewBufferManager(
         return bufferState == BufferState.ACTIVE
     }
     
+    fun getSeekableBuffer(): File? {
+        return if (bufferState == BufferState.ACTIVE && bufferFiles.size >= 10) {
+            mergeSegmentsToSeekableFile()
+        } else {
+            null
+        }
+    }
+    
     fun updateBufferCenter(newCenterTime: Double) {
-        // Simple position tracking without file operations
+        if (bufferState == BufferState.ACTIVE) {
+            val timeDiff = newCenterTime - currentCenterTime
+            if (timeDiff >= segmentDuration) {
+                val segmentsToShift = (timeDiff / segmentDuration).toInt()
+                shiftBuffer(segmentsToShift, newCenterTime)
+            }
+        }
+    }
+    
+    private suspend fun createInitialBuffer(centerTime: Double) {
+        // Create segments around center time: 7 left + current + 7 right
+        for (i in -7..7) {
+            val segmentTime = centerTime + i
+            if (segmentTime >= 0) { // Don't create segments for negative times
+                val segmentFile = createCompatibleSegment(segmentTime, segmentDuration)
+                if (segmentFile.exists() && segmentFile.length() > 1000) { // At least 1KB
+                    bufferFiles.add(segmentFile)
+                }
+            }
+        }
+    }
+    
+    private fun shiftBuffer(segmentsToShift: Int, newCenterTime: Double) {
+        coroutineScope.launch(Dispatchers.IO) {
+            // Remove oldest segments from left
+            repeat(segmentsToShift.coerceAtMost(bufferFiles.size)) {
+                bufferFiles.removeFirst().delete()
+            }
+            
+            // Add new segments to right
+            val currentRightEdge = currentCenterTime + 7
+            for (i in 1..segmentsToShift) {
+                val newSegmentTime = currentRightEdge + i
+                val segmentFile = createCompatibleSegment(newSegmentTime, segmentDuration)
+                if (segmentFile.exists() && segmentFile.length() > 1000) {
+                    bufferFiles.add(segmentFile)
+                }
+            }
+            
+            currentCenterTime = newCenterTime
+        }
+    }
+    
+    private fun createCompatibleSegment(startTime: Double, duration: Int): File {
+        val outputFile = File(context.cacheDir, "preview_segment_${startTime.toInt()}_${System.currentTimeMillis()}.mp4")
+        
+        try {
+            // Using FFmpeg to create compatible H.264 segment
+            val command = listOf(
+                "ffmpeg",
+                "-y", // Overwrite output file
+                "-ss", startTime.toString(), // Start time
+                "-i", originalVideoPath!!, // Input file
+                "-t", "1", // Duration 1 second
+                "-c:v", "libx264", // H.264 video codec
+                "-profile:v", "high", // High profile for compatibility
+                "-level", "4.0", // Level 4.0 for broad compatibility
+                "-preset", "ultrafast", // Fastest encoding
+                "-crf", "28", // Good quality with smaller file size
+                "-c:a", "aac", // AAC audio
+                "-b:a", "128k", // Audio bitrate
+                "-avoid_negative_ts", "make_zero",
+                "-movflags", "+faststart", // Optimize for streaming
+                outputFile.absolutePath
+            )
+            
+            // Execute FFmpeg command
+            val process = ProcessBuilder(command).start()
+            val exitCode = process.waitFor()
+            
+            if (exitCode != 0) {
+                // FFmpeg failed, create a dummy file as fallback
+                outputFile.createNewFile()
+            }
+            
+        } catch (e: Exception) {
+            // Fallback: create empty file
+            outputFile.createNewFile()
+        }
+        
+        return outputFile
+    }
+    
+    private fun mergeSegmentsToSeekableFile(): File {
+        val seekableFile = File(context.cacheDir, "preview_buffer_${System.currentTimeMillis()}.mp4")
+        
+        if (bufferFiles.isEmpty()) {
+            return seekableFile
+        }
+        
+        try {
+            // Create concat file for FFmpeg
+            val concatFile = File(context.cacheDir, "concat_list_${System.currentTimeMillis()}.txt")
+            concatFile.writeText(bufferFiles.joinToString("\n") { "file '${it.absolutePath}'" })
+            
+            val command = listOf(
+                "ffmpeg",
+                "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", concatFile.absolutePath,
+                "-c", "copy", // Copy streams without re-encoding
+                "-movflags", "+faststart",
+                seekableFile.absolutePath
+            )
+            
+            val process = ProcessBuilder(command).start()
+            process.waitFor()
+            
+            // Clean up concat file
+            concatFile.delete()
+            
+        } catch (e: Exception) {
+            // Fallback: use first segment if merge fails
+            if (bufferFiles.isNotEmpty()) {
+                bufferFiles.first().copyTo(seekableFile, overwrite = true)
+            }
+        }
+        
+        return seekableFile
     }
 }
 
