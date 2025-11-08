@@ -85,11 +85,17 @@ fun PlayerOverlay(
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 30L
+    val seekThrottleMs = 20L // Faster throttle for aggressive approach
     
-    // SIMPLE CLEANUP MANAGEMENT
+    // AGGRESSIVE SEEKING MANAGEMENT
+    var rapidSeekCounter by remember { mutableStateOf(0) }
+    var lastSeekTime by remember { mutableStateOf(0L) }
+    val rapidSeekThreshold = 3 // Lower threshold for rapid detection
+    val rapidSeekWindow = 1500L // 1.5 seconds window
+    
+    // FAST CLEANUP MANAGEMENT
     var lastCleanupTime by remember { mutableStateOf(0L) }
-    val cleanupInterval = 5 * 60 * 1000L // Clean every 5 minutes
+    val cleanupInterval = 3 * 60 * 1000L // Clean every 3 minutes
     
     // GESTURE STATES
     var touchStartTime by remember { mutableStateOf(0L) }
@@ -123,20 +129,33 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // SIMPLE CACHE FLUSH - Clean without disabling
-    fun gentleCacheCleanup() {
-        // Just reset cache sizes to flush any buildup
-        MPVLib.setPropertyString("demuxer-readahead-secs", "15")
-        MPVLib.setPropertyString("demuxer-max-back-bytes", "75M")
-        MPVLib.setPropertyString("demuxer-max-bytes", (100 * 1024 * 1024).toString()) // FIXED: Use string
+    // AGGRESSIVE CACHE CLEANUP
+    fun aggressiveCacheCleanup() {
+        // Reset to maximum cache sizes
+        MPVLib.setPropertyString("demuxer-readahead-secs", "60")
+        MPVLib.setPropertyString("demuxer-max-back-bytes", "200M")
+        MPVLib.setPropertyString("demuxer-max-bytes", (500 * 1024 * 1024).toString())
+        
+        // Force decoder refresh with tiny seek
+        coroutineScope.launch {
+            delay(30)
+            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+            MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
+        }
     }
     
-    // PERFORM REAL-TIME SEEK
-    fun performRealTimeSeek(targetPosition: Double) {
+    // FAST SEEK FOR RAPID SEEKING
+    fun performFastSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         
         isSeekInProgress = true
-        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+        
+        // Use keyframe seeking for maximum speed during rapid seeking
+        if (rapidSeekCounter > rapidSeekThreshold) {
+            MPVLib.command("seek", targetPosition.toString(), "absolute", "keyframes")
+        } else {
+            MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+        }
         
         coroutineScope.launch {
             delay(seekThrottleMs)
@@ -274,7 +293,7 @@ fun PlayerOverlay(
         }
     }
     
-    // HANDLE HORIZONTAL SEEKING
+    // AGGRESSIVE: Handle horizontal seeking with rapid detection
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
@@ -288,22 +307,40 @@ fun PlayerOverlay(
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
         
-        performRealTimeSeek(clampedPosition)
+        // RAPID SEEKING DETECTION
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastSeekTime < rapidSeekWindow) {
+            rapidSeekCounter++
+        } else {
+            rapidSeekCounter = 1
+        }
+        lastSeekTime = currentTime
+        
+        // Use fast seek method
+        performFastSeek(clampedPosition)
     }
     
-    // END HORIZONTAL SEEKING
+    // AGGRESSIVE: End seeking with turbo cleanup
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val targetPosition = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
             
             coroutineScope.launch {
-                // Final seek to position
-                performRealTimeSeek(targetPosition)
+                // TURBO CLEANUP if rapid seeking occurred
+                if (rapidSeekCounter > rapidSeekThreshold) {
+                    turboCacheRefresh()
+                }
+                
+                // Final exact seek to position
+                performFastSeek(targetPosition)
                 
                 // Resume playback
                 if (wasPlayingBeforeSeek) {
                     MPVLib.setPropertyBoolean("pause", false)
                 }
+                
+                // Reset rapid seeking counter
+                rapidSeekCounter = 0
                 
                 // Reset states
                 isSeeking = false
@@ -313,6 +350,21 @@ fun PlayerOverlay(
                 wasPlayingBeforeSeek = false
                 scheduleSeekbarHide()
             }
+        }
+    }
+    
+    // TURBO CACHE REFRESH FOR MAXIMUM PERFORMANCE
+    fun turboCacheRefresh() {
+        coroutineScope.launch {
+            // Ultra aggressive cache settings for recovery
+            MPVLib.setPropertyString("demuxer-readahead-secs", "90") // 1.5 minutes!
+            MPVLib.setPropertyString("demuxer-max-back-bytes", "300M") // 300MB!
+            
+            delay(800) // Keep turbo cache for 800ms
+            
+            // Return to aggressive (but not turbo) settings
+            MPVLib.setPropertyString("demuxer-readahead-secs", "60")
+            MPVLib.setPropertyString("demuxer-max-back-bytes", "200M")
         }
     }
     
@@ -368,39 +420,54 @@ fun PlayerOverlay(
         }
     }
     
-    // SIMPLE CACHE SETUP - 15s BACK, 15s FUTURE
+    // ULTRA AGGRESSIVE CACHE SETUP FOR LOCAL FILES
     LaunchedEffect(Unit) {
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
         MPVLib.setPropertyString("profile", "fast")
         
-        // 15 SECONDS BACK + 15 SECONDS FUTURE = 30s READY WINDOW
-        MPVLib.setPropertyString("demuxer-readahead-secs", "15") // 15s forward
-        MPVLib.setPropertyString("demuxer-max-back-bytes", "75M") // 15s backward
-        MPVLib.setPropertyString("demuxer-max-bytes", (150 * 1024 * 1024).toString()) // 150MB total - FIXED
+        // MAXIMUM CACHE FOR LOCAL FILES - NO HOLDING BACK
+        MPVLib.setPropertyString("demuxer-readahead-secs", "60") // 1 minute forward!
+        MPVLib.setPropertyString("demuxer-max-back-bytes", "200M") // 200MB backward!
+        MPVLib.setPropertyString("demuxer-max-bytes", (500 * 1024 * 1024).toString()) // 500MB total!
         
-        // ENABLE CACHE
+        // ULTRA FAST DECODING SETTINGS
+        MPVLib.setPropertyString("vd-lavc-threads", "8") // Maximum threads
+        MPVLib.setPropertyString("vd-lavc-fast", "yes")
+        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
+        MPVLib.setPropertyString("vd-lavc-skipidct", "all")
+        MPVLib.setPropertyString("vd-lavc-assemble", "yes")
+        MPVLib.setPropertyString("demuxer-lavf-threads", "4")
+        
+        // AGGRESSIVE CACHE SETTINGS
         MPVLib.setPropertyString("cache", "yes")
         MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
         MPVLib.setPropertyString("cache-pause", "no")
+        MPVLib.setPropertyString("cache-initial", "3.0") // Preload 3 seconds initially
         
-        // SEEKING OPTIMIZATIONS
+        // MAXIMUM SEEKING PERFORMANCE
         MPVLib.setPropertyString("video-sync", "display-resample")
         MPVLib.setPropertyString("hr-seek", "yes")
         MPVLib.setPropertyString("hr-seek-framedrop", "no")
+        MPVLib.setPropertyString("untimed", "yes")
     }
     
-    // PERIODIC CLEANUP - PREVENT MEMORY BUILDUP
+    // FREQUENT AGGRESSIVE CLEANUP
     LaunchedEffect(Unit) {
         while (isActive) {
-            delay(30 * 1000) // Check every 30 seconds
+            delay(8 * 1000) // Check every 8 seconds (very frequent)
             
             val currentTime = System.currentTimeMillis()
             if (currentTime - lastCleanupTime > cleanupInterval) {
                 if (!isSeeking && !isDragging && !userInteracting) {
-                    gentleCacheCleanup()
+                    aggressiveCacheCleanup()
                     lastCleanupTime = currentTime
                 }
+            }
+            
+            // Reset rapid seeking counter after inactivity
+            if (rapidSeekCounter > 0 && System.currentTimeMillis() - lastSeekTime > 3000) {
+                rapidSeekCounter = 0
             }
         }
     }
@@ -442,7 +509,7 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // HANDLE PROGRESS BAR DRAG
+    // AGGRESSIVE: Handle progress bar drag
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
@@ -461,10 +528,10 @@ fun PlayerOverlay(
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
         
-        performRealTimeSeek(targetPosition)
+        performFastSeek(targetPosition)
     }
     
-    // HANDLE DRAG FINISHED
+    // AGGRESSIVE: Handle drag finished
     fun handleDragFinished() {
         isDragging = false
         
