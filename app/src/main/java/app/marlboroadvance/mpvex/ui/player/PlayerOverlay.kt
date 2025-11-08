@@ -37,7 +37,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import `is`.xyz.mpv.MPVLib
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.layout.size
 import androidx.compose.ui.input.pointer.pointerInput
 import android.content.Intent
 import android.net.Uri
@@ -63,30 +62,31 @@ fun PlayerOverlay(
     
     var isDragging by remember { mutableStateOf(false) }
     var isSeeking by remember { mutableStateOf(false) }
-    var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
+    // FRAME SCRUBBING WITH INTELLIGENT DEBOUNCING
     var isFrameScrubbing by remember { mutableStateOf(false) }
-    var lastFrameSeekTime by remember { mutableStateOf(0L) }
     var currentFrame by remember { mutableStateOf(0) }
     var totalFrames by remember { mutableStateOf(0) }
     var videoFPS by remember { mutableStateOf(30.0) }
     
-    val screenWidthPixels = 1000f
-    val fullSwipeSeconds = 15.0
-    val framesInFullSwipe = (fullSwipeSeconds * videoFPS).toInt()
-    val pixelsPerFrame = (screenWidthPixels / framesInFullSwipe).coerceAtLeast(4f)
+    // DEBOUNCING SYSTEM VARIABLES
+    var lastFrameCommandTime by remember { mutableStateOf(0L) }
+    var pendingFrameCommand by remember { mutableStateOf<FrameCommand?>(null) }
+    var frameCommandJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    var accumulatedPixels by remember { mutableStateOf(0f) }
-    var lastDirection by remember { mutableStateOf(0) }
-    var scrubStartX by remember { mutableStateOf(0f) }
+    // VELOCITY TRACKING
+    var lastTouchTime by remember { mutableStateOf(0L) }
+    var lastTouchX by remember { mutableStateOf(0f) }
+    var currentVelocity by remember { mutableStateOf(0f) }
     
-    var framePreDecodeJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    var isFramePreDecodingActive by remember { mutableStateOf(false) }
-    var frameCarousel by remember { mutableStateOf<MutableList<Int>>(mutableListOf()) }
-    val carouselSize = 61
-    val currentFrameIndex = 30
+    // CONSTANTS FOR DEBOUNCING AND THROTTLING
+    val HARD_DEBOUNCE_MS = 20L        // Minimum time between commands
+    val VELOCITY_WINDOW_MS = 100L     // Time window for velocity calculation
+    val MAX_FRAMES_PER_COMMAND = 10   // Maximum frames to skip in one command
+    val PIXELS_PER_FRAME_BASE = 30f   // Base sensitivity
     
+    // GESTURE STATES
     var touchStartTime by remember { mutableStateOf(0L) }
     var touchStartX by remember { mutableStateOf(0f) }
     var touchStartY by remember { mutableStateOf(0f) }
@@ -95,6 +95,7 @@ fun PlayerOverlay(
     var isHorizontalSwipe by remember { mutableStateOf(false) }
     var longTapJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
+    // THRESHOLDS
     val longTapThreshold = 300L
     val horizontalSwipeThreshold = 30f
     val maxVerticalMovement = 50f
@@ -116,6 +117,14 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
+    // FRAME COMMAND DATA CLASS
+    data class FrameCommand(
+        val direction: Int, // 1 for forward, -1 for backward
+        val frameCount: Int,
+        val timestamp: Long = System.currentTimeMillis()
+    )
+    
+    // UTILITY FUNCTIONS
     fun scheduleSeekbarHide() {
         if (userInteracting) return
         hideSeekbarJob?.cancel()
@@ -149,6 +158,7 @@ fun PlayerOverlay(
         }
     }
     
+    // FRAME MANAGEMENT FUNCTIONS
     fun calculateFrameFromTime(time: Double): Int {
         return (time * videoFPS).toInt()
     }
@@ -163,147 +173,73 @@ fun PlayerOverlay(
         currentFrame = frame.coerceIn(0, totalFrames)
     }
     
-    fun canSeekDueToDebounce(): Boolean {
-        return System.currentTimeMillis() - lastFrameSeekTime >= 16L
+    // VELOCITY-BASED FRAME CALCULATION
+    fun calculateFramesFromVelocity(deltaPixels: Float, deltaTime: Long): Int {
+        if (deltaTime == 0L) return 1
+        
+        val pixelsPerSecond = (deltaPixels / deltaTime) * 1000
+        val baseFrames = (abs(pixelsPerSecond) / PIXELS_PER_FRAME_BASE).toInt()
+        
+        // Apply non-linear scaling for better feel
+        return when {
+            baseFrames <= 1 -> 1
+            baseFrames <= 3 -> 2
+            baseFrames <= 6 -> 3
+            baseFrames <= 10 -> 5
+            else -> MAX_FRAMES_PER_COMMAND
+        }.coerceIn(1, MAX_FRAMES_PER_COMMAND)
     }
     
-    fun seekToExactFrameDebounced(frame: Int) {
-        if (canSeekDueToDebounce()) {
-            seekToExactFrame(frame)
-            lastFrameSeekTime = System.currentTimeMillis()
+    // INTELLIGENT DEBOUNCING SYSTEM
+    fun executeFrameCommand(command: FrameCommand) {
+        val now = System.currentTimeMillis()
+        
+        // HARD DEBOUNCE CHECK - reject if within minimum time window
+        if (now - lastFrameCommandTime < HARD_DEBOUNCE_MS) {
+            return
+        }
+        
+        // Cancel any pending command (we have a newer one)
+        frameCommandJob?.cancel()
+        pendingFrameCommand = null
+        
+        // Execute the command immediately
+        val targetFrame = currentFrame + (command.direction * command.frameCount)
+        val clampedFrame = targetFrame.coerceIn(0, totalFrames)
+        
+        if (clampedFrame != currentFrame) {
+            seekToExactFrame(clampedFrame)
+            lastFrameCommandTime = now
+            
+            // Update UI
+            seekTargetTime = formatTimeSimple(calculateTimeFromFrame(clampedFrame))
+            currentTime = formatTimeSimple(calculateTimeFromFrame(clampedFrame))
         }
     }
     
-    fun preDecodeFrame(frame: Int) {
-        if (frame in 0..totalFrames) {
-            val frameTime = calculateTimeFromFrame(frame)
-            MPVLib.command("seek", frameTime.toString(), "absolute", "keyframes")
-        }
+    fun queueFrameCommand(direction: Int, frameCount: Int) {
+        val command = FrameCommand(direction, frameCount)
+        pendingFrameCommand = command
+        
+        // Execute immediately if possible, otherwise schedule
+        executeFrameCommand(command)
     }
     
-    fun initializeFrameCarousel(centerFrame: Int) {
-        frameCarousel.clear()
-        
-        val startFrame = (centerFrame - 30).coerceAtLeast(0)
-        val endFrame = (centerFrame + 30).coerceAtMost(totalFrames)
-        
-        for (frame in startFrame..endFrame) {
-            if (frameCarousel.size < carouselSize) {
-                frameCarousel.add(frame)
-            }
-        }
-        
-        while (frameCarousel.size < carouselSize) {
-            if (endFrame >= totalFrames) {
-                val extraFrame = (startFrame - 1).coerceAtLeast(0)
-                if (extraFrame !in frameCarousel) {
-                    frameCarousel.add(0, extraFrame)
-                }
-            } else {
-                val extraFrame = (endFrame + 1).coerceAtMost(totalFrames)
-                if (extraFrame !in frameCarousel) {
-                    frameCarousel.add(extraFrame)
-                }
-            }
-        }
-        
-        currentFrame = centerFrame
-    }
-    
-    fun rotateCarouselForward() {
-        if (frameCarousel.size < carouselSize) return
-        
-        val newCurrentFrame = frameCarousel[currentFrameIndex + 1]
-        
-        frameCarousel.removeAt(0)
-        
-        val newFrame = frameCarousel.last() + 1
-        if (newFrame <= totalFrames) {
-            preDecodeFrame(newFrame)
-            frameCarousel.add(newFrame)
-        }
-        
-        currentFrame = newCurrentFrame
-    }
-    
-    fun rotateCarouselBackward() {
-        if (frameCarousel.size < carouselSize) return
-        
-        val newCurrentFrame = frameCarousel[currentFrameIndex - 1]
-        
-        frameCarousel.removeAt(frameCarousel.size - 1)
-        
-        val newFrame = frameCarousel.first() - 1
-        if (newFrame >= 0) {
-            preDecodeFrame(newFrame)
-            frameCarousel.add(0, newFrame)
-        }
-        
-        currentFrame = newCurrentFrame
-    }
-    
-    fun startFrameCarousel() {
-        if (isFramePreDecodingActive) return
-        
-        framePreDecodeJob?.cancel()
-        isFramePreDecodingActive = true
-        
-        framePreDecodeJob = coroutineScope.launch(Dispatchers.IO) {
-            while (this.isActive && isFramePreDecodingActive) {
-                val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-                val currentFrameNum = calculateFrameFromTime(currentPos)
-                
-                if (isFrameScrubbing || isSeeking || isDragging || userInteracting) {
-                    delay(50)
-                    continue
-                }
-                
-                if (frameCarousel.isEmpty() || abs(currentFrameNum - currentFrame) > 5) {
-                    initializeFrameCarousel(currentFrameNum)
-                }
-                
-                if (this.isActive && isFramePreDecodingActive) {
-                    MPVLib.command("seek", currentPos.toString(), "absolute", "keyframes")
-                }
-                
-                delay(200)
-            }
-        }
-    }
-    
-    fun stopFramePreDecoding() {
-        isFramePreDecodingActive = false
-        framePreDecodeJob?.cancel()
-        framePreDecodeJob = null
-        frameCarousel.clear()
-    }
-    
-    fun resetFramePreDecoding() {
-        stopFramePreDecoding()
-        coroutineScope.launch {
-            delay(100)
-            startFrameCarousel()
-        }
-    }
-    
+    // FRAME SCRUBBING FUNCTIONS WITH DEBOUNCING
     fun startFrameScrubbing(startX: Float) {
         isFrameScrubbing = true
         isHorizontalSwipe = true
         cancelAutoHide()
-        scrubStartX = startX
+        
+        // Reset tracking variables
+        lastTouchX = startX
+        lastTouchTime = System.currentTimeMillis()
+        currentVelocity = 0f
+        
         seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         currentFrame = calculateFrameFromTime(seekStartPosition)
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         showSeekTime = true
-        
-        if (frameCarousel.isEmpty()) {
-            initializeFrameCarousel(currentFrame)
-        }
-        
-        accumulatedPixels = 0f
-        lastDirection = 0
-        
-        stopFramePreDecoding()
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
@@ -313,76 +249,51 @@ fun PlayerOverlay(
     fun handleFrameScrubbing(currentX: Float) {
         if (!isFrameScrubbing) return
         
-        val deltaX = currentX - scrubStartX
-        val currentDirection = if (deltaX > 1) 1 else if (deltaX < -1) -1 else 0
+        val now = System.currentTimeMillis()
+        val deltaX = currentX - lastTouchX
+        val deltaTime = now - lastTouchTime
         
-        if (currentDirection == 0) return
-        
-        if (currentDirection != 0 && currentDirection != lastDirection) {
-            accumulatedPixels = 0f
-            scrubStartX = currentX
-            lastDirection = currentDirection
+        // Calculate velocity (pixels per second)
+        if (deltaTime > 0) {
+            currentVelocity = (deltaX / deltaTime) * 1000
         }
         
-        val pixelDelta = abs(deltaX)
-        accumulatedPixels = pixelDelta
+        // Determine direction and calculate frames
+        val direction = if (deltaX > 0) 1 else -1
+        val frameCount = calculateFramesFromVelocity(abs(deltaX), deltaTime)
         
-        if (accumulatedPixels >= pixelsPerFrame) {
-            val targetFrame = if (currentDirection == 1) {
-                if (frameCarousel.size > currentFrameIndex + 1) {
-                    rotateCarouselForward()
-                    frameCarousel[currentFrameIndex]
-                } else {
-                    currentFrame + 1
-                }
-            } else {
-                if (currentFrameIndex > 0) {
-                    rotateCarouselBackward()
-                    frameCarousel[currentFrameIndex]
-                } else {
-                    currentFrame - 1
-                }
-            }.coerceIn(0, totalFrames)
-            
-            seekTargetTime = formatTimeSimple(calculateTimeFromFrame(targetFrame))
-            currentTime = formatTimeSimple(calculateTimeFromFrame(targetFrame))
-            
-            seekToExactFrameDebounced(targetFrame)
-            
-            accumulatedPixels = 0f
-            scrubStartX = currentX
-        }
+        // Queue the frame command (debouncing handled internally)
+        queueFrameCommand(direction, frameCount)
+        
+        // Update tracking variables
+        lastTouchX = currentX
+        lastTouchTime = now
     }
     
     fun endFrameScrubbing() {
         if (isFrameScrubbing) {
-            val finalFrame = currentFrame
-            
             coroutineScope.launch {
-                accumulatedPixels = 0f
-                lastDirection = 0
+                // Clear any pending commands
+                frameCommandJob?.cancel()
+                pendingFrameCommand = null
                 
-                seekToExactFrame(finalFrame)
-                
+                // Resume playback if needed
                 if (wasPlayingBeforeSeek) {
                     MPVLib.setPropertyBoolean("pause", false)
                 }
                 
-                if (videoDuration > 0) {
-                    startFrameCarousel()
-                }
-                
+                // Reset states
                 isFrameScrubbing = false
                 isHorizontalSwipe = false
                 showSeekTime = false
-                scrubStartX = 0f
-                seekStartPosition = 0.0
                 wasPlayingBeforeSeek = false
+                currentVelocity = 0f
                 scheduleSeekbarHide()
             }
         }
     }
     
+    // CACHE CLEARING FUNCTION
     fun clearVideoCache() {
         MPVLib.setPropertyString("cache", "no")
         MPVLib.setPropertyString("demuxer-readahead-secs", "0")
@@ -394,14 +305,7 @@ fun PlayerOverlay(
         }
     }
     
-    fun gentleCleanup() {
-        MPVLib.setPropertyString("demuxer-readahead-secs", "10")
-        MPVLib.setPropertyString("cache-secs", "10")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 100 * 1024 * 1024)
-        MPVLib.setPropertyString("video-sync", "display-resample")
-        MPVLib.setPropertyString("hr-seek", "yes")
-    }
-    
+    // Function to get fresh position from MPV
     fun getFreshPosition(): Float {
         return (MPVLib.getPropertyDouble("time-pos") ?: 0.0).toFloat()
     }
@@ -464,7 +368,6 @@ fun PlayerOverlay(
                 isLongTap = true
                 isSpeedingUp = true
                 MPVLib.setPropertyDouble("speed", 2.0)
-                stopFramePreDecoding()
             }
         }
     }
@@ -472,8 +375,8 @@ fun PlayerOverlay(
     fun checkForHorizontalSwipe(currentX: Float, currentY: Float): Boolean {
         if (isHorizontalSwipe || isLongTap) return false
         
-        val deltaX = kotlin.math.abs(currentX - touchStartX)
-        val deltaY = kotlin.math.abs(currentY - touchStartY)
+        val deltaX = abs(currentX - touchStartX)
+        val deltaY = abs(currentY - touchStartY)
         
         if (deltaX > horizontalSwipeThreshold && deltaX > deltaY && deltaY < maxVerticalMovement) {
             isHorizontalSwipe = true
@@ -492,7 +395,6 @@ fun PlayerOverlay(
             isLongTap = false
             isSpeedingUp = false
             MPVLib.setPropertyDouble("speed", 1.0)
-            resetFramePreDecoding()
         } else if (isHorizontalSwipe) {
             endFrameScrubbing()
             isHorizontalSwipe = false
@@ -503,6 +405,7 @@ fun PlayerOverlay(
         isLongTap = false
     }
     
+    // VIDEO DETECTION AND INITIALIZATION
     LaunchedEffect(Unit) {
         val intent = (context as? android.app.Activity)?.intent
         fileName = when {
@@ -516,7 +419,6 @@ fun PlayerOverlay(
                 getBestAvailableFileName(context)
             }
         }
-        val title = MPVLib.getPropertyString("media-title") ?: "Video"
         showVideoInfo = 1
         videoInfoJob?.cancel()
         videoInfoJob = coroutineScope.launch {
@@ -526,6 +428,7 @@ fun PlayerOverlay(
         scheduleSeekbarHide()
     }
     
+    // DETECT VIDEO FPS
     LaunchedEffect(Unit) {
         delay(1000)
         
@@ -535,105 +438,35 @@ fun PlayerOverlay(
         
         val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
         totalFrames = calculateFrameFromTime(duration)
-        
-        if (duration > 5) {
-            startFrameCarousel()
-        }
     }
     
-    LaunchedEffect(Unit) {
-        try {
-        } finally {
-            stopFramePreDecoding()
-        }
-    }
-    
+    // Speed control
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
             MPVLib.setPropertyDouble("speed", 2.0)
-            stopFramePreDecoding()
         } else {
             MPVLib.setPropertyDouble("speed", 1.0)
-            resetFramePreDecoding()
         }
     }
     
-    LaunchedEffect(isDragging) {
-        if (isDragging) {
-            stopFramePreDecoding()
-        }
-    }
-    
-    LaunchedEffect(isSeeking) {
-        if (isSeeking) {
-            stopFramePreDecoding()
-        }
-    }
-    
+    // OPTIMIZED MPV CONFIGURATION
     LaunchedEffect(Unit) {
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
         MPVLib.setPropertyString("profile", "fast")
-        MPVLib.setPropertyString("vd-lavc-threads", "4")
-        MPVLib.setPropertyString("audio-channels", "auto")
-        MPVLib.setPropertyString("demuxer-lavf-threads", "4")
         
-        MPVLib.setPropertyString("cache", "yes")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 300 * 1024 * 1024)
-        MPVLib.setPropertyString("demuxer-readahead-secs", "30")
-        MPVLib.setPropertyString("cache-secs", "30")
-        
-        MPVLib.setPropertyString("cache-pause", "no")
-        MPVLib.setPropertyString("cache-initial", "0.5")
-        MPVLib.setPropertyString("video-sync", "display-resample")
-        MPVLib.setPropertyString("untimed", "yes")
+        // Frame-accurate seeking
         MPVLib.setPropertyString("hr-seek", "yes")
         MPVLib.setPropertyString("hr-seek-framedrop", "no")
         MPVLib.setPropertyString("frame-drop", "no")
-        MPVLib.setPropertyString("vd-lavc-fast", "yes")
-        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
-        MPVLib.setPropertyString("vd-lavc-skipidct", "all")
-        MPVLib.setPropertyString("vd-lavc-assemble", "yes")
-        MPVLib.setPropertyString("demuxer-max-back-bytes", "150M")
-        MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
-        MPVLib.setPropertyString("gpu-dumb-mode", "yes")
-        MPVLib.setPropertyString("opengl-pbo", "yes")
-        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1")
-        MPVLib.setPropertyString("network-timeout", "30")
-        MPVLib.setPropertyString("audio-client-name", "MPVEx-Carousel")
-        MPVLib.setPropertyString("audio-samplerate", "auto")
-        MPVLib.setPropertyString("deband", "no")
-        MPVLib.setPropertyString("video-aspect-override", "no")
         
-        MPVLib.setPropertyString("correct-pts", "yes")
-        MPVLib.setPropertyString("audio-pitch-correction", "yes")
-        MPVLib.setPropertyString("video-latency-hacks", "yes")
+        // Cache settings
+        MPVLib.setPropertyString("cache", "yes")
+        MPVLib.setPropertyInt("demuxer-max-bytes", 100 * 1024 * 1024)
+        MPVLib.setPropertyString("demuxer-readahead-secs", "10")
     }
     
-    var lastCleanupTime by remember { mutableStateOf(0L) }
-    val cleanupInterval = 10 * 60 * 1000L
-    
-    LaunchedEffect(Unit) {
-        while (isActive) {
-            delay(30 * 1000)
-            
-            val currentTime = System.currentTimeMillis()
-            if (currentTime - lastCleanupTime > cleanupInterval) {
-                if (!isSeeking && !isDragging && !userInteracting && !isFrameScrubbing) {
-                    gentleCleanup()
-                    lastCleanupTime = currentTime
-                }
-            }
-        }
-    }
-    
-    LaunchedEffect(currentPosition, videoDuration) {
-        if (videoDuration > 0 && currentPosition > videoDuration - 5) {
-            gentleCleanup()
-            stopFramePreDecoding()
-        }
-    }
-    
+    // CONTINUOUS POSITION UPDATES
     LaunchedEffect(Unit) {
         var lastSeconds = -1
         
@@ -642,6 +475,7 @@ fun PlayerOverlay(
             val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
             val currentSeconds = currentPos.toInt()
             
+            // Update UI
             if (isFrameScrubbing) {
                 currentTime = seekTargetTime
                 totalTime = formatTimeSimple(duration)
@@ -661,10 +495,6 @@ fun PlayerOverlay(
             currentPosition = currentPos
             videoDuration = duration
             
-            if (!isFramePreDecodingActive && duration > 5 && !isFrameScrubbing && !isDragging && !isSeeking) {
-                startFrameCarousel()
-            }
-            
             delay(500)
         }
     }
@@ -674,14 +504,13 @@ fun PlayerOverlay(
         else -> ""
     }
     
+    // PROGRESS BAR DRAG HANDLING
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
-            
-            stopFramePreDecoding()
             
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
@@ -695,7 +524,7 @@ fun PlayerOverlay(
         currentTime = formatTimeSimple(targetPosition)
         currentFrame = calculateFrameFromTime(targetPosition)
         
-        seekToExactFrameDebounced(currentFrame)
+        seekToExactFrame(currentFrame)
     }
     
     fun handleDragFinished() {
@@ -709,10 +538,6 @@ fun PlayerOverlay(
                 MPVLib.setPropertyBoolean("pause", false)
             }
             
-            if (videoDuration > 0) {
-                startFrameCarousel()
-            }
-            
             isSeeking = false
             showSeekTime = false
             wasPlayingBeforeSeek = false
@@ -721,7 +546,9 @@ fun PlayerOverlay(
     }
     
     Box(modifier = modifier.fillMaxSize()) {
+        // MAIN GESTURE AREA
         Box(modifier = Modifier.fillMaxSize()) {
+            // TOP 5% - Ignore area
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -729,12 +556,14 @@ fun PlayerOverlay(
                     .align(Alignment.TopStart)
             )
             
+            // CENTER AREA - 95% height, divided into left/center/right
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .fillMaxHeight(0.95f)
                     .align(Alignment.BottomStart)
             ) {
+                // LEFT 5% - Video info toggle
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.05f)
@@ -747,6 +576,7 @@ fun PlayerOverlay(
                         )
                 )
                 
+                // CENTER 90% - Frame scrubbing gestures
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.9f)
@@ -779,6 +609,7 @@ fun PlayerOverlay(
                         }
                 )
                 
+                // RIGHT 5% - Video info toggle
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.05f)
@@ -793,6 +624,7 @@ fun PlayerOverlay(
             }
         }
         
+        // BOTTOM SEEK BAR AREA
         if (showSeekbar) {
             Box(
                 modifier = Modifier
@@ -807,11 +639,17 @@ fun PlayerOverlay(
                         Row(modifier = Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
                                 text = "$currentTime / $totalTime",
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                             )
                             if (isFrameScrubbing) {
                                 Text(
-                                    text = "Frame: $currentFrame/$totalFrames (Carousel: ${frameCarousel.size}/61)",
+                                    text = "Frame: $currentFrame | Vel: ${currentVelocity.toInt()}px/s",
+                                    color = Color.Yellow,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                                 )
                             }
@@ -832,9 +670,13 @@ fun PlayerOverlay(
             }
         }
         
+        // VIDEO INFO - Top Left
         if (showVideoInfo != 0) {
             Text(
                 text = displayText,
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .offset(x = 60.dp, y = 20.dp)
@@ -842,26 +684,42 @@ fun PlayerOverlay(
             )
         }
         
+        // FEEDBACK AREA
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
                 showVolumeFeedbackState -> Text(
                     text = "Volume: ${(currentVolume.toFloat() / viewModel.maxVolume.toFloat() * 100).toInt()}%",
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                 )
                 isSpeedingUp -> Text(
                     text = "2X",
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                 )
                 showSeekTime -> Text(
                     text = if (isFrameScrubbing) "Frame: $currentFrame" else seekTargetTime,
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                 )
                 showPlaybackFeedback -> Text(
                     text = playbackFeedbackText,
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                 )
                 isFrameScrubbing -> Text(
-                    text = "Frame Scrubbing",
+                    text = "Frame Scrubbing (Debounced)",
+                    color = Color.Yellow,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                 )
             }
@@ -887,8 +745,8 @@ fun SimpleDraggableProgressBar(
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
     Box(modifier = modifier.height(24.dp)) {
-        Box(modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.CenterStart))
-        Box(modifier = Modifier.fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f).height(4.dp).align(Alignment.CenterStart))
+        Box(modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.CenterStart).background(Color.Gray.copy(alpha = 0.6f)))
+        Box(modifier = Modifier.fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f).height(4.dp).align(Alignment.CenterStart).background(Color.White))
         Box(modifier = Modifier.fillMaxWidth().height(24.dp).align(Alignment.CenterStart).pointerInput(Unit) {
             detectDragGestures(
                 onDragStart = { offset ->
