@@ -87,9 +87,9 @@ fun PlayerOverlay(
     var isSeekInProgress by remember { mutableStateOf(false) }
     val seekThrottleMs = 30L
     
-    // SIMPLE CACHE MANAGEMENT - NO COMPLEX PRE-DECODING
+    // SIMPLE CLEANUP MANAGEMENT
     var lastCleanupTime by remember { mutableStateOf(0L) }
-    val cleanupInterval = 10 * 60 * 1000L
+    val cleanupInterval = 5 * 60 * 1000L // Clean every 5 minutes
     
     // GESTURE STATES
     var touchStartTime by remember { mutableStateOf(0L) }
@@ -123,33 +123,15 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // SIMPLE CACHE CLEARING FUNCTION
-    fun clearVideoCache() {
-        // Force MPV to flush its render buffers and cache
-        MPVLib.setPropertyString("cache", "no")
-        MPVLib.setPropertyString("demuxer-readahead-secs", "0")
-        MPVLib.command("seek", "0", "relative", "exact") // Tiny seek to flush
-        
-        coroutineScope.launch {
-            delay(16) // Let flush complete
-            MPVLib.setPropertyString("cache", "yes")
-            MPVLib.setPropertyString("demuxer-readahead-secs", "15") // Reasonable cache
-        }
-    }
-    
-    // SIMPLE MEMORY CLEANUP
-    fun gentleCleanup() {
-        // Reset to reasonable cache sizes
+    // SIMPLE CACHE FLUSH - Clean without disabling
+    fun gentleCacheCleanup() {
+        // Just reset cache sizes to flush any buildup
         MPVLib.setPropertyString("demuxer-readahead-secs", "15")
-        MPVLib.setPropertyString("cache-secs", "15")
+        MPVLib.setPropertyString("demuxer-max-back-bytes", "50M")
         MPVLib.setPropertyInt("demuxer-max-bytes", 100 * 1024 * 1024)
-        
-        // Ensure smooth playback settings
-        MPVLib.setPropertyString("video-sync", "display-resample")
-        MPVLib.setPropertyString("hr-seek", "yes")
     }
     
-    // performRealTimeSeek with throttle
+    // PERFORM REAL-TIME SEEK
     fun performRealTimeSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         
@@ -162,7 +144,7 @@ fun PlayerOverlay(
         }
     }
     
-    // Function to get fresh position from MPV
+    // GET FRESH POSITION
     fun getFreshPosition(): Float {
         return (MPVLib.getPropertyDouble("time-pos") ?: 0.0).toFloat()
     }
@@ -277,7 +259,7 @@ fun PlayerOverlay(
         return false
     }
     
-    // SIMPLE: startHorizontalSeeking
+    // START HORIZONTAL SEEKING
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
@@ -287,15 +269,12 @@ fun PlayerOverlay(
         isSeeking = true
         showSeekTime = true
         
-        // Clear cache before seeking for clean state
-        clearVideoCache()
-        
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
         }
     }
     
-    // SIMPLE: handleHorizontalSeeking
+    // HANDLE HORIZONTAL SEEKING
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
@@ -312,16 +291,12 @@ fun PlayerOverlay(
         performRealTimeSeek(clampedPosition)
     }
     
-    // SIMPLE: endHorizontalSeeking - Just clean seek
+    // END HORIZONTAL SEEKING
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val targetPosition = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
             
             coroutineScope.launch {
-                // Clear cache again to ensure clean state
-                clearVideoCache()
-                delay(16)
-                
                 // Final seek to position
                 performRealTimeSeek(targetPosition)
                 
@@ -384,7 +359,7 @@ fun PlayerOverlay(
         scheduleSeekbarHide()
     }
     
-    // Backup speed control
+    // BACKUP SPEED CONTROL
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
             MPVLib.setPropertyDouble("speed", 2.0)
@@ -393,50 +368,44 @@ fun PlayerOverlay(
         }
     }
     
-    // SIMPLE MPV CONFIGURATION - Focus on stability
+    // SIMPLE CACHE SETUP - 15s BACK, 15s FUTURE
     LaunchedEffect(Unit) {
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
         MPVLib.setPropertyString("profile", "fast")
         
-        // REASONABLE CACHE SETTINGS - No aggressive pre-decoding
-        MPVLib.setPropertyString("cache", "yes")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 100 * 1024 * 1024)
-        MPVLib.setPropertyString("demuxer-readahead-secs", "15") // 15 seconds is plenty
-        MPVLib.setPropertyString("cache-secs", "15")
+        // 15 SECONDS BACK + 15 SECONDS FUTURE = 30s READY WINDOW
+        MPVLib.setPropertyString("demuxer-readahead-secs", "15") // 15s forward
+        MPVLib.setPropertyString("demuxer-max-back-bytes", "75M") // 15s backward
+        MPVLib.setPropertyString("demuxer-max-bytes", 150 * 1024 * 1024) // 150MB total
         
+        // ENABLE CACHE
+        MPVLib.setPropertyString("cache", "yes")
+        MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
         MPVLib.setPropertyString("cache-pause", "no")
-        MPVLib.setPropertyString("cache-initial", "0.5")
+        
+        // SEEKING OPTIMIZATIONS
         MPVLib.setPropertyString("video-sync", "display-resample")
-        MPVLib.setPropertyString("untimed", "yes")
         MPVLib.setPropertyString("hr-seek", "yes")
         MPVLib.setPropertyString("hr-seek-framedrop", "no")
-        
-        // Performance optimizations
-        MPVLib.setPropertyString("vd-lavc-fast", "yes")
-        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
-        MPVLib.setPropertyString("vd-lavc-skipidct", "all")
-        MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
-        MPVLib.setPropertyString("gpu-dumb-mode", "yes")
-        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1")
     }
     
-    // PERIODIC MEMORY MAINTENANCE
+    // PERIODIC CLEANUP - PREVENT MEMORY BUILDUP
     LaunchedEffect(Unit) {
         while (isActive) {
-            delay(30 * 1000)
+            delay(30 * 1000) // Check every 30 seconds
             
             val currentTime = System.currentTimeMillis()
             if (currentTime - lastCleanupTime > cleanupInterval) {
                 if (!isSeeking && !isDragging && !userInteracting) {
-                    gentleCleanup()
+                    gentleCacheCleanup()
                     lastCleanupTime = currentTime
                 }
             }
         }
     }
     
-    // CONTINUOUS POSITION UPDATES - SIMPLE
+    // CONTINUOUS POSITION UPDATES
     LaunchedEffect(Unit) {
         var lastSeconds = -1
         
@@ -445,7 +414,7 @@ fun PlayerOverlay(
             val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
             val currentSeconds = currentPos.toInt()
             
-            // Update UI
+            // UPDATE UI
             if (isSeeking) {
                 currentTime = seekTargetTime
                 totalTime = formatTimeSimple(duration)
@@ -473,16 +442,13 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // SIMPLE: handleProgressBarDrag
+    // HANDLE PROGRESS BAR DRAG
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
-            
-            // Clear cache before seeking
-            clearVideoCache()
             
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
@@ -498,15 +464,11 @@ fun PlayerOverlay(
         performRealTimeSeek(targetPosition)
     }
     
-    // SIMPLE: handleDragFinished
+    // HANDLE DRAG FINISHED
     fun handleDragFinished() {
         isDragging = false
         
         coroutineScope.launch {
-            // Clear cache for clean state
-            clearVideoCache()
-            delay(16)
-            
             // Resume playback
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", false)
