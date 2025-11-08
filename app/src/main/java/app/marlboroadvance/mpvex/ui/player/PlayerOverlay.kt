@@ -70,7 +70,7 @@ fun PlayerOverlay(
     
     var isDragging by remember { mutableStateOf(false) }
     var isSeeking by remember { mutableStateOf(false) }
-    var seekStartPosition by remember { mutableStateOf(0.0) } // ADDED THIS
+    var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
     // FRAME SCRUBBING WITH INTELLIGENT DEBOUNCING
@@ -81,19 +81,14 @@ fun PlayerOverlay(
     
     // DEBOUNCING SYSTEM VARIABLES
     var lastFrameCommandTime by remember { mutableStateOf(0L) }
-    var pendingFrameCommand by remember { mutableStateOf<FrameCommand?>(null) } // FIXED TYPE
+    var pendingFrameCommand by remember { mutableStateOf<FrameCommand?>(null) }
     var frameCommandJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    // VELOCITY TRACKING
-    var lastTouchTime by remember { mutableStateOf(0L) }
+    // SIMPLE MOVEMENT TRACKING (no velocity)
     var lastTouchX by remember { mutableStateOf(0f) }
-    var currentVelocity by remember { mutableStateOf(0f) }
     
-    // CONSTANTS FOR DEBOUNCING AND THROTTLING
+    // CONSTANTS FOR DEBOUNCING
     val HARD_DEBOUNCE_MS = 20L        // Minimum time between commands
-    val VELOCITY_WINDOW_MS = 100L     // Time window for velocity calculation
-    val MAX_FRAMES_PER_COMMAND = 10   // Maximum frames to skip in one command
-    val PIXELS_PER_FRAME_BASE = 30f   // Base sensitivity
     
     // GESTURE STATES
     var touchStartTime by remember { mutableStateOf(0L) }
@@ -175,21 +170,10 @@ fun PlayerOverlay(
         currentFrame = frame.coerceIn(0, totalFrames)
     }
     
-    // VELOCITY-BASED FRAME CALCULATION
-    fun calculateFramesFromVelocity(deltaPixels: Float, deltaTime: Long): Int {
-        if (deltaTime == 0L) return 1
-        
-        val pixelsPerSecond = (deltaPixels / deltaTime) * 1000
-        val baseFrames = (abs(pixelsPerSecond) / PIXELS_PER_FRAME_BASE).toInt()
-        
-        // Apply non-linear scaling for better feel
-        return when {
-            baseFrames <= 1 -> 1
-            baseFrames <= 3 -> 2
-            baseFrames <= 6 -> 3
-            baseFrames <= 10 -> 5
-            else -> MAX_FRAMES_PER_COMMAND
-        }.coerceIn(1, MAX_FRAMES_PER_COMMAND)
+    // SIMPLE FRAME COMMAND - ALWAYS 1 FRAME
+    fun calculateFramesFromMovement(): Int {
+        // ALWAYS return 1 frame (no velocity-based skipping)
+        return 1
     }
     
     // INTELLIGENT DEBOUNCING SYSTEM
@@ -235,8 +219,6 @@ fun PlayerOverlay(
         
         // Reset tracking variables
         lastTouchX = startX
-        lastTouchTime = System.currentTimeMillis()
-        currentVelocity = 0f
         
         seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         currentFrame = calculateFrameFromTime(seekStartPosition)
@@ -251,25 +233,17 @@ fun PlayerOverlay(
     fun handleFrameScrubbing(currentX: Float) {
         if (!isFrameScrubbing) return
         
-        val now = System.currentTimeMillis()
         val deltaX = currentX - lastTouchX
-        val deltaTime = now - lastTouchTime
         
-        // Calculate velocity (pixels per second)
-        if (deltaTime > 0) {
-            currentVelocity = (deltaX / deltaTime) * 1000
-        }
-        
-        // Determine direction and calculate frames
+        // Determine direction - SIMPLE 1 FRAME PER COMMAND
         val direction = if (deltaX > 0) 1 else -1
-        val frameCount = calculateFramesFromVelocity(abs(deltaX), deltaTime)
+        val frameCount = 1 // Always 1 frame per command
         
         // Queue the frame command (debouncing handled internally)
         queueFrameCommand(direction, frameCount)
         
-        // Update tracking variables
+        // Update tracking variable
         lastTouchX = currentX
-        lastTouchTime = now
     }
     
     fun endFrameScrubbing() {
@@ -289,7 +263,6 @@ fun PlayerOverlay(
                 isHorizontalSwipe = false
                 showSeekTime = false
                 wasPlayingBeforeSeek = false
-                currentVelocity = 0f
                 scheduleSeekbarHide()
             }
         }
@@ -650,7 +623,7 @@ fun PlayerOverlay(
                             )
                             if (isFrameScrubbing) {
                                 Text(
-                                    text = "Frame: $currentFrame | Vel: ${currentVelocity.toInt()}px/s",
+                                    text = "Frame: $currentFrame/$totalFrames",
                                     color = Color.Yellow,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Medium,
