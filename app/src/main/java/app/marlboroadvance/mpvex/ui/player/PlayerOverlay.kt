@@ -129,6 +129,21 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
+    // TURBO CACHE REFRESH FOR MAXIMUM PERFORMANCE - ADDED THIS FUNCTION
+    fun turboCacheRefresh() {
+        coroutineScope.launch {
+            // Ultra aggressive cache settings for recovery
+            MPVLib.setPropertyString("demuxer-readahead-secs", "90") // 1.5 minutes!
+            MPVLib.setPropertyString("demuxer-max-back-bytes", "300M") // 300MB!
+            
+            delay(800) // Keep turbo cache for 800ms
+            
+            // Return to aggressive (but not turbo) settings
+            MPVLib.setPropertyString("demuxer-readahead-secs", "60")
+            MPVLib.setPropertyString("demuxer-max-back-bytes", "200M")
+        }
+    }
+    
     // AGGRESSIVE CACHE CLEANUP
     fun aggressiveCacheCleanup() {
         // Reset to maximum cache sizes
@@ -328,7 +343,7 @@ fun PlayerOverlay(
             coroutineScope.launch {
                 // TURBO CLEANUP if rapid seeking occurred
                 if (rapidSeekCounter > rapidSeekThreshold) {
-                    turboCacheRefresh()
+                    turboCacheRefresh() // NOW THIS FUNCTION EXISTS
                 }
                 
                 // Final exact seek to position
@@ -350,21 +365,6 @@ fun PlayerOverlay(
                 wasPlayingBeforeSeek = false
                 scheduleSeekbarHide()
             }
-        }
-    }
-    
-    // TURBO CACHE REFRESH FOR MAXIMUM PERFORMANCE
-    fun turboCacheRefresh() {
-        coroutineScope.launch {
-            // Ultra aggressive cache settings for recovery
-            MPVLib.setPropertyString("demuxer-readahead-secs", "90") // 1.5 minutes!
-            MPVLib.setPropertyString("demuxer-max-back-bytes", "300M") // 300MB!
-            
-            delay(800) // Keep turbo cache for 800ms
-            
-            // Return to aggressive (but not turbo) settings
-            MPVLib.setPropertyString("demuxer-readahead-secs", "60")
-            MPVLib.setPropertyString("demuxer-max-back-bytes", "200M")
         }
     }
     
