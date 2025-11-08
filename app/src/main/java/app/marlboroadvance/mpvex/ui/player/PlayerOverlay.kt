@@ -127,8 +127,8 @@ fun PlayerOverlay(
     fun gentleCacheCleanup() {
         // Just reset cache sizes to flush any buildup
         MPVLib.setPropertyString("demuxer-readahead-secs", "15")
-        MPVLib.setPropertyString("demuxer-max-back-bytes", "50M")
-        MPVLib.setPropertyInt("demuxer-max-bytes", 100 * 1024 * 1024)
+        MPVLib.setPropertyString("demuxer-max-back-bytes", "75M")
+        MPVLib.setPropertyString("demuxer-max-bytes", (100 * 1024 * 1024).toString()) // FIXED: Use string
     }
     
     // PERFORM REAL-TIME SEEK
@@ -377,7 +377,7 @@ fun PlayerOverlay(
         // 15 SECONDS BACK + 15 SECONDS FUTURE = 30s READY WINDOW
         MPVLib.setPropertyString("demuxer-readahead-secs", "15") // 15s forward
         MPVLib.setPropertyString("demuxer-max-back-bytes", "75M") // 15s backward
-        MPVLib.setPropertyString("demuxer-max-bytes", 150 * 1024 * 1024) // 150MB total
+        MPVLib.setPropertyString("demuxer-max-bytes", (150 * 1024 * 1024).toString()) // 150MB total - FIXED
         
         // ENABLE CACHE
         MPVLib.setPropertyString("cache", "yes")
