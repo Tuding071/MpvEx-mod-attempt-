@@ -84,41 +84,33 @@ fun PlayerOverlay(
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
-    // ENHANCED DEBOUNCING FOR HORIZONTAL SCRUBBING
-    var lastFrameSeekTime by remember { mutableStateOf(0L) }
-    val debounceRejectWindow = 20L // 20ms rejection
-    val debounceAcceptWindow = 5L  // 5ms acceptance
+    var isSeekInProgress by remember { mutableStateOf(false) }
+    val frameDebounceMs = 16L // Smoother 62.5fps rate
     
     // FRAME SCRUBBING VARIABLES
     var isFrameScrubbing by remember { mutableStateOf(false) }
+    var lastFrameSeekTime by remember { mutableStateOf(0L) }
     var currentFrame by remember { mutableStateOf(0) }
     var totalFrames by remember { mutableStateOf(0) }
     var videoFPS by remember { mutableStateOf(30.0) }
     
-    // Sensitivity for 15-second full swipe
-    val screenWidthPixels = 1000f
+    // Enhanced sensitivity calculation for 15-second full swipe
+    val screenWidthPixels = 1000f // Approximate screen width
     val fullSwipeSeconds = 15.0
     val framesInFullSwipe = (fullSwipeSeconds * videoFPS).toInt()
     val pixelsPerFrame = (screenWidthPixels / framesInFullSwipe).coerceAtLeast(4f)
     
-    // DIRECTIONAL FRAME SCRUBBING
+    // DIRECTIONAL FRAME SCRUBBING VARIABLES
     var accumulatedPixels by remember { mutableStateOf(0f) }
     var lastDirection by remember { mutableStateOf(0) }
     var scrubStartX by remember { mutableStateOf(0f) }
     
-    // ENHANCED PREDICTIVE PRE-DECODING SYSTEM
+    // CONTINUOUS FRAME CAROUSEL SYSTEM
     var framePreDecodeJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var isFramePreDecodingActive by remember { mutableStateOf(false) }
-    var frameCache by remember { mutableStateOf<MutableSet<Int>>(mutableSetOf()) }
-    
-    // PREDICTIVE CHUNK SYSTEM
-    var consecutiveDirectionCommands by remember { mutableStateOf(0) }
-    var lastChunkDirection by remember { mutableStateOf(0) }
-    var nextChunkSize by remember { mutableStateOf(30) } // 1=30, 2=60, 1=30, 2=60 pattern
-    
-    // Chunk sizes
-    val chunk1Size = 30
-    val chunk2Size = 60
+    var frameCarousel by remember { mutableStateOf<MutableList<Int>>(mutableListOf()) } // Ordered list of frames
+    val carouselSize = 61 // 30 past + current + 30 future
+    val currentFrameIndex = 30 // Current frame is always at index 30
     
     // MEMORY OPTIMIZATION
     var lastCleanupTime by remember { mutableStateOf(0L) }
@@ -205,74 +197,101 @@ fun PlayerOverlay(
         currentFrame = frame.coerceIn(0, totalFrames)
     }
     
-    // PREDICTIVE PRE-DECODING SYSTEM - MOVED UP TO FIX COMPILATION ERROR
-    fun triggerPredictivePreDecoding(currentFrame: Int, direction: Int) {
-        coroutineScope.launch(Dispatchers.IO) {
-            val chunkSize = nextChunkSize
-            val chunkStart = if (direction == 1) {
-                currentFrame + 1
-            } else {
-                currentFrame - chunkSize
-            }.coerceAtLeast(0)
-            
-            val chunkEnd = if (direction == 1) {
-                currentFrame + chunkSize
-            } else {
-                currentFrame - 1
-            }.coerceAtMost(totalFrames)
-            
-            // Pre-decode the chunk
-            val range = if (direction == 1) chunkStart..chunkEnd else chunkEnd downTo chunkStart
-            for (frame in range) {
-                if (!isFrameScrubbing) break
-                if (frame in 0..totalFrames && frame !in frameCache) {
-                    val frameTime = calculateTimeFromFrame(frame)
-                    MPVLib.command("seek", frameTime.toString(), "absolute", "exact", "keyframes")
-                    frameCache.add(frame)
-                    delay(12) // Balanced decoding speed
-                }
-            }
-            
-            // Alternate chunk sizes for next trigger (1, 2, 1, 2 pattern)
-            nextChunkSize = if (nextChunkSize == chunk1Size) chunk2Size else chunk1Size
-        }
-    }
-    
-    // ENHANCED DEBOUNCING FOR HORIZONTAL SCRUBBING
     fun canSeekDueToDebounce(): Boolean {
-        val currentTime = System.currentTimeMillis()
-        val timeSinceLastSeek = currentTime - lastFrameSeekTime
-        
-        // 20ms rejection window, 5ms acceptance window
-        return timeSinceLastSeek >= debounceRejectWindow && 
-               timeSinceLastSeek < (debounceRejectWindow + debounceAcceptWindow)
+        return System.currentTimeMillis() - lastFrameSeekTime >= frameDebounceMs
     }
     
     fun seekToExactFrameDebounced(frame: Int) {
         if (canSeekDueToDebounce()) {
             seekToExactFrame(frame)
             lastFrameSeekTime = System.currentTimeMillis()
-            
-            // TRACK CONSECUTIVE COMMANDS FOR PREDICTION
-            val currentDirection = if (frame > currentFrame) 1 else if (frame < currentFrame) -1 else 0
-            if (currentDirection == lastChunkDirection) {
-                consecutiveDirectionCommands++
-            } else {
-                consecutiveDirectionCommands = 1
-                lastChunkDirection = currentDirection
-                nextChunkSize = chunk1Size // Reset to chunk 1 on direction change
-            }
-            
-            // TRIGGER PREDICTIVE PRE-DECODING
-            if (consecutiveDirectionCommands >= 30 && lastChunkDirection != 0) {
-                triggerPredictivePreDecoding(currentFrame, lastChunkDirection)
-                consecutiveDirectionCommands = 0 // Reset counter after triggering
-            }
         }
     }
     
-    // NORMAL FRAME CAROUSEL
-    fun startNormalFrameCarousel() {
+    // CONTINUOUS FRAME CAROUSEL SYSTEM
+    fun initializeFrameCarousel(centerFrame: Int) {
+        frameCarousel.clear()
+        
+        // Create initial 61-frame carousel: 30 past + center + 30 future
+        val startFrame = (centerFrame - 30).coerceAtLeast(0)
+        val endFrame = (centerFrame + 30).coerceAtMost(totalFrames)
+        
+        for (frame in startFrame..endFrame) {
+            if (frameCarousel.size < carouselSize) {
+                frameCarousel.add(frame)
+            }
+        }
+        
+        // Fill remaining slots if needed (for start/end of video)
+        while (frameCarousel.size < carouselSize) {
+            if (endFrame >= totalFrames) {
+                // Add more past frames if at end of video
+                val extraFrame = (startFrame - 1).coerceAtLeast(0)
+                if (extraFrame !in frameCarousel) {
+                    frameCarousel.add(0, extraFrame)
+                }
+            } else {
+                // Add more future frames if at start of video
+                val extraFrame = (endFrame + 1).coerceAtMost(totalFrames)
+                if (extraFrame !in frameCarousel) {
+                    frameCarousel.add(extraFrame)
+                }
+            }
+        }
+        
+        currentFrame = centerFrame
+    }
+    
+    fun rotateCarouselForward() {
+        if (frameCarousel.size < carouselSize) return
+        
+        val newCurrentFrame = frameCarousel[currentFrameIndex + 1]
+        
+        // Rotate carousel: remove first, shift left, add new frame at end
+        frameCarousel.removeAt(0) // Delete frame 1 (oldest)
+        
+        // The carousel automatically shifts left (indices decrease)
+        // Frame 2 becomes frame 1, frame 3 becomes frame 2, etc.
+        
+        // Pre-decode and add new frame at the end
+        val newFrame = frameCarousel.last() + 1
+        if (newFrame <= totalFrames) {
+            preDecodeSingleFrame(newFrame)
+            frameCarousel.add(newFrame)
+        }
+        
+        currentFrame = newCurrentFrame
+    }
+    
+    fun rotateCarouselBackward() {
+        if (frameCarousel.size < carouselSize) return
+        
+        val newCurrentFrame = frameCarousel[currentFrameIndex - 1]
+        
+        // Rotate carousel: remove last, shift right, add new frame at beginning
+        frameCarousel.removeAt(frameCarousel.size - 1) // Delete frame 61 (newest)
+        
+        // The carousel automatically shifts right (indices remain same but values change)
+        // Frame 60 becomes frame 61, frame 59 becomes frame 60, etc.
+        
+        // Pre-decode and add new frame at the beginning
+        val newFrame = frameCarousel.first() - 1
+        if (newFrame >= 0) {
+            preDecodeSingleFrame(newFrame)
+            frameCarousel.add(0, newFrame)
+        }
+        
+        currentFrame = newCurrentFrame
+    }
+    
+    fun preDecodeSingleFrame(frame: Int) {
+        if (frame in 0..totalFrames) {
+            val frameTime = calculateTimeFromFrame(frame)
+            MPVLib.command("seek", frameTime.toString(), "absolute", "exact", "keyframes")
+        }
+    }
+    
+    fun startFrameCarousel() {
         if (isFramePreDecodingActive) return
         
         framePreDecodeJob?.cancel()
@@ -285,26 +304,13 @@ fun PlayerOverlay(
                 
                 // Skip during user interaction
                 if (isFrameScrubbing || isSeeking || isDragging || userInteracting) {
-                    delay(100)
+                    delay(50)
                     continue
                 }
                 
-                // Maintain 30-frame buffer around current position
-                val startFrame = (currentFrameNum - 15).coerceAtLeast(0)
-                val endFrame = (currentFrameNum + 15).coerceAtMost(totalFrames)
-                
-                // Clear distant frames
-                frameCache.removeAll { frame -> frame < currentFrameNum - 30 || frame > currentFrameNum + 30 }
-                
-                // Pre-decode buffer
-                for (frame in startFrame..endFrame) {
-                    if (!isFramePreDecodingActive) break
-                    if (frame !in frameCache) {
-                        val frameTime = calculateTimeFromFrame(frame)
-                        MPVLib.command("seek", frameTime.toString(), "absolute", "exact", "keyframes")
-                        frameCache.add(frame)
-                        delay(16)
-                    }
+                // If carousel is empty or current frame changed significantly, reinitialize
+                if (frameCarousel.isEmpty() || abs(currentFrameNum - currentFrame) > 5) {
+                    initializeFrameCarousel(currentFrameNum)
                 }
                 
                 // Return to current position
@@ -321,18 +327,14 @@ fun PlayerOverlay(
         isFramePreDecodingActive = false
         framePreDecodeJob?.cancel()
         framePreDecodeJob = null
-        frameCache.clear()
-        // Reset predictive system
-        consecutiveDirectionCommands = 0
-        lastChunkDirection = 0
-        nextChunkSize = chunk1Size
+        frameCarousel.clear()
     }
     
     fun resetFramePreDecoding() {
         stopFramePreDecoding()
         coroutineScope.launch {
             delay(100)
-            startNormalFrameCarousel()
+            startFrameCarousel()
         }
     }
     
@@ -347,11 +349,16 @@ fun PlayerOverlay(
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         showSeekTime = true
         
+        // Initialize carousel for scrubbing
+        if (frameCarousel.isEmpty()) {
+            initializeFrameCarousel(currentFrame)
+        }
+        
         // Reset directional variables
         accumulatedPixels = 0f
         lastDirection = 0
         
-        // Stop normal carousel
+        // Stop normal carousel during scrubbing
         stopFramePreDecoding()
         
         if (wasPlayingBeforeSeek) {
@@ -378,15 +385,26 @@ fun PlayerOverlay(
         
         if (accumulatedPixels >= pixelsPerFrame) {
             val targetFrame = if (currentDirection == 1) {
-                currentFrame + 1
+                // Forward: rotate carousel forward
+                if (frameCarousel.size > currentFrameIndex + 1) {
+                    rotateCarouselForward()
+                    frameCarousel[currentFrameIndex]
+                } else {
+                    currentFrame + 1
+                }
             } else {
-                currentFrame - 1
+                // Backward: rotate carousel backward
+                if (currentFrameIndex > 0) {
+                    rotateCarouselBackward()
+                    frameCarousel[currentFrameIndex]
+                } else {
+                    currentFrame - 1
+                }
             }.coerceIn(0, totalFrames)
             
             seekTargetTime = formatTimeSimple(calculateTimeFromFrame(targetFrame))
             currentTime = formatTimeSimple(calculateTimeFromFrame(targetFrame))
             
-            // USE ENHANCED DEBOUNCED SEEKING
             seekToExactFrameDebounced(targetFrame)
             
             // DISCRETE CYCLE RESET
@@ -400,13 +418,9 @@ fun PlayerOverlay(
             val finalFrame = currentFrame
             
             coroutineScope.launch {
-                // Clear and reset
-                frameCache.clear()
+                // Reset directional variables
                 accumulatedPixels = 0f
                 lastDirection = 0
-                consecutiveDirectionCommands = 0
-                lastChunkDirection = 0
-                nextChunkSize = chunk1Size
                 
                 // Seek to final position
                 seekToExactFrame(finalFrame)
@@ -418,7 +432,7 @@ fun PlayerOverlay(
                 
                 // Restart normal frame carousel
                 if (videoDuration > 0) {
-                    startNormalFrameCarousel()
+                    startFrameCarousel()
                 }
                 
                 // Reset states
@@ -594,7 +608,7 @@ fun PlayerOverlay(
         totalFrames = calculateFrameFromTime(duration)
         
         if (duration > 5) {
-            startNormalFrameCarousel()
+            startFrameCarousel()
         }
     }
     
@@ -661,7 +675,7 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("opengl-pbo", "yes")
         MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1")
         MPVLib.setPropertyString("network-timeout", "30")
-        MPVLib.setPropertyString("audio-client-name", "MPVEx-Predictive")
+        MPVLib.setPropertyString("audio-client-name", "MPVEx-Carousel")
         MPVLib.setPropertyString("audio-samplerate", "auto")
         MPVLib.setPropertyString("deband", "no")
         MPVLib.setPropertyString("video-aspect-override", "no")
@@ -723,7 +737,7 @@ fun PlayerOverlay(
             videoDuration = duration
             
             if (!isFramePreDecodingActive && duration > 5 && !isFrameScrubbing && !isDragging && !isSeeking) {
-                startNormalFrameCarousel()
+                startFrameCarousel()
             }
             
             delay(500)
@@ -757,8 +771,7 @@ fun PlayerOverlay(
         currentTime = formatTimeSimple(targetPosition)
         currentFrame = calculateFrameFromTime(targetPosition)
         
-        // Regular seeking (no enhanced debouncing)
-        seekToExactFrame(currentFrame)
+        seekToExactFrameDebounced(currentFrame)
     }
     
     fun handleDragFinished() {
@@ -773,7 +786,7 @@ fun PlayerOverlay(
             }
             
             if (videoDuration > 0) {
-                startNormalFrameCarousel()
+                startFrameCarousel()
             }
             
             isSeeking = false
@@ -882,7 +895,7 @@ fun PlayerOverlay(
                             )
                             if (isFrameScrubbing) {
                                 Text(
-                                    text = "Frame: $currentFrame/$totalFrames",
+                                    text = "Frame: $currentFrame/$totalFrames (Carousel: ${frameCarousel.size}/61)",
                                     style = TextStyle(color = Color.Yellow, fontSize = 12.sp, fontWeight = FontWeight.Medium),
                                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 8.dp, vertical = 2.dp)
                                 )
