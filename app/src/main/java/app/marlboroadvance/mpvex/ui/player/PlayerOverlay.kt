@@ -95,7 +95,7 @@ fun PlayerOverlay(
     var videoFPS by remember { mutableStateOf(30.0) } // Default, will detect actual FPS
     
     // Frame scrubbing constants
-    val pixelsPerFrame = 48
+    val pixelsPerFrame = 144
     val frameDebounceMs = 33L // ~30fps command rate
     val preDecodeWindowSeconds = 3.0 // 3 seconds past and future
     
