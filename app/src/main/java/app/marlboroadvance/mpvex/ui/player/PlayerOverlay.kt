@@ -56,9 +56,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import android.content.Intent
 import android.net.Uri
 import kotlin.math.abs
-import java.io.File
-import java.io.InputStream
-import java.io.OutputStream
 
 @Composable
 fun PlayerOverlay(
@@ -83,8 +80,6 @@ fun PlayerOverlay(
     var isDragging by remember { mutableStateOf(false) }
     
     var isSeeking by remember { mutableStateOf(false) }
-    var seekStartX by remember { mutableStateOf(0f) }
-    var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
     var isSeekInProgress by remember { mutableStateOf(false) }
@@ -121,19 +116,19 @@ fun PlayerOverlay(
     var currentVolume by remember { mutableStateOf(viewModel.currentVolume.value) }
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    // Track if we're using preview buffer for seeking
-    var isUsingPreviewBuffer by remember { mutableStateOf(false) }
-    var originalVideoPath by remember { mutableStateOf<String?>(null) }
-    
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
-    val previewBufferManager = remember { 
-        RealPreviewBufferManager(context, coroutineScope) { originalPath ->
-            originalVideoPath = originalPath
-        }
-    }
+    
+    // NEW VARIABLES FOR SPEED-BASED SCRUBBING
+    var currentSpeed by remember { mutableStateOf(1.0) }
+    var maxSpeed by remember { mutableStateOf(8.0) }
+    var isScrubbing by remember { mutableStateOf(false) }
+    var scrubDirection by remember { mutableStateOf(0) } // -1: backward, 0: neutral, 1: forward
+    var scrubStartX by remember { mutableStateOf(0f) }
+    var scrubSensitivity by remember { mutableStateOf(0.1f) }
+    var wasAudioMuted by remember { mutableStateOf(false) }
+    var originalAudioVolume by remember { mutableStateOf(100) }
     
     fun gentleCleanup() {
-        previewBufferManager.clearBuffer()
         MPVLib.setPropertyString("demuxer-readahead-secs", "10")
         MPVLib.setPropertyString("cache-secs", "10")
         MPVLib.setPropertyInt("demuxer-max-bytes", 100 * 1024 * 1024)
@@ -248,11 +243,6 @@ fun PlayerOverlay(
             if (isTouching && !isHorizontalSwipe) {
                 isLongTap = true
                 isSpeedingUp = true
-                
-                // CLEAR BUFFER IMMEDIATELY for 2x speed
-                previewBufferManager.clearBuffer()
-                isUsingPreviewBuffer = false
-                
                 MPVLib.setPropertyDouble("speed", 2.0)
             }
         }
@@ -272,83 +262,105 @@ fun PlayerOverlay(
         return false
     }
     
-    fun startHorizontalSeeking(startX: Float) {
+    // NEW: SPEED-BASED SCRUBBING FUNCTIONS
+    fun startSpeedScrubbing(startX: Float) {
         isHorizontalSwipe = true
+        isScrubbing = true
         cancelAutoHide()
-        seekStartX = startX
-        seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+        scrubStartX = startX
+        currentSpeed = 1.0
+        scrubDirection = 0
+        
+        // Store current playback state
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
-        isSeeking = true
+        
+        // Store audio state and mute audio
+        wasAudioMuted = MPVLib.getPropertyBoolean("mute") ?: false
+        originalAudioVolume = MPVLib.getPropertyInt("volume") ?: 100
+        MPVLib.setPropertyBoolean("mute", true)
+        
+        // Ensure video is playing for speed control to work
+        if (MPVLib.getPropertyBoolean("pause") == true) {
+            MPVLib.setPropertyBoolean("pause", false)
+        }
+        
         showSeekTime = true
-        
-        // Switch to preview buffer for smooth seeking if available
-        val previewFile = previewBufferManager.getSeekableBuffer()
-        if (previewFile != null && previewFile.exists()) {
-            isUsingPreviewBuffer = true
-            MPVLib.command("loadfile", previewFile.absolutePath, "replace")
-            showPlaybackFeedback("Smooth Seek")
-        }
-        
-        if (wasPlayingBeforeSeek) {
-            MPVLib.setPropertyBoolean("pause", true)
-        }
+        showPlaybackFeedback("Scrub Mode")
     }
     
-    fun handleHorizontalSeeking(currentX: Float) {
-        if (!isSeeking) return
+    fun handleSpeedScrubbing(currentX: Float) {
+        if (!isScrubbing) return
         
-        val deltaX = currentX - seekStartX
-        val pixelsPerSecond = 6f / 0.033f
-        val timeDeltaSeconds = deltaX / pixelsPerSecond
-        val newPositionSeconds = seekStartPosition + timeDeltaSeconds
-        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-        val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
+        val deltaX = currentX - scrubStartX
+        val screenWidth = LocalDensity.current.run { 360.dp.toPx() } // Approximate screen width
         
-        seekTargetTime = formatTimeSimple(clampedPosition)
-        currentTime = formatTimeSimple(clampedPosition)
+        // Calculate speed based on drag distance (0 to 1 range)
+        val normalizedDrag = abs(deltaX) / screenWidth
+        val speedMultiplier = normalizedDrag * (maxSpeed - 1.0) + 1.0
         
-        performRealTimeSeek(clampedPosition)
-    }
-    
-    fun endHorizontalSeeking() {
-        if (isSeeking) {
-            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
-            
-            // Switch back to original video
-            if (isUsingPreviewBuffer && originalVideoPath != null) {
-                MPVLib.command("loadfile", originalVideoPath!!, "replace")
-                // Seek to exact position in original video
-                coroutineScope.launch {
-                    delay(200)
-                    performRealTimeSeek(currentPos)
-                }
-                isUsingPreviewBuffer = false
+        // Determine direction and apply speed
+        if (abs(deltaX) > horizontalSwipeThreshold) {
+            if (deltaX > 0) {
+                // Swipe RIGHT - Forward scrubbing
+                scrubDirection = 1
+                currentSpeed = speedMultiplier.coerceIn(1.0, maxSpeed)
+                MPVLib.setPropertyDouble("speed", currentSpeed)
+                showPlaybackFeedback("→ ${"%.1f".format(currentSpeed)}x")
             } else {
-                performRealTimeSeek(currentPos)
+                // Swipe LEFT - Backward scrubbing (negative speed)
+                scrubDirection = -1
+                currentSpeed = -speedMultiplier.coerceIn(1.0, maxSpeed) // Negative for backward
+                MPVLib.setPropertyDouble("speed", abs(currentSpeed)) // MPV uses positive speed with playback-direction
+                MPVLib.command("seek", "-0.1", "relative", "keyframes") // Force backward seeking
+                showPlaybackFeedback("← ${"%.1f".format(abs(currentSpeed))}x")
+            }
+        } else {
+            // Very small movement or near start point - PAUSE frame
+            scrubDirection = 0
+            MPVLib.setPropertyBoolean("pause", true)
+            showPlaybackFeedback("⏸ Frame Hold")
+        }
+        
+        // Update UI with current position
+        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+        currentTime = formatTimeSimple(currentPos)
+        seekTargetTime = formatTimeSimple(currentPos)
+    }
+    
+    fun endSpeedScrubbing() {
+        if (isScrubbing) {
+            isScrubbing = false
+            isHorizontalSwipe = false
+            
+            // Reset to normal speed and direction
+            MPVLib.setPropertyDouble("speed", 1.0)
+            currentSpeed = 1.0
+            
+            // Restore audio state
+            if (!wasAudioMuted) {
+                MPVLib.setPropertyBoolean("mute", false)
+                MPVLib.setPropertyInt("volume", originalAudioVolume)
             }
             
-            // Clear buffer after horizontal seeking
-            previewBufferManager.clearBuffer()
-            
-            if (wasPlayingBeforeSeek) {
+            // Restore original play/pause state
+            if (!wasPlayingBeforeSeek) {
                 coroutineScope.launch {
                     delay(100)
-                    MPVLib.setPropertyBoolean("pause", false)
+                    MPVLib.setPropertyBoolean("pause", true)
                 }
+            } else {
+                // Ensure it's playing if it was playing before
+                MPVLib.setPropertyBoolean("pause", false)
             }
             
-            isSeeking = false
+            scrubDirection = 0
             showSeekTime = false
-            seekStartX = 0f
-            seekStartPosition = 0.0
-            wasPlayingBeforeSeek = false
             
-            // DELAYED BUFFER RECREATION - 1000ms
+            // DELAYED cleanup
             coroutineScope.launch {
                 delay(1000)
-                if (!isSeeking && !isSpeedingUp) {
-                    val currentPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-                    previewBufferManager.startBufferCreation(currentPosition)
+                if (!isScrubbing) {
+                    showPlaybackFeedback("")
                 }
             }
             
@@ -365,10 +377,8 @@ fun PlayerOverlay(
             isLongTap = false
             isSpeedingUp = false
             MPVLib.setPropertyDouble("speed", 1.0)
-            
-            // Buffer will be recreated automatically in position observer
         } else if (isHorizontalSwipe) {
-            endHorizontalSeeking()
+            endSpeedScrubbing()
             isHorizontalSwipe = false
         } else if (touchDuration < 150) {
             handleTap()
@@ -392,10 +402,6 @@ fun PlayerOverlay(
         }
         val title = MPVLib.getPropertyString("media-title") ?: "Video"
         videoTitle = title
-        
-        // Store original video path
-        originalVideoPath = MPVLib.getPropertyString("path")
-        
         showVideoInfo = 1
         videoInfoJob?.cancel()
         videoInfoJob = coroutineScope.launch {
@@ -403,19 +409,12 @@ fun PlayerOverlay(
             showVideoInfo = 0
         }
         scheduleSeekbarHide()
-        
-        // Start initial buffer creation with original video path
-        val initialPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-        if (originalVideoPath != null) {
-            previewBufferManager.setOriginalVideoPath(originalVideoPath!!)
-            previewBufferManager.startBufferCreation(initialPos)
-        }
     }
     
     LaunchedEffect(isSpeedingUp) {
-        if (isSpeedingUp) {
+        if (isSpeedingUp && !isScrubbing) {
             MPVLib.setPropertyDouble("speed", 2.0)
-        } else {
+        } else if (!isScrubbing) {
             MPVLib.setPropertyDouble("speed", 1.0)
         }
     }
@@ -461,7 +460,7 @@ fun PlayerOverlay(
             
             val currentTime = System.currentTimeMillis()
             if (currentTime - lastCleanupTime > cleanupInterval) {
-                if (!isSeeking && !isDragging && !userInteracting) {
+                if (!isSeeking && !isDragging && !userInteracting && !isScrubbing) {
                     gentleCleanup()
                     lastCleanupTime = currentTime
                 }
@@ -481,18 +480,6 @@ fun PlayerOverlay(
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
             val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
             val currentSeconds = currentPos.toInt()
-            
-            // AUTO-RECREATE BUFFER when conditions are met
-            if (!isSeeking && !isSpeedingUp && !isDragging && 
-                !previewBufferManager.hasActiveBuffer() && !isUsingPreviewBuffer) {
-                previewBufferManager.startBufferCreation(currentPos)
-            }
-            
-            // Update buffer position during normal playback
-            if (previewBufferManager.hasActiveBuffer() && !isUsingPreviewBuffer) {
-                previewBufferManager.updateBufferCenter(currentPos)
-            }
-            
             if (isSeeking) {
                 currentTime = seekTargetTime
                 totalTime = formatTimeSimple(duration)
@@ -524,11 +511,6 @@ fun PlayerOverlay(
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
-            
-            // CLEAR BUFFER when seekbar drag passes threshold
-            previewBufferManager.clearBuffer()
-            isUsingPreviewBuffer = false
-            
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
             }
@@ -554,16 +536,6 @@ fun PlayerOverlay(
         isSeeking = false
         showSeekTime = false
         wasPlayingBeforeSeek = false
-        
-        // DELAYED BUFFER RECREATION - 1000ms after seekbar release
-        coroutineScope.launch {
-            delay(1000)
-            if (!isSeeking && !isSpeedingUp && !isUsingPreviewBuffer) {
-                val currentPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-                previewBufferManager.startBufferCreation(currentPosition)
-            }
-        }
-        
         scheduleSeekbarHide()
     }
     
@@ -610,10 +582,10 @@ fun PlayerOverlay(
                                 MotionEvent.ACTION_MOVE -> {
                                     if (!isHorizontalSwipe && !isLongTap) {
                                         if (checkForHorizontalSwipe(event.x, event.y)) {
-                                            startHorizontalSeeking(event.x)
+                                            startSpeedScrubbing(event.x)
                                         }
                                     } else if (isHorizontalSwipe) {
-                                        handleHorizontalSeeking(event.x)
+                                        handleSpeedScrubbing(event.x)
                                     }
                                     true
                                 }
@@ -707,8 +679,8 @@ fun PlayerOverlay(
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
-                isUsingPreviewBuffer -> Text(
-                    text = "Smooth Seek",
+                isScrubbing -> Text(
+                    text = playbackFeedbackText,
                     style = TextStyle(color = Color.Yellow, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
@@ -771,195 +743,6 @@ fun SimpleDraggableProgressBar(
                 }
             )
         })
-    }
-}
-
-// REAL PREVIEW BUFFER MANAGER THAT ACTUALLY CREATES VIDEO COPIES
-class RealPreviewBufferManager(
-    private val context: android.content.Context,
-    private val coroutineScope: CoroutineScope,
-    private val onOriginalPathDetected: (String) -> Unit
-) {
-    private enum class BufferState { IDLE, CREATING, ACTIVE, SEEKING, CLEANING }
-    private var bufferState = BufferState.IDLE
-    private var currentCenterTime = 0.0
-    private val bufferFiles = mutableListOf<File>()
-    private val bufferDuration = 15 // 15 seconds total
-    private val segmentDuration = 1 // 1 second per segment
-    private var originalVideoPath: String? = null
-    
-    fun setOriginalVideoPath(path: String) {
-        originalVideoPath = path
-        onOriginalPathDetected(path)
-    }
-    
-    fun startBufferCreation(centerTime: Double) {
-        if (bufferState == BufferState.IDLE || bufferState == BufferState.CLEANING) {
-            if (originalVideoPath == null) {
-                // Try to get original path from MPV
-                originalVideoPath = MPVLib.getPropertyString("path")
-                originalVideoPath?.let { onOriginalPathDetected(it) }
-            }
-            
-            if (originalVideoPath != null) {
-                bufferState = BufferState.CREATING
-                currentCenterTime = centerTime
-                coroutineScope.launch(Dispatchers.IO) {
-                    createInitialBuffer(centerTime)
-                    if (bufferFiles.size >= 10) { // At least 10 segments created
-                        bufferState = BufferState.ACTIVE
-                    } else {
-                        bufferState = BufferState.IDLE
-                    }
-                }
-            }
-        }
-    }
-    
-    fun clearBuffer() {
-        if (bufferState == BufferState.ACTIVE || bufferState == BufferState.CREATING) {
-            bufferState = BufferState.CLEANING
-            coroutineScope.launch(Dispatchers.IO) {
-                bufferFiles.forEach { it.delete() }
-                bufferFiles.clear()
-                bufferState = BufferState.IDLE
-            }
-        }
-    }
-    
-    fun hasActiveBuffer(): Boolean {
-        return bufferState == BufferState.ACTIVE
-    }
-    
-    fun getSeekableBuffer(): File? {
-        return if (bufferState == BufferState.ACTIVE && bufferFiles.size >= 10) {
-            mergeSegmentsToSeekableFile()
-        } else {
-            null
-        }
-    }
-    
-    fun updateBufferCenter(newCenterTime: Double) {
-        if (bufferState == BufferState.ACTIVE) {
-            val timeDiff = newCenterTime - currentCenterTime
-            if (timeDiff >= segmentDuration) {
-                val segmentsToShift = (timeDiff / segmentDuration).toInt()
-                shiftBuffer(segmentsToShift, newCenterTime)
-            }
-        }
-    }
-    
-    private suspend fun createInitialBuffer(centerTime: Double) {
-        // Create segments around center time: 7 left + current + 7 right
-        for (i in -7..7) {
-            val segmentTime = centerTime + i
-            if (segmentTime >= 0) { // Don't create segments for negative times
-                val segmentFile = createCompatibleSegment(segmentTime, segmentDuration)
-                if (segmentFile.exists() && segmentFile.length() > 1000) { // At least 1KB
-                    bufferFiles.add(segmentFile)
-                }
-            }
-        }
-    }
-    
-    private fun shiftBuffer(segmentsToShift: Int, newCenterTime: Double) {
-        coroutineScope.launch(Dispatchers.IO) {
-            // Remove oldest segments from left
-            repeat(segmentsToShift.coerceAtMost(bufferFiles.size)) {
-                bufferFiles.removeFirst().delete()
-            }
-            
-            // Add new segments to right
-            val currentRightEdge = currentCenterTime + 7
-            for (i in 1..segmentsToShift) {
-                val newSegmentTime = currentRightEdge + i
-                val segmentFile = createCompatibleSegment(newSegmentTime, segmentDuration)
-                if (segmentFile.exists() && segmentFile.length() > 1000) {
-                    bufferFiles.add(segmentFile)
-                }
-            }
-            
-            currentCenterTime = newCenterTime
-        }
-    }
-    
-    private fun createCompatibleSegment(startTime: Double, duration: Int): File {
-        val outputFile = File(context.cacheDir, "preview_segment_${startTime.toInt()}_${System.currentTimeMillis()}.mp4")
-        
-        try {
-            // Using FFmpeg to create compatible H.264 segment
-            val command = listOf(
-                "ffmpeg",
-                "-y", // Overwrite output file
-                "-ss", startTime.toString(), // Start time
-                "-i", originalVideoPath!!, // Input file
-                "-t", "1", // Duration 1 second
-                "-c:v", "libx264", // H.264 video codec
-                "-profile:v", "high", // High profile for compatibility
-                "-level", "4.0", // Level 4.0 for broad compatibility
-                "-preset", "ultrafast", // Fastest encoding
-                "-crf", "28", // Good quality with smaller file size
-                "-c:a", "aac", // AAC audio
-                "-b:a", "128k", // Audio bitrate
-                "-avoid_negative_ts", "make_zero",
-                "-movflags", "+faststart", // Optimize for streaming
-                outputFile.absolutePath
-            )
-            
-            // Execute FFmpeg command
-            val process = ProcessBuilder(command).start()
-            val exitCode = process.waitFor()
-            
-            if (exitCode != 0) {
-                // FFmpeg failed, create a dummy file as fallback
-                outputFile.createNewFile()
-            }
-            
-        } catch (e: Exception) {
-            // Fallback: create empty file
-            outputFile.createNewFile()
-        }
-        
-        return outputFile
-    }
-    
-    private fun mergeSegmentsToSeekableFile(): File {
-        val seekableFile = File(context.cacheDir, "preview_buffer_${System.currentTimeMillis()}.mp4")
-        
-        if (bufferFiles.isEmpty()) {
-            return seekableFile
-        }
-        
-        try {
-            // Create concat file for FFmpeg
-            val concatFile = File(context.cacheDir, "concat_list_${System.currentTimeMillis()}.txt")
-            concatFile.writeText(bufferFiles.joinToString("\n") { "file '${it.absolutePath}'" })
-            
-            val command = listOf(
-                "ffmpeg",
-                "-y",
-                "-f", "concat",
-                "-safe", "0",
-                "-i", concatFile.absolutePath,
-                "-c", "copy", // Copy streams without re-encoding
-                "-movflags", "+faststart",
-                seekableFile.absolutePath
-            )
-            
-            val process = ProcessBuilder(command).start()
-            process.waitFor()
-            
-            // Clean up concat file
-            concatFile.delete()
-            
-        } catch (e: Exception) {
-            // Fallback: use first segment if merge fails
-            if (bufferFiles.isNotEmpty()) {
-                bufferFiles.first().copyTo(seekableFile, overwrite = true)
-            }
-        }
-        
-        return seekableFile
     }
 }
 
