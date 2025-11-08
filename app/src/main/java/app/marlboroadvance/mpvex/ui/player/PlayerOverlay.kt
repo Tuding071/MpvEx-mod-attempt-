@@ -63,6 +63,8 @@ fun PlayerOverlay(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current // MOVE THIS HERE
+    
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
     var seekTargetTime by remember { mutableStateOf("00:00") }
@@ -127,6 +129,9 @@ fun PlayerOverlay(
     var scrubSensitivity by remember { mutableStateOf(0.1f) }
     var wasAudioMuted by remember { mutableStateOf(false) }
     var originalAudioVolume by remember { mutableStateOf(100) }
+    
+    // Calculate screen width in pixels once
+    val screenWidthPx = remember { density.run { 360.dp.toPx() } }
     
     fun gentleCleanup() {
         MPVLib.setPropertyString("demuxer-readahead-secs", "10")
@@ -292,10 +297,9 @@ fun PlayerOverlay(
         if (!isScrubbing) return
         
         val deltaX = currentX - scrubStartX
-        val screenWidth = LocalDensity.current.run { 360.dp.toPx() } // Approximate screen width
         
         // Calculate speed based on drag distance (0 to 1 range)
-        val normalizedDrag = abs(deltaX) / screenWidth
+        val normalizedDrag = abs(deltaX) / screenWidthPx
         val speedMultiplier = normalizedDrag * (maxSpeed - 1.0) + 1.0
         
         // Determine direction and apply speed
