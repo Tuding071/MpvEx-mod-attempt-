@@ -56,6 +56,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import android.content.Intent
 import android.net.Uri
 import kotlin.math.abs
+import java.io.File
 
 @Composable
 fun PlayerOverlay(
@@ -119,8 +120,10 @@ fun PlayerOverlay(
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
+    val previewBufferManager = remember { SmartPreviewBufferManager(context, coroutineScope) }
     
     fun gentleCleanup() {
+        previewBufferManager.clearBuffer()
         MPVLib.setPropertyString("demuxer-readahead-secs", "10")
         MPVLib.setPropertyString("cache-secs", "10")
         MPVLib.setPropertyInt("demuxer-max-bytes", 100 * 1024 * 1024)
@@ -235,6 +238,10 @@ fun PlayerOverlay(
             if (isTouching && !isHorizontalSwipe) {
                 isLongTap = true
                 isSpeedingUp = true
+                
+                // CLEAR BUFFER IMMEDIATELY for 2x speed
+                previewBufferManager.clearBuffer()
+                
                 MPVLib.setPropertyDouble("speed", 2.0)
             }
         }
@@ -254,7 +261,7 @@ fun PlayerOverlay(
         return false
     }
     
-    fun startVirtualSeekbar(startX: Float) {
+    fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
         seekStartX = startX
@@ -263,19 +270,24 @@ fun PlayerOverlay(
         isSeeking = true
         showSeekTime = true
         
+        // Use existing buffer if available for smooth seeking
+        val previewFile = previewBufferManager.getSeekableBuffer()
+        if (previewFile != null) {
+            // Load preview file for smooth scrubbing
+            MPVLib.command("loadfile", previewFile.absolutePath, "replace")
+        }
+        
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
         }
     }
     
-    fun handleVirtualSeekbar(currentX: Float) {
+    fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
         val deltaX = currentX - seekStartX
-        val swipeRangeSeconds = 15f // ±7.5 seconds total range
-        val pixelsPerSecond = 100f // Adjust this for sensitivity
+        val pixelsPerSecond = 6f / 0.033f
         val timeDeltaSeconds = deltaX / pixelsPerSecond
-        
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
@@ -286,10 +298,13 @@ fun PlayerOverlay(
         performRealTimeSeek(clampedPosition)
     }
     
-    fun endVirtualSeekbar() {
+    fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
             performRealTimeSeek(currentPos)
+            
+            // Clear buffer after horizontal seeking
+            previewBufferManager.clearBuffer()
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -303,6 +318,16 @@ fun PlayerOverlay(
             seekStartX = 0f
             seekStartPosition = 0.0
             wasPlayingBeforeSeek = false
+            
+            // DELAYED BUFFER RECREATION - 1000ms
+            coroutineScope.launch {
+                delay(1000)
+                if (!isSeeking && !isSpeedingUp) {
+                    val currentPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+                    previewBufferManager.startBufferCreation(currentPosition)
+                }
+            }
+            
             scheduleSeekbarHide()
         }
     }
@@ -316,8 +341,10 @@ fun PlayerOverlay(
             isLongTap = false
             isSpeedingUp = false
             MPVLib.setPropertyDouble("speed", 1.0)
+            
+            // Buffer will be recreated automatically in position observer
         } else if (isHorizontalSwipe) {
-            endVirtualSeekbar()
+            endHorizontalSeeking()
             isHorizontalSwipe = false
         } else if (touchDuration < 150) {
             handleTap()
@@ -348,6 +375,10 @@ fun PlayerOverlay(
             showVideoInfo = 0
         }
         scheduleSeekbarHide()
+        
+        // Start initial buffer creation
+        val initialPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+        previewBufferManager.startBufferCreation(initialPos)
     }
     
     LaunchedEffect(isSpeedingUp) {
@@ -419,6 +450,18 @@ fun PlayerOverlay(
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
             val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
             val currentSeconds = currentPos.toInt()
+            
+            // AUTO-RECREATE BUFFER when conditions are met
+            if (!isSeeking && !isSpeedingUp && !isDragging && 
+                !previewBufferManager.hasActiveBuffer()) {
+                previewBufferManager.startBufferCreation(currentPos)
+            }
+            
+            // Update buffer position during normal playback
+            if (previewBufferManager.hasActiveBuffer()) {
+                previewBufferManager.updateBufferCenter(currentPos)
+            }
+            
             if (isSeeking) {
                 currentTime = seekTargetTime
                 totalTime = formatTimeSimple(duration)
@@ -450,6 +493,10 @@ fun PlayerOverlay(
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
+            
+            // CLEAR BUFFER when seekbar drag passes threshold
+            previewBufferManager.clearBuffer()
+            
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
             }
@@ -475,13 +522,21 @@ fun PlayerOverlay(
         isSeeking = false
         showSeekTime = false
         wasPlayingBeforeSeek = false
+        
+        // DELAYED BUFFER RECREATION - 1000ms after seekbar release
+        coroutineScope.launch {
+            delay(1000)
+            if (!isSeeking && !isSpeedingUp) {
+                val currentPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+                previewBufferManager.startBufferCreation(currentPosition)
+            }
+        }
+        
         scheduleSeekbarHide()
     }
     
     Box(modifier = modifier.fillMaxSize()) {
-        // MAIN GESTURE AREA - Full screen divided into areas
         Box(modifier = Modifier.fillMaxSize()) {
-            // TOP 5% - Ignore area
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -489,14 +544,12 @@ fun PlayerOverlay(
                     .align(Alignment.TopStart)
             )
             
-            // CENTER AREA - 95% height, divided into left/center/right
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .fillMaxHeight(0.95f)
                     .align(Alignment.BottomStart)
             ) {
-                // LEFT 5% - Video info toggle
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.05f)
@@ -509,7 +562,6 @@ fun PlayerOverlay(
                         )
                 )
                 
-                // CENTER 90% - Virtual seekbar gestures
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.9f)
@@ -526,10 +578,10 @@ fun PlayerOverlay(
                                 MotionEvent.ACTION_MOVE -> {
                                     if (!isHorizontalSwipe && !isLongTap) {
                                         if (checkForHorizontalSwipe(event.x, event.y)) {
-                                            startVirtualSeekbar(event.x)
+                                            startHorizontalSeeking(event.x)
                                         }
                                     } else if (isHorizontalSwipe) {
-                                        handleVirtualSeekbar(event.x)
+                                        handleHorizontalSeeking(event.x)
                                     }
                                     true
                                 }
@@ -542,7 +594,6 @@ fun PlayerOverlay(
                         }
                 )
                 
-                // RIGHT 5% - Video info toggle
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.05f)
@@ -557,7 +608,6 @@ fun PlayerOverlay(
             }
         }
         
-        // BOTTOM SEEK BAR AREA
         if (showSeekbar) {
             Box(
                 modifier = Modifier
@@ -591,7 +641,6 @@ fun PlayerOverlay(
             }
         }
         
-        // VIDEO INFO - Top Left
         if (showVideoInfo != 0) {
             Text(
                 text = displayText,
@@ -604,19 +653,6 @@ fun PlayerOverlay(
             )
         }
         
-        // CENTER SEEK TIME FEEDBACK
-        if (showSeekTime && isHorizontalSwipe) {
-            Text(
-                text = seekTargetTime,
-                style = TextStyle(color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold),
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .background(Color.DarkGray.copy(alpha = 0.9f))
-                    .padding(horizontal = 20.dp, vertical = 10.dp)
-            )
-        }
-        
-        // FEEDBACK AREA
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
                 showVolumeFeedbackState -> Text(
@@ -626,6 +662,11 @@ fun PlayerOverlay(
                 )
                 isSpeedingUp -> Text(
                     text = "2X",
+                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+                showSeekTime -> Text(
+                    text = seekTargetTime,
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
@@ -693,6 +734,114 @@ fun SimpleDraggableProgressBar(
                 }
             )
         })
+    }
+}
+
+// SMART PREVIEW BUFFER MANAGER
+class SmartPreviewBufferManager(
+    private val context: android.content.Context,
+    private val coroutineScope: CoroutineScope
+) {
+    private enum class BufferState { IDLE, CREATING, ACTIVE, SEEKING, CLEANING }
+    private var bufferState = BufferState.IDLE
+    private var currentCenterTime = 0.0
+    private val bufferFiles = mutableListOf<File>()
+    private val bufferDuration = 15
+    private val segmentDuration = 1
+    
+    fun startBufferCreation(centerTime: Double) {
+        if (bufferState == BufferState.IDLE || bufferState == BufferState.CLEANING) {
+            bufferState = BufferState.CREATING
+            currentCenterTime = centerTime
+            coroutineScope.launch(Dispatchers.IO) {
+                createInitialBuffer(centerTime)
+                bufferState = BufferState.ACTIVE
+            }
+        }
+    }
+    
+    fun clearBuffer() {
+        if (bufferState == BufferState.ACTIVE || bufferState == BufferState.CREATING) {
+            bufferState = BufferState.CLEANING
+            coroutineScope.launch(Dispatchers.IO) {
+                bufferFiles.forEach { it.delete() }
+                bufferFiles.clear()
+                bufferState = BufferState.IDLE
+            }
+        }
+    }
+    
+    fun hasActiveBuffer(): Boolean {
+        return bufferState == BufferState.ACTIVE
+    }
+    
+    fun getSeekableBuffer(): File? {
+        return if (bufferState == BufferState.ACTIVE && bufferFiles.size == bufferDuration) {
+            mergeSegmentsToSeekableFile()
+        } else {
+            null
+        }
+    }
+    
+    fun updateBufferCenter(newCenterTime: Double) {
+        if (bufferState == BufferState.ACTIVE) {
+            val timeDiff = newCenterTime - currentCenterTime
+            if (timeDiff >= segmentDuration) {
+                val segmentsToShift = (timeDiff / segmentDuration).toInt()
+                shiftBuffer(segmentsToShift, newCenterTime)
+            }
+        }
+    }
+    
+    private suspend fun createInitialBuffer(centerTime: Double) {
+        for (i in -7..7) {
+            val segmentTime = centerTime + i
+            val segmentFile = createSegment(segmentTime, segmentDuration)
+            if (segmentFile.exists()) {
+                bufferFiles.add(segmentFile)
+            }
+        }
+    }
+    
+    private fun shiftBuffer(segmentsToShift: Int, newCenterTime: Double) {
+        coroutineScope.launch(Dispatchers.IO) {
+            repeat(segmentsToShift) {
+                if (bufferFiles.isNotEmpty()) {
+                    bufferFiles.removeFirst().delete()
+                }
+            }
+            
+            val currentRightEdge = currentCenterTime + 7
+            for (i in 1..segmentsToShift) {
+                val newSegmentTime = currentRightEdge + i
+                val segmentFile = createSegment(newSegmentTime, segmentDuration)
+                if (segmentFile.exists()) {
+                    bufferFiles.add(segmentFile)
+                }
+            }
+            
+            currentCenterTime = newCenterTime
+        }
+    }
+    
+    private fun createSegment(startTime: Double, duration: Int): File {
+        val outputFile = File(context.cacheDir, "segment_${startTime}_${System.currentTimeMillis()}.mp4")
+        
+        // This would use FFmpeg to create the segment
+        // For now, creating empty file as placeholder
+        outputFile.createNewFile()
+        
+        return outputFile
+    }
+    
+    private fun mergeSegmentsToSeekableFile(): File {
+        val seekableFile = File(context.cacheDir, "preview_buffer_${System.currentTimeMillis()}.mp4")
+        
+        // This would use FFmpeg to merge segments
+        // For now, creating empty file as placeholder
+        seekableFile.createNewFile()
+        
+        return seekableFile
     }
 }
 
