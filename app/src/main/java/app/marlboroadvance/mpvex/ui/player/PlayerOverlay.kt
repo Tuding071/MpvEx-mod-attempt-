@@ -315,14 +315,17 @@ fun PlayerOverlay(
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
-        val relativeX = currentX / screenWidthPx // 0.0 to 1.0 across screen
-        val newPositionSeconds = relativeX * seekbarDuration
-        val clampedPosition = newPositionSeconds.coerceIn(0f, seekbarDuration)
+        // Calculate position based on where we started dragging
+        val deltaX = currentX - seekStartX
+        val pixelsPerSecond = screenWidthPx / seekbarDuration // Pixels per second of video
+        val timeDeltaSeconds = deltaX / pixelsPerSecond
+        val newPositionSeconds = seekStartPosition + timeDeltaSeconds
+        val clampedPosition = newPositionSeconds.coerceIn(0.0, seekbarDuration.toDouble())
         
-        seekTargetTime = formatTimeSimple(clampedPosition.toDouble())
-        currentTime = formatTimeSimple(clampedPosition.toDouble())
+        seekTargetTime = formatTimeSimple(clampedPosition)
+        currentTime = formatTimeSimple(clampedPosition)
         
-        performRealTimeSeek(clampedPosition.toDouble())
+        performRealTimeSeek(clampedPosition)
     }
     
     fun handleVerticalSeeking(currentY: Float) {
@@ -612,54 +615,50 @@ fun PlayerOverlay(
         
         // BOTTOM PROGRESS BAR AREA (Visual only - no dragging) - MOVED TO VERY BOTTOM
         if (showSeekbar) {
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(70.dp)
+                    .wrapContentHeight()
                     .align(Alignment.BottomStart)
                     .padding(bottom = 1.dp) // Very bottom with 1dp space
-                    .padding(horizontal = 60.dp)
+                    .padding(horizontal = 60.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp) // Restored gap between time and progress bar
             ) {
-                Column(
-                    modifier = Modifier.fillMaxSize(), 
-                    verticalArrangement = Arrangement.spacedBy(8.dp) // Restored gap between time and progress bar
-                ) {
-                    // Time display
-                    Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
-                        Row(
-                            modifier = Modifier.align(Alignment.CenterStart), 
-                            horizontalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            Text(
-                                text = "$currentTime / $totalTime",
-                                style = TextStyle(
-                                    color = Color.White, 
-                                    fontSize = 14.sp, 
-                                    fontWeight = FontWeight.Medium
-                                ),
-                                modifier = Modifier
-                                    .background(Color.DarkGray.copy(alpha = 0.8f))
-                                    .padding(horizontal = 12.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
-                    
-                    // Progress bar (visual only)
-                    Box(modifier = Modifier.fillMaxWidth().height(24.dp)) {
-                        Box(modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.CenterStart).background(Color.Gray.copy(alpha = 0.6f)))
-                        Box(
+                // Time display
+                Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
+                    Row(
+                        modifier = Modifier.align(Alignment.CenterStart), 
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(
+                            text = "$currentTime / $totalTime",
+                            style = TextStyle(
+                                color = Color.White, 
+                                fontSize = 14.sp, 
+                                fontWeight = FontWeight.Medium
+                            ),
                             modifier = Modifier
-                                .fillMaxWidth(fraction = if (seekbarDuration > 0) (seekbarPosition / seekbarDuration).coerceIn(0f, 1f) else 0f)
-                                .height(4.dp)
-                                .align(Alignment.CenterStart)
-                                .background(Color.White)
+                                .background(Color.DarkGray.copy(alpha = 0.9f)) // Reduced transparency
+                                .padding(horizontal = 12.dp, vertical = 4.dp)
                         )
                     }
+                }
+                
+                // Progress bar (visual only)
+                Box(modifier = Modifier.fillMaxWidth().height(24.dp)) {
+                    Box(modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.CenterStart).background(Color.Gray.copy(alpha = 0.6f)))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(fraction = if (seekbarDuration > 0) (seekbarPosition / seekbarDuration).coerceIn(0f, 1f) else 0f)
+                            .height(4.dp)
+                            .align(Alignment.CenterStart)
+                            .background(Color.White)
+                    )
                 }
             }
         }
         
-        // VIDEO INFO - Top Left (no background, moved up, with shadow)
+        // VIDEO INFO - Top Left (no background, moved up, with better shadow)
         if (showVideoInfo != 0) {
             Text(
                 text = displayText,
@@ -668,9 +667,9 @@ fun PlayerOverlay(
                     fontSize = 15.sp, 
                     fontWeight = FontWeight.Medium,
                     shadow = androidx.compose.ui.graphics.Shadow(
-                        color = Color.Black.copy(alpha = 0.7f),
-                        blurRadius = 4f,
-                        offset = androidx.compose.ui.geometry.Offset(1f, 1f)
+                        color = Color.Black.copy(alpha = 0.9f), // More visible shadow
+                        blurRadius = 8f, // Increased blur
+                        offset = androidx.compose.ui.geometry.Offset(2f, 2f) // Increased offset
                     )
                 ),
                 modifier = Modifier
@@ -679,7 +678,7 @@ fun PlayerOverlay(
             )
         }
         
-        // FEEDBACK AREA (no background, moved up, with shadow)
+        // FEEDBACK AREA (no background, moved up, with better shadow)
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 60.dp)) { // Moved up from 80dp to 60dp
             when {
                 showVolumeFeedbackState -> Text(
@@ -689,9 +688,9 @@ fun PlayerOverlay(
                         fontSize = 14.sp, 
                         fontWeight = FontWeight.Medium,
                         shadow = androidx.compose.ui.graphics.Shadow(
-                            color = Color.Black.copy(alpha = 0.7f),
-                            blurRadius = 4f,
-                            offset = androidx.compose.ui.geometry.Offset(1f, 1f)
+                            color = Color.Black.copy(alpha = 0.9f), // More visible shadow
+                            blurRadius = 8f, // Increased blur
+                            offset = androidx.compose.ui.geometry.Offset(2f, 2f) // Increased offset
                         )
                     )
                 )
@@ -702,9 +701,9 @@ fun PlayerOverlay(
                         fontSize = 14.sp, 
                         fontWeight = FontWeight.Medium,
                         shadow = androidx.compose.ui.graphics.Shadow(
-                            color = Color.Black.copy(alpha = 0.7f),
-                            blurRadius = 4f,
-                            offset = androidx.compose.ui.geometry.Offset(1f, 1f)
+                            color = Color.Black.copy(alpha = 0.9f), // More visible shadow
+                            blurRadius = 8f, // Increased blur
+                            offset = androidx.compose.ui.geometry.Offset(2f, 2f) // Increased offset
                         )
                     )
                 )
@@ -715,9 +714,9 @@ fun PlayerOverlay(
                         fontSize = 14.sp, 
                         fontWeight = FontWeight.Medium,
                         shadow = androidx.compose.ui.graphics.Shadow(
-                            color = Color.Black.copy(alpha = 0.7f),
-                            blurRadius = 4f,
-                            offset = androidx.compose.ui.geometry.Offset(1f, 1f)
+                            color = Color.Black.copy(alpha = 0.9f), // More visible shadow
+                            blurRadius = 8f, // Increased blur
+                            offset = androidx.compose.ui.geometry.Offset(2f, 2f) // Increased offset
                         )
                     )
                 )
@@ -728,9 +727,9 @@ fun PlayerOverlay(
                         fontSize = 14.sp, 
                         fontWeight = FontWeight.Medium,
                         shadow = androidx.compose.ui.graphics.Shadow(
-                            color = Color.Black.copy(alpha = 0.7f),
-                            blurRadius = 4f,
-                            offset = androidx.compose.ui.geometry.Offset(1f, 1f)
+                            color = Color.Black.copy(alpha = 0.9f), // More visible shadow
+                            blurRadius = 8f, // Increased blur
+                            offset = androidx.compose.ui.geometry.Offset(2f, 2f) // Increased offset
                         )
                     )
                 )
