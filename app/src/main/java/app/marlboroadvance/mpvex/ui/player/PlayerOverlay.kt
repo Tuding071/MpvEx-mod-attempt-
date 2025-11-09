@@ -304,20 +304,19 @@ fun PlayerOverlay(
         }
     }
     
+    // NEW: Horizontal swipe acts like grabbing an invisible seekbar thumb
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
-        val deltaX = currentX - seekStartX
-        val pixelsPerSecond = 6f / 0.033f
-        val timeDeltaSeconds = deltaX / pixelsPerSecond
-        val newPositionSeconds = seekStartPosition + timeDeltaSeconds
-        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-        val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
+        val screenWidth = LocalDensity.current.run { context.resources.displayMetrics.widthPixels.toFloat() }
+        val relativeX = currentX / screenWidth // 0.0 to 1.0 across screen
+        val newPositionSeconds = relativeX * seekbarDuration
+        val clampedPosition = newPositionSeconds.coerceIn(0f, seekbarDuration)
         
-        seekTargetTime = formatTimeSimple(clampedPosition)
-        currentTime = formatTimeSimple(clampedPosition)
+        seekTargetTime = formatTimeSimple(clampedPosition.toDouble())
+        currentTime = formatTimeSimple(clampedPosition.toDouble())
         
-        performRealTimeSeek(clampedPosition)
+        performRealTimeSeek(clampedPosition.toDouble())
     }
     
     fun handleVerticalSeeking(currentY: Float) {
@@ -362,6 +361,7 @@ fun PlayerOverlay(
         endHorizontalSeeking() // Same cleanup logic
     }
     
+    // FIXED: Better speed transition to avoid popping sound
     fun endTouch() {
         val touchDuration = System.currentTimeMillis() - touchStartTime
         isTouching = false
@@ -370,7 +370,12 @@ fun PlayerOverlay(
         if (isLongTap) {
             isLongTap = false
             isSpeedingUp = false
-            MPVLib.setPropertyDouble("speed", 1.0)
+            // FIX: Smooth speed transition to avoid popping sound
+            coroutineScope.launch {
+                MPVLib.setPropertyDouble("speed", 1.5) // Intermediate step
+                delay(50)
+                MPVLib.setPropertyDouble("speed", 1.0) // Final step
+            }
         } else if (isHorizontalSwipe) {
             endHorizontalSeeking()
             isHorizontalSwipe = false
@@ -421,7 +426,7 @@ fun PlayerOverlay(
         if (isSpeedingUp) {
             MPVLib.setPropertyDouble("speed", 2.0)
         } else {
-            MPVLib.setPropertyDouble("speed", 1.0)
+            // Don't set speed to 1.0 here - let endTouch handle it smoothly
         }
     }
     
@@ -567,7 +572,7 @@ fun PlayerOverlay(
                                             startVerticalSeeking(event.y)
                                         }
                                     } else if (isHorizontalSwipe) {
-                                        // Continue horizontal seeking
+                                        // Continue horizontal seeking (new seekbar-style)
                                         handleHorizontalSeeking(event.x)
                                     } else if (isVerticalSwipe) {
                                         // Continue vertical seeking
@@ -599,18 +604,19 @@ fun PlayerOverlay(
             }
         }
         
-        // BOTTOM PROGRESS BAR AREA (Visual only - no dragging)
+        // BOTTOM PROGRESS BAR AREA (Visual only - no dragging) - MOVED TO VERY BOTTOM
         if (showSeekbar) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(70.dp)
                     .align(Alignment.BottomStart)
+                    .padding(bottom = 1.dp) // Very bottom with 1dp space
                     .padding(horizontal = 60.dp)
             ) {
                 Column(
                     modifier = Modifier.fillMaxSize(), 
-                    verticalArrangement = Arrangement.spacedBy(1.dp) // Reduced space
+                    verticalArrangement = Arrangement.spacedBy(8.dp) // Restored gap between time and progress bar
                 ) {
                     // Time display
                     Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
