@@ -162,7 +162,7 @@ fun PlayerOverlay(
     fun toggleSeekbarAndInfo() {
         showSeekbar = !showSeekbar
         if (showSeekbar) {
-            showSeekbarWithTimeout()
+            scheduleSeekbarHide()
         } else {
             hideSeekbarJob?.cancel()
         }
