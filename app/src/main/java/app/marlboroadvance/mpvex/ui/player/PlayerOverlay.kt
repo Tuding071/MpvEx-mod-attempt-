@@ -230,10 +230,10 @@ fun PlayerOverlay(
                 delay(100)
                 MPVLib.setPropertyBoolean("pause", false)
             }
-            showPlaybackFeedback("Resume")
+            showPlaybackFeedback("RESUME") // Capital letters
         } else {
             MPVLib.setPropertyBoolean("pause", true)
-            showPlaybackFeedback("Pause")
+            showPlaybackFeedback("PAUSE") // Capital letters
         }
         toggleSeekbarAndInfo()
         isPausing = !currentPaused
@@ -311,28 +311,26 @@ fun PlayerOverlay(
         }
     }
     
-    // FIXED: Horizontal swipe acts like grabbing an invisible seekbar thumb
+    // FIXED: More accurate horizontal seeking calculation
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
-        // Calculate position based on where we started dragging
-        val deltaX = currentX - seekStartX
-        val pixelsPerSecond = screenWidthPx / seekbarDuration // Pixels per second of video
-        val timeDeltaSeconds = deltaX / pixelsPerSecond
-        val newPositionSeconds = seekStartPosition + timeDeltaSeconds
-        val clampedPosition = newPositionSeconds.coerceIn(0.0, seekbarDuration.toDouble())
+        // Calculate position based on screen percentage for better accuracy
+        val screenPercentage = currentX / screenWidthPx
+        val newPositionSeconds = screenPercentage * seekbarDuration
+        val clampedPosition = newPositionSeconds.coerceIn(0f, seekbarDuration)
         
-        seekTargetTime = formatTimeSimple(clampedPosition)
-        currentTime = formatTimeSimple(clampedPosition)
+        seekTargetTime = formatTimeSimple(clampedPosition.toDouble())
+        currentTime = formatTimeSimple(clampedPosition.toDouble())
         
-        performRealTimeSeek(clampedPosition)
+        performRealTimeSeek(clampedPosition.toDouble())
     }
     
     fun handleVerticalSeeking(currentY: Float) {
         if (!isSeeking) return
         
         val deltaY = seekStartY - currentY // Inverted for natural feel (up = forward)
-        val pixelsPerSecond = 6f / 0.033f
+        val pixelsPerSecond = 8f / 0.041f
         val timeDeltaSeconds = deltaY / pixelsPerSecond
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
@@ -370,7 +368,7 @@ fun PlayerOverlay(
         endHorizontalSeeking() // Same cleanup logic
     }
     
-    // FIXED: Better speed transition to avoid popping sound
+    // FIXED: Better speed transition to avoid popping sound - applied to both start and end
     fun endTouch() {
         val touchDuration = System.currentTimeMillis() - touchStartTime
         isTouching = false
@@ -431,9 +429,15 @@ fun PlayerOverlay(
         scheduleSeekbarHide()
     }
     
+    // FIXED: Apply smooth speed transition when starting 2x speed too
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
-            MPVLib.setPropertyDouble("speed", 2.0)
+            // Smooth transition to 2x speed
+            coroutineScope.launch {
+                MPVLib.setPropertyDouble("speed", 1.5) // Intermediate step
+                delay(50)
+                MPVLib.setPropertyDouble("speed", 2.0) // Final step
+            }
         } else {
             // Don't set speed to 1.0 here - let endTouch handle it smoothly
         }
@@ -494,6 +498,7 @@ fun PlayerOverlay(
         }
     }
     
+    // FIXED: Progress bar updates every 33ms instead of 500ms for smoother animation
     LaunchedEffect(Unit) {
         var lastSeconds = -1
         while (isActive) {
@@ -516,7 +521,7 @@ fun PlayerOverlay(
             }
             currentPosition = currentPos
             videoDuration = duration
-            delay(500)
+            delay(33) // Changed from 500ms to 33ms for smoother updates (~30fps)
         }
     }
     
@@ -678,14 +683,14 @@ fun PlayerOverlay(
             )
         }
         
-        // FEEDBACK AREA (no background, moved up, with better shadow)
+        // FEEDBACK AREA (no background, moved up, with better shadow and 50% larger text)
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 60.dp)) { // Moved up from 80dp to 60dp
             when {
                 showVolumeFeedbackState -> Text(
                     text = "Volume: ${(currentVolume.toFloat() / viewModel.maxVolume.toFloat() * 100).toInt()}%",
                     style = TextStyle(
                         color = Color.White, 
-                        fontSize = 14.sp, 
+                        fontSize = 21.sp, // 50% increase from 14sp (14 * 1.5 = 21)
                         fontWeight = FontWeight.Medium,
                         shadow = androidx.compose.ui.graphics.Shadow(
                             color = Color.Black.copy(alpha = 0.9f), // More visible shadow
@@ -698,7 +703,7 @@ fun PlayerOverlay(
                     text = "2X",
                     style = TextStyle(
                         color = Color.White, 
-                        fontSize = 14.sp, 
+                        fontSize = 21.sp, // 50% increase from 14sp
                         fontWeight = FontWeight.Medium,
                         shadow = androidx.compose.ui.graphics.Shadow(
                             color = Color.Black.copy(alpha = 0.9f), // More visible shadow
@@ -711,7 +716,7 @@ fun PlayerOverlay(
                     text = seekTargetTime,
                     style = TextStyle(
                         color = Color.White, 
-                        fontSize = 14.sp, 
+                        fontSize = 21.sp, // 50% increase from 14sp
                         fontWeight = FontWeight.Medium,
                         shadow = androidx.compose.ui.graphics.Shadow(
                             color = Color.Black.copy(alpha = 0.9f), // More visible shadow
@@ -721,10 +726,10 @@ fun PlayerOverlay(
                     )
                 )
                 showPlaybackFeedback -> Text(
-                    text = playbackFeedbackText,
+                    text = playbackFeedbackText, // Now shows "PAUSE" or "RESUME" in capitals
                     style = TextStyle(
                         color = Color.White, 
-                        fontSize = 14.sp, 
+                        fontSize = 21.sp, // 50% increase from 14sp
                         fontWeight = FontWeight.Medium,
                         shadow = androidx.compose.ui.graphics.Shadow(
                             color = Color.Black.copy(alpha = 0.9f), // More visible shadow
