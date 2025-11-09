@@ -126,10 +126,12 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // Get screen width in pixels for horizontal seeking calculation
-    val screenWidthPx = remember(density) {
-        with(density) { context.resources.displayMetrics.widthPixels.toFloat() }
-    }
+    // ORIGINAL SEEKING VARIABLES
+    var dragStartX by remember { mutableStateOf(0f) }
+    var dragStartPosition by remember { mutableStateOf(0f) }
+    var hasPassedThreshold by remember { mutableStateOf(false) }
+    var thresholdStartX by remember { mutableStateOf(0f) }
+    val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
     fun gentleCleanup() {
         MPVLib.setPropertyString("demuxer-readahead-secs", "10")
@@ -230,10 +232,10 @@ fun PlayerOverlay(
                 delay(100)
                 MPVLib.setPropertyBoolean("pause", false)
             }
-            showPlaybackFeedback("RESUME") // Capital letters
+            showPlaybackFeedback("RESUME")
         } else {
             MPVLib.setPropertyBoolean("pause", true)
-            showPlaybackFeedback("PAUSE") // Capital letters
+            showPlaybackFeedback("PAUSE")
         }
         toggleSeekbarAndInfo()
         isPausing = !currentPaused
@@ -281,11 +283,15 @@ fun PlayerOverlay(
         return false
     }
     
+    // ORIGINAL SEEKING LOGIC - Applied to horizontal swipe
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
-        seekStartX = startX
-        seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+        dragStartX = startX
+        dragStartPosition = getFreshPosition()
+        hasPassedThreshold = false
+        thresholdStartX = 0f
+        
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
@@ -311,26 +317,40 @@ fun PlayerOverlay(
         }
     }
     
-    // FIXED: More accurate horizontal seeking calculation
+    // ORIGINAL: handleProgressBarDrag logic applied to horizontal swipe
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
-        // Calculate position based on screen percentage for better accuracy
-        val screenPercentage = currentX / screenWidthPx
-        val newPositionSeconds = screenPercentage * seekbarDuration
-        val clampedPosition = newPositionSeconds.coerceIn(0f, seekbarDuration)
+        val totalMovementX = abs(currentX - dragStartX)
         
-        seekTargetTime = formatTimeSimple(clampedPosition.toDouble())
-        currentTime = formatTimeSimple(clampedPosition.toDouble())
+        // Check if we've passed the movement threshold
+        if (!hasPassedThreshold) {
+            if (totalMovementX > movementThresholdPx) {
+                hasPassedThreshold = true
+                thresholdStartX = currentX
+            } else {
+                // Haven't passed threshold yet, don't seek
+                return
+            }
+        }
         
-        performRealTimeSeek(clampedPosition.toDouble())
+        // Calculate delta from the threshold start position, not the original drag start
+        val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
+        val deltaX = currentX - effectiveStartX
+        val deltaPosition = (deltaX / screenWidthPx) * seekbarDuration
+        val newPosition = (dragStartPosition + deltaPosition).coerceIn(0f, seekbarDuration)
+        
+        seekTargetTime = formatTimeSimple(newPosition.toDouble())
+        currentTime = formatTimeSimple(newPosition.toDouble())
+        
+        performRealTimeSeek(newPosition.toDouble())
     }
     
     fun handleVerticalSeeking(currentY: Float) {
         if (!isSeeking) return
         
         val deltaY = seekStartY - currentY // Inverted for natural feel (up = forward)
-        val pixelsPerSecond = 8f / 0.041f
+        val pixelsPerSecond = 6f / 0.033f
         val timeDeltaSeconds = deltaY / pixelsPerSecond
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
@@ -344,7 +364,7 @@ fun PlayerOverlay(
     
     fun endHorizontalSeeking() {
         if (isSeeking) {
-            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
+            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: dragStartPosition.toDouble()
             performRealTimeSeek(currentPos)
             
             if (wasPlayingBeforeSeek) {
@@ -356,9 +376,10 @@ fun PlayerOverlay(
             
             isSeeking = false
             showSeekTime = false
-            seekStartX = 0f
-            seekStartY = 0f
-            seekStartPosition = 0.0
+            dragStartX = 0f
+            dragStartPosition = 0f
+            hasPassedThreshold = false
+            thresholdStartX = 0f
             wasPlayingBeforeSeek = false
             scheduleSeekbarHide()
         }
@@ -586,7 +607,7 @@ fun PlayerOverlay(
                                             startVerticalSeeking(event.y)
                                         }
                                     } else if (isHorizontalSwipe) {
-                                        // Continue horizontal seeking (new seekbar-style)
+                                        // Continue horizontal seeking (ORIGINAL seekbar logic)
                                         handleHorizontalSeeking(event.x)
                                     } else if (isVerticalSwipe) {
                                         // Continue vertical seeking
@@ -683,14 +704,14 @@ fun PlayerOverlay(
             )
         }
         
-        // FEEDBACK AREA (no background, moved up, with better shadow and 50% larger text)
+        // FEEDBACK AREA (no background, moved up, with better shadow and 25% larger text)
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 60.dp)) { // Moved up from 80dp to 60dp
             when {
                 showVolumeFeedbackState -> Text(
                     text = "Volume: ${(currentVolume.toFloat() / viewModel.maxVolume.toFloat() * 100).toInt()}%",
                     style = TextStyle(
                         color = Color.White, 
-                        fontSize = 21.sp, // 50% increase from 14sp (14 * 1.5 = 21)
+                        fontSize = 17.5.sp, // 25% increase from 14sp (14 * 1.25 = 17.5)
                         fontWeight = FontWeight.Medium,
                         shadow = androidx.compose.ui.graphics.Shadow(
                             color = Color.Black.copy(alpha = 0.9f), // More visible shadow
@@ -703,7 +724,7 @@ fun PlayerOverlay(
                     text = "2X",
                     style = TextStyle(
                         color = Color.White, 
-                        fontSize = 21.sp, // 50% increase from 14sp
+                        fontSize = 17.5.sp, // 25% increase from 14sp
                         fontWeight = FontWeight.Medium,
                         shadow = androidx.compose.ui.graphics.Shadow(
                             color = Color.Black.copy(alpha = 0.9f), // More visible shadow
@@ -716,7 +737,7 @@ fun PlayerOverlay(
                     text = seekTargetTime,
                     style = TextStyle(
                         color = Color.White, 
-                        fontSize = 21.sp, // 50% increase from 14sp
+                        fontSize = 17.5.sp, // 25% increase from 14sp
                         fontWeight = FontWeight.Medium,
                         shadow = androidx.compose.ui.graphics.Shadow(
                             color = Color.Black.copy(alpha = 0.9f), // More visible shadow
@@ -729,7 +750,7 @@ fun PlayerOverlay(
                     text = playbackFeedbackText, // Now shows "PAUSE" or "RESUME" in capitals
                     style = TextStyle(
                         color = Color.White, 
-                        fontSize = 21.sp, // 50% increase from 14sp
+                        fontSize = 17.5.sp, // 25% increase from 14sp
                         fontWeight = FontWeight.Medium,
                         shadow = androidx.compose.ui.graphics.Shadow(
                             color = Color.Black.copy(alpha = 0.9f), // More visible shadow
