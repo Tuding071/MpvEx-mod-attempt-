@@ -172,6 +172,7 @@ fun PlayerOverlay(
         hideSeekbarJob = coroutineScope.launch {
             delay(4000)
             showSeekbar = false
+            showVideoInfo = 0 // Also hide filename when hiding seekbar
         }
     }
     
@@ -186,7 +187,18 @@ fun PlayerOverlay(
     
     fun showSeekbarWithTimeout() {
         showSeekbar = true
+        showVideoInfo = 1 // Also show filename when showing seekbar
         scheduleSeekbarHide()
+    }
+    
+    fun toggleSeekbarAndInfo() {
+        showSeekbar = !showSeekbar
+        showVideoInfo = if (showSeekbar) 1 else 0 // Sync filename with seekbar
+        if (showSeekbar) {
+            scheduleSeekbarHide()
+        } else {
+            hideSeekbarJob?.cancel()
+        }
     }
     
     fun showPlaybackFeedback(text: String) {
@@ -213,11 +225,7 @@ fun PlayerOverlay(
             MPVLib.setPropertyBoolean("pause", true)
             showPlaybackFeedback("PAUSE")
         }
-        if (showSeekbar) {
-            showSeekbar = false
-        } else {
-            showSeekbarWithTimeout()
-        }
+        toggleSeekbarAndInfo() // This now toggles both seekbar and filename
         isPausing = !currentPaused
     }
     
@@ -271,6 +279,8 @@ fun PlayerOverlay(
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
+        showSeekbar = true // Show seekbar when horizontal seeking
+        showVideoInfo = 1 // Show filename when horizontal seeking
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
@@ -285,6 +295,8 @@ fun PlayerOverlay(
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
+        showSeekbar = true // Show seekbar when vertical seeking
+        showVideoInfo = 1 // Show filename when vertical seeking
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
@@ -568,7 +580,7 @@ fun PlayerOverlay(
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                            onClick = { toggleVideoInfo() }
+                            onClick = { toggleSeekbarAndInfo() }
                         )
                 )
                 
@@ -588,13 +600,13 @@ fun PlayerOverlay(
                                 }
                                 MotionEvent.ACTION_MOVE -> {
                                     if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
-                                        // Check if this should become a horizontal swipe
-                                        if (checkForHorizontalSwipe(event.x, event.y)) {
-                                            startHorizontalSeeking(event.x)
-                                        }
-                                        // Check if this should become a vertical swipe
-                                        else if (checkForVerticalSwipe(event.x, event.y)) {
+                                        // FIXED: Check for vertical swipe FIRST to prevent horizontal interference
+                                        if (checkForVerticalSwipe(event.x, event.y)) {
                                             startVerticalSeeking(event.y)
+                                        }
+                                        // Then check for horizontal swipe
+                                        else if (checkForHorizontalSwipe(event.x, event.y)) {
+                                            startHorizontalSeeking(event.x)
                                         }
                                     } else if (isHorizontalSwipe) {
                                         // Continue horizontal seeking
@@ -623,42 +635,45 @@ fun PlayerOverlay(
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                            onClick = { toggleVideoInfo() }
+                            onClick = { toggleSeekbarAndInfo() }
                         )
                 )
             }
         }
         
-        // BOTTOM SEEK BAR AREA (WITH DRAGGING RESTORED)
+        // BOTTOM SEEK BAR AREA (WITH DRAGGING RESTORED) - MOVED TO VERY BOTTOM
         if (showSeekbar) {
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(70.dp)
+                    .wrapContentHeight()
                     .align(Alignment.BottomStart)
-                    .padding(horizontal = 60.dp)
-                    .offset(y = (-1).dp) 
+                    .padding(bottom = 1.dp) // Very bottom with 1dp space
+                    .padding(horizontal = 60.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
-                        Row(modifier = Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                text = "$currentTime / $totalTime",
-                                style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                                modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.9f)).padding(horizontal = 12.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
-                    Box(modifier = Modifier.fillMaxWidth().height(24.dp)) {
-                        SimpleDraggableProgressBar(
-                            position = seekbarPosition,
-                            duration = seekbarDuration,
-                            onValueChange = { handleProgressBarDrag(it) },
-                            onValueChangeFinished = { handleDragFinished() },
-                            getFreshPosition = { getFreshPosition() },
-                            modifier = Modifier.fillMaxSize()
+                // Time display
+                Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
+                    Row(
+                        modifier = Modifier.align(Alignment.CenterStart), 
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(
+                            text = "$currentTime / $totalTime",
+                            style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                            modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.9f)).padding(horizontal = 12.dp, vertical = 4.dp)
                         )
                     }
+                }
+                Box(modifier = Modifier.fillMaxWidth().height(24.dp)) {
+                    SimpleDraggableProgressBar(
+                        position = seekbarPosition,
+                        duration = seekbarDuration,
+                        onValueChange = { handleProgressBarDrag(it) },
+                        onValueChangeFinished = { handleDragFinished() },
+                        getFreshPosition = { getFreshPosition() },
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
             }
         }
