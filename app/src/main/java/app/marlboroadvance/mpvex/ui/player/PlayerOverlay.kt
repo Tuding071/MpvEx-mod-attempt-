@@ -63,6 +63,8 @@ fun PlayerOverlay(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
+    
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
     var seekTargetTime by remember { mutableStateOf("00:00") }
@@ -123,6 +125,11 @@ fun PlayerOverlay(
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
+    
+    // Get screen width in pixels for horizontal seeking calculation
+    val screenWidthPx = remember(density) {
+        with(density) { context.resources.displayMetrics.widthPixels.toFloat() }
+    }
     
     fun gentleCleanup() {
         MPVLib.setPropertyString("demuxer-readahead-secs", "10")
@@ -304,12 +311,11 @@ fun PlayerOverlay(
         }
     }
     
-    // NEW: Horizontal swipe acts like grabbing an invisible seekbar thumb
+    // FIXED: Horizontal swipe acts like grabbing an invisible seekbar thumb
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
-        val screenWidth = LocalDensity.current.run { context.resources.displayMetrics.widthPixels.toFloat() }
-        val relativeX = currentX / screenWidth // 0.0 to 1.0 across screen
+        val relativeX = currentX / screenWidthPx // 0.0 to 1.0 across screen
         val newPositionSeconds = relativeX * seekbarDuration
         val clampedPosition = newPositionSeconds.coerceIn(0f, seekbarDuration)
         
