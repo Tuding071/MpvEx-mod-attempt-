@@ -211,11 +211,6 @@ fun PlayerOverlay(
         }
     }
     
-    fun showSeekbarWithTimeout() {
-        showSeekbar = true
-        scheduleSeekbarHide()
-    }
-    
     fun showPlaybackFeedback(text: String) {
         playbackFeedbackJob?.cancel()
         showPlaybackFeedback = true
