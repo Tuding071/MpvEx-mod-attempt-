@@ -133,6 +133,11 @@ fun PlayerOverlay(
     var thresholdStartX by remember { mutableStateOf(0f) }
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
+    // Get screen width in pixels for horizontal seeking calculation
+    val screenWidthPx = remember(density) {
+        with(density) { context.resources.displayMetrics.widthPixels.toFloat() }
+    }
+    
     fun gentleCleanup() {
         MPVLib.setPropertyString("demuxer-readahead-secs", "10")
         MPVLib.setPropertyString("cache-secs", "10")
@@ -350,7 +355,7 @@ fun PlayerOverlay(
         if (!isSeeking) return
         
         val deltaY = seekStartY - currentY // Inverted for natural feel (up = forward)
-        val pixelsPerSecond = 6f / 0.033f
+        val pixelsPerSecond = 7f / 0.041f // Updated as requested
         val timeDeltaSeconds = deltaY / pixelsPerSecond
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
