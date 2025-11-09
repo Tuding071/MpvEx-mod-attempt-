@@ -63,8 +63,6 @@ fun PlayerOverlay(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val density = LocalDensity.current
-    
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
     var seekTargetTime by remember { mutableStateOf("00:00") }
@@ -126,17 +124,12 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // ORIGINAL SEEKING VARIABLES
+    // SEEKING VARIABLES FOR PROGRESS BAR
     var dragStartX by remember { mutableStateOf(0f) }
     var dragStartPosition by remember { mutableStateOf(0f) }
     var hasPassedThreshold by remember { mutableStateOf(false) }
     var thresholdStartX by remember { mutableStateOf(0f) }
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
-    
-    // Get screen width in pixels for horizontal seeking calculation
-    val screenWidthPx = remember(density) {
-        with(density) { context.resources.displayMetrics.widthPixels.toFloat() }
-    }
     
     fun gentleCleanup() {
         MPVLib.setPropertyString("demuxer-readahead-secs", "10")
@@ -179,7 +172,6 @@ fun PlayerOverlay(
         hideSeekbarJob = coroutineScope.launch {
             delay(4000)
             showSeekbar = false
-            showVideoInfo = 0
         }
     }
     
@@ -192,30 +184,9 @@ fun PlayerOverlay(
         }
     }
     
-    fun toggleSeekbarAndInfo() {
-        showSeekbar = !showSeekbar
-        if (showSeekbar) {
-            scheduleSeekbarHide()
-        } else {
-            hideSeekbarJob?.cancel()
-        }
-        
-        // Always show video info when toggling seekbar
-        showVideoInfo = 1
-        videoInfoJob?.cancel()
-        videoInfoJob = coroutineScope.launch {
-            delay(4000)
-            showVideoInfo = 0
-        }
-    }
-    
-    val showVolumeFeedback: (Int) -> Unit = { volume ->
-        volumeFeedbackJob?.cancel()
-        showVolumeFeedbackState = true
-        volumeFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showVolumeFeedbackState = false
-        }
+    fun showSeekbarWithTimeout() {
+        showSeekbar = true
+        scheduleSeekbarHide()
     }
     
     fun showPlaybackFeedback(text: String) {
@@ -242,7 +213,11 @@ fun PlayerOverlay(
             MPVLib.setPropertyBoolean("pause", true)
             showPlaybackFeedback("PAUSE")
         }
-        toggleSeekbarAndInfo()
+        if (showSeekbar) {
+            showSeekbar = false
+        } else {
+            showSeekbarWithTimeout()
+        }
         isPausing = !currentPaused
     }
     
@@ -288,19 +263,14 @@ fun PlayerOverlay(
         return false
     }
     
-    // ORIGINAL SEEKING LOGIC - Applied to horizontal swipe
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
-        dragStartX = startX
-        dragStartPosition = getFreshPosition()
-        hasPassedThreshold = false
-        thresholdStartX = 0f
-        
+        seekStartX = startX
+        seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
-        showSeekbar = true
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
@@ -315,47 +285,35 @@ fun PlayerOverlay(
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
-        showSeekbar = true
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
         }
     }
     
-    // ORIGINAL: handleProgressBarDrag logic applied to horizontal swipe
+    // UPDATED: Horizontal seeking with new sensitivity
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
-        val totalMovementX = abs(currentX - dragStartX)
+        val deltaX = currentX - seekStartX
+        val pixelsPerSecond = 6f / 1.00f // Updated sensitivity
+        val timeDeltaSeconds = deltaX / pixelsPerSecond
+        val newPositionSeconds = seekStartPosition + timeDeltaSeconds
+        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+        val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
-        // Check if we've passed the movement threshold
-        if (!hasPassedThreshold) {
-            if (totalMovementX > movementThresholdPx) {
-                hasPassedThreshold = true
-                thresholdStartX = currentX
-            } else {
-                // Haven't passed threshold yet, don't seek
-                return
-            }
-        }
+        seekTargetTime = formatTimeSimple(clampedPosition)
+        currentTime = formatTimeSimple(clampedPosition)
         
-        // Calculate delta from the threshold start position, not the original drag start
-        val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
-        val deltaX = currentX - effectiveStartX
-        val deltaPosition = (deltaX / screenWidthPx) * seekbarDuration
-        val newPosition = (dragStartPosition + deltaPosition).coerceIn(0f, seekbarDuration)
-        
-        seekTargetTime = formatTimeSimple(newPosition.toDouble())
-        currentTime = formatTimeSimple(newPosition.toDouble())
-        
-        performRealTimeSeek(newPosition.toDouble())
+        performRealTimeSeek(clampedPosition)
     }
     
+    // UPDATED: Vertical seeking with new sensitivity
     fun handleVerticalSeeking(currentY: Float) {
         if (!isSeeking) return
         
         val deltaY = seekStartY - currentY // Inverted for natural feel (up = forward)
-        val pixelsPerSecond = 7f / 0.041f // Updated as requested
+        val pixelsPerSecond = 6f / 0.041f // Updated sensitivity
         val timeDeltaSeconds = deltaY / pixelsPerSecond
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
@@ -369,7 +327,7 @@ fun PlayerOverlay(
     
     fun endHorizontalSeeking() {
         if (isSeeking) {
-            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: dragStartPosition.toDouble()
+            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
             performRealTimeSeek(currentPos)
             
             if (wasPlayingBeforeSeek) {
@@ -381,10 +339,9 @@ fun PlayerOverlay(
             
             isSeeking = false
             showSeekTime = false
-            dragStartX = 0f
-            dragStartPosition = 0f
-            hasPassedThreshold = false
-            thresholdStartX = 0f
+            seekStartX = 0f
+            seekStartY = 0f
+            seekStartPosition = 0.0
             wasPlayingBeforeSeek = false
             scheduleSeekbarHide()
         }
@@ -394,7 +351,7 @@ fun PlayerOverlay(
         endHorizontalSeeking() // Same cleanup logic
     }
     
-    // FIXED: Better speed transition to avoid popping sound - applied to both start and end
+    // FIXED: Better speed transition to avoid popping sound
     fun endTouch() {
         val touchDuration = System.currentTimeMillis() - touchStartTime
         isTouching = false
@@ -422,13 +379,6 @@ fun PlayerOverlay(
         isHorizontalSwipe = false
         isVerticalSwipe = false
         isLongTap = false
-    }
-    
-    LaunchedEffect(viewModel.currentVolume) {
-        viewModel.currentVolume.collect { volume ->
-            currentVolume = volume
-            showVolumeFeedback(volume)
-        }
     }
     
     LaunchedEffect(Unit) {
@@ -556,6 +506,41 @@ fun PlayerOverlay(
         else -> ""
     }
     
+    // UPDATED: handleProgressBarDrag with movement threshold
+    fun handleProgressBarDrag(newPosition: Float) {
+        cancelAutoHide()
+        if (!isSeeking) {
+            isSeeking = true
+            wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
+            showSeekTime = true
+            if (wasPlayingBeforeSeek) {
+                MPVLib.setPropertyBoolean("pause", true)
+            }
+        }
+        isDragging = true
+        seekbarPosition = newPosition
+        val targetPosition = newPosition.toDouble()
+        
+        seekTargetTime = formatTimeSimple(targetPosition)
+        currentTime = formatTimeSimple(targetPosition)
+        
+        performRealTimeSeek(targetPosition)
+    }
+    
+    fun handleDragFinished() {
+        isDragging = false
+        if (wasPlayingBeforeSeek) {
+            coroutineScope.launch {
+                delay(100)
+                MPVLib.setPropertyBoolean("pause", false)
+            }
+        }
+        isSeeking = false
+        showSeekTime = false
+        wasPlayingBeforeSeek = false
+        scheduleSeekbarHide()
+    }
+    
     Box(modifier = modifier.fillMaxSize()) {
         // MAIN GESTURE AREA - Full screen divided into areas
         Box(modifier = Modifier.fillMaxSize()) {
@@ -583,7 +568,7 @@ fun PlayerOverlay(
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                            onClick = { toggleSeekbarAndInfo() }
+                            onClick = { toggleVideoInfo() }
                         )
                 )
                 
@@ -612,7 +597,7 @@ fun PlayerOverlay(
                                             startVerticalSeeking(event.y)
                                         }
                                     } else if (isHorizontalSwipe) {
-                                        // Continue horizontal seeking (ORIGINAL seekbar logic)
+                                        // Continue horizontal seeking
                                         handleHorizontalSeeking(event.x)
                                     } else if (isVerticalSwipe) {
                                         // Continue vertical seeking
@@ -638,53 +623,42 @@ fun PlayerOverlay(
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                            onClick = { toggleSeekbarAndInfo() }
+                            onClick = { toggleVideoInfo() }
                         )
                 )
             }
         }
         
-        // BOTTOM PROGRESS BAR AREA (Visual only - no dragging) - MOVED TO VERY BOTTOM
+        // BOTTOM SEEK BAR AREA (WITH DRAGGING RESTORED)
         if (showSeekbar) {
-            Column(
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .wrapContentHeight()
+                    .height(70.dp)
                     .align(Alignment.BottomStart)
-                    .padding(bottom = 1.dp) // Very bottom with 1dp space
-                    .padding(horizontal = 60.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp) // Restored gap between time and progress bar
+                    .padding(horizontal = 60.dp)
+                    .offset(y = (-1).dp) 
             ) {
-                // Time display
-                Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
-                    Row(
-                        modifier = Modifier.align(Alignment.CenterStart), 
-                        horizontalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        Text(
-                            text = "$currentTime / $totalTime",
-                            style = TextStyle(
-                                color = Color.White, 
-                                fontSize = 14.sp, 
-                                fontWeight = FontWeight.Medium
-                            ),
-                            modifier = Modifier
-                                .background(Color.DarkGray.copy(alpha = 0.9f)) // Reduced transparency
-                                .padding(horizontal = 12.dp, vertical = 4.dp)
+                Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
+                        Row(modifier = Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "$currentTime / $totalTime",
+                                style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                                modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.9f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                    Box(modifier = Modifier.fillMaxWidth().height(24.dp)) {
+                        SimpleDraggableProgressBar(
+                            position = seekbarPosition,
+                            duration = seekbarDuration,
+                            onValueChange = { handleProgressBarDrag(it) },
+                            onValueChangeFinished = { handleDragFinished() },
+                            getFreshPosition = { getFreshPosition() },
+                            modifier = Modifier.fillMaxSize()
                         )
                     }
-                }
-                
-                // Progress bar (visual only)
-                Box(modifier = Modifier.fillMaxWidth().height(24.dp)) {
-                    Box(modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.CenterStart).background(Color.Gray.copy(alpha = 0.6f)))
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(fraction = if (seekbarDuration > 0) (seekbarPosition / seekbarDuration).coerceIn(0f, 1f) else 0f)
-                            .height(4.dp)
-                            .align(Alignment.CenterStart)
-                            .background(Color.White)
-                    )
                 }
             }
         }
@@ -698,30 +672,30 @@ fun PlayerOverlay(
                     fontSize = 15.sp, 
                     fontWeight = FontWeight.Medium,
                     shadow = androidx.compose.ui.graphics.Shadow(
-                        color = Color.Black.copy(alpha = 0.9f), // More visible shadow
-                        blurRadius = 8f, // Increased blur
-                        offset = androidx.compose.ui.geometry.Offset(2f, 2f) // Increased offset
+                        color = Color.Black.copy(alpha = 0.9f),
+                        blurRadius = 8f,
+                        offset = androidx.compose.ui.geometry.Offset(2f, 2f)
                     )
                 ),
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .offset(x = 60.dp, y = 10.dp) // Moved up from 20dp to 10dp
+                    .offset(x = 60.dp, y = 10.dp)
             )
         }
         
         // FEEDBACK AREA (no background, moved up, with better shadow and 25% larger text)
-        Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 60.dp)) { // Moved up from 80dp to 60dp
+        Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 60.dp)) {
             when {
                 showVolumeFeedbackState -> Text(
                     text = "Volume: ${(currentVolume.toFloat() / viewModel.maxVolume.toFloat() * 100).toInt()}%",
                     style = TextStyle(
                         color = Color.White, 
-                        fontSize = 17.5.sp, // 25% increase from 14sp (14 * 1.25 = 17.5)
+                        fontSize = 17.5.sp, // 25% increase from 14sp
                         fontWeight = FontWeight.Medium,
                         shadow = androidx.compose.ui.graphics.Shadow(
-                            color = Color.Black.copy(alpha = 0.9f), // More visible shadow
-                            blurRadius = 8f, // Increased blur
-                            offset = androidx.compose.ui.geometry.Offset(2f, 2f) // Increased offset
+                            color = Color.Black.copy(alpha = 0.9f),
+                            blurRadius = 8f,
+                            offset = androidx.compose.ui.geometry.Offset(2f, 2f)
                         )
                     )
                 )
@@ -732,9 +706,9 @@ fun PlayerOverlay(
                         fontSize = 17.5.sp, // 25% increase from 14sp
                         fontWeight = FontWeight.Medium,
                         shadow = androidx.compose.ui.graphics.Shadow(
-                            color = Color.Black.copy(alpha = 0.9f), // More visible shadow
-                            blurRadius = 8f, // Increased blur
-                            offset = androidx.compose.ui.geometry.Offset(2f, 2f) // Increased offset
+                            color = Color.Black.copy(alpha = 0.9f),
+                            blurRadius = 8f,
+                            offset = androidx.compose.ui.geometry.Offset(2f, 2f)
                         )
                     )
                 )
@@ -745,27 +719,84 @@ fun PlayerOverlay(
                         fontSize = 17.5.sp, // 25% increase from 14sp
                         fontWeight = FontWeight.Medium,
                         shadow = androidx.compose.ui.graphics.Shadow(
-                            color = Color.Black.copy(alpha = 0.9f), // More visible shadow
-                            blurRadius = 8f, // Increased blur
-                            offset = androidx.compose.ui.geometry.Offset(2f, 2f) // Increased offset
+                            color = Color.Black.copy(alpha = 0.9f),
+                            blurRadius = 8f,
+                            offset = androidx.compose.ui.geometry.Offset(2f, 2f)
                         )
                     )
                 )
                 showPlaybackFeedback -> Text(
-                    text = playbackFeedbackText, // Now shows "PAUSE" or "RESUME" in capitals
+                    text = playbackFeedbackText, // "PAUSE" or "RESUME" in capitals
                     style = TextStyle(
                         color = Color.White, 
                         fontSize = 17.5.sp, // 25% increase from 14sp
                         fontWeight = FontWeight.Medium,
                         shadow = androidx.compose.ui.graphics.Shadow(
-                            color = Color.Black.copy(alpha = 0.9f), // More visible shadow
-                            blurRadius = 8f, // Increased blur
-                            offset = androidx.compose.ui.geometry.Offset(2f, 2f) // Increased offset
+                            color = Color.Black.copy(alpha = 0.9f),
+                            blurRadius = 8f,
+                            offset = androidx.compose.ui.geometry.Offset(2f, 2f)
                         )
                     )
                 )
             }
         }
+    }
+}
+
+@Composable
+fun SimpleDraggableProgressBar(
+    position: Float,
+    duration: Float,
+    onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit,
+    getFreshPosition: () -> Float,
+    modifier: Modifier = Modifier
+) {
+    var dragStartX by remember { mutableStateOf(0f) }
+    var dragStartPosition by remember { mutableStateOf(0f) }
+    var hasPassedThreshold by remember { mutableStateOf(false) }
+    var thresholdStartX by remember { mutableStateOf(0f) }
+    
+    val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
+    
+    Box(modifier = modifier.height(24.dp)) {
+        Box(modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.CenterStart).background(Color.Gray.copy(alpha = 0.6f)))
+        Box(modifier = Modifier.fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f).height(4.dp).align(Alignment.CenterStart).background(Color.White))
+        Box(modifier = Modifier.fillMaxWidth().height(24.dp).align(Alignment.CenterStart).pointerInput(Unit) {
+            detectDragGestures(
+                onDragStart = { offset ->
+                    dragStartX = offset.x
+                    dragStartPosition = getFreshPosition()
+                    hasPassedThreshold = false
+                    thresholdStartX = 0f
+                },
+                onDrag = { change, dragAmount ->
+                    change.consume()
+                    val currentX = change.position.x
+                    val totalMovementX = abs(currentX - dragStartX)
+                    
+                    if (!hasPassedThreshold) {
+                        if (totalMovementX > movementThresholdPx) {
+                            hasPassedThreshold = true
+                            thresholdStartX = currentX
+                        } else {
+                            return@detectDragGestures
+                        }
+                    }
+                    
+                    val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
+                    val deltaX = currentX - effectiveStartX
+                    val deltaPosition = (deltaX / size.width) * duration
+                    val newPosition = (dragStartPosition + deltaPosition).coerceIn(0f, duration)
+                    onValueChange(newPosition)
+                },
+                onDragEnd = { 
+                    hasPassedThreshold = false
+                    thresholdStartX = 0f
+                    onValueChangeFinished() 
+                }
+            )
+        })
     }
 }
 
