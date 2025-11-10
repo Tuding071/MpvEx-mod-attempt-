@@ -486,14 +486,13 @@ fun PlayerOverlay(
         }
     }
     
-    // FIXED: Progress bar updates with proper logic to prevent jumpiness
+    // OLD CODE: Progress bar updates every 500ms (original timing)
     LaunchedEffect(Unit) {
         var lastSeconds = -1
         while (isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
             val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
             val currentSeconds = currentPos.toInt()
-            
             if (isSeeking) {
                 currentTime = seekTargetTime
                 totalTime = formatTimeSimple(duration)
@@ -504,17 +503,14 @@ fun PlayerOverlay(
                     lastSeconds = currentSeconds
                 }
             }
-            
-            // FIXED: Only update progress bar position when NOT dragging/seeking
-            // This prevents the jumpy behavior during seeking
-            if (!isDragging && !isSeeking) {
+            // OLD CODE: Only update when not dragging (original logic)
+            if (!isDragging) {
                 seekbarPosition = currentPos.toFloat()
                 seekbarDuration = duration.toFloat()
             }
-            
             currentPosition = currentPos
             videoDuration = duration
-            delay(33) // Smooth updates but only when not interacting
+            delay(500) // OLD CODE: 500ms delay (original timing)
         }
     }
     
@@ -523,29 +519,31 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // UPDATED: handleProgressBarDrag with movement threshold
+    // OLD CODE: handleProgressBarDrag (exact copy from old code)
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
+            // REMOVED: lastSeekTime = 0L
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
             }
         }
         isDragging = true
-        // FIXED: Only update the seekbar position when we're dragging the progress bar
-        // This prevents the jumpy behavior
         seekbarPosition = newPosition
         val targetPosition = newPosition.toDouble()
         
+        // ALWAYS update UI instantly
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
         
+        // Send seek command with throttle
         performRealTimeSeek(targetPosition)
     }
     
+    // OLD CODE: handleDragFinished (exact copy from old code)
     fun handleDragFinished() {
         isDragging = false
         if (wasPlayingBeforeSeek) {
@@ -648,39 +646,36 @@ fun PlayerOverlay(
             }
         }
         
-        // BOTTOM SEEK BAR AREA (WITH DRAGGING RESTORED) - MOVED TO VERY BOTTOM
+        // BOTTOM SEEK BAR AREA (OLD POSITION - not at very bottom)
         if (showSeekbar) {
-            Column(
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .wrapContentHeight()
+                    .height(70.dp)
                     .align(Alignment.BottomStart)
-                    .padding(bottom = 1.dp) // Very bottom with 1dp space
-                    .padding(horizontal = 60.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                    .padding(horizontal = 60.dp)
+                    .offset(y = (-1).dp) 
             ) {
-                // Time display
-                Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
-                    Row(
-                        modifier = Modifier.align(Alignment.CenterStart), 
-                        horizontalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        Text(
-                            text = "$currentTime / $totalTime",
-                            style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                            modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.9f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
+                        Row(modifier = Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "$currentTime / $totalTime",
+                                style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                                modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.9f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                    Box(modifier = Modifier.fillMaxWidth().height(24.dp)) {
+                        SimpleDraggableProgressBar(
+                            position = seekbarPosition,
+                            duration = seekbarDuration,
+                            onValueChange = { handleProgressBarDrag(it) },
+                            onValueChangeFinished = { handleDragFinished() },
+                            getFreshPosition = { getFreshPosition() },
+                            modifier = Modifier.fillMaxSize()
                         )
                     }
-                }
-                Box(modifier = Modifier.fillMaxWidth().height(24.dp)) {
-                    SimpleDraggableProgressBar(
-                        position = seekbarPosition,
-                        duration = seekbarDuration,
-                        onValueChange = { handleProgressBarDrag(it) },
-                        onValueChangeFinished = { handleDragFinished() },
-                        getFreshPosition = { getFreshPosition() },
-                        modifier = Modifier.fillMaxSize()
-                    )
                 }
             }
         }
@@ -777,8 +772,9 @@ fun SimpleDraggableProgressBar(
     var dragStartX by remember { mutableStateOf(0f) }
     var dragStartPosition by remember { mutableStateOf(0f) }
     var hasPassedThreshold by remember { mutableStateOf(false) }
-    var thresholdStartX by remember { mutableStateOf(0f) }
+    var thresholdStartX by remember { mutableStateOf(0f) } // NEW: Track where threshold was passed
     
+    // Convert 25dp to pixels for the movement threshold
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
     Box(modifier = modifier.height(24.dp)) {
@@ -788,24 +784,28 @@ fun SimpleDraggableProgressBar(
             detectDragGestures(
                 onDragStart = { offset ->
                     dragStartX = offset.x
+                    // GET FRESH POSITION IMMEDIATELY WHEN DRAG STARTS
                     dragStartPosition = getFreshPosition()
-                    hasPassedThreshold = false
-                    thresholdStartX = 0f
+                    hasPassedThreshold = false // Reset threshold flag
+                    thresholdStartX = 0f // Reset threshold start position
                 },
                 onDrag = { change, dragAmount ->
                     change.consume()
                     val currentX = change.position.x
                     val totalMovementX = abs(currentX - dragStartX)
                     
+                    // Check if we've passed the movement threshold
                     if (!hasPassedThreshold) {
                         if (totalMovementX > movementThresholdPx) {
                             hasPassedThreshold = true
-                            thresholdStartX = currentX
+                            thresholdStartX = currentX // NEW: Store position where threshold was passed
                         } else {
+                            // Haven't passed threshold yet, don't seek
                             return@detectDragGestures
                         }
                     }
                     
+                    // Calculate delta from the threshold start position, not the original drag start
                     val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
                     val deltaX = currentX - effectiveStartX
                     val deltaPosition = (deltaX / size.width) * duration
@@ -813,8 +813,8 @@ fun SimpleDraggableProgressBar(
                     onValueChange(newPosition)
                 },
                 onDragEnd = { 
-                    hasPassedThreshold = false
-                    thresholdStartX = 0f
+                    hasPassedThreshold = false // Reset for next drag
+                    thresholdStartX = 0f // Reset threshold start
                     onValueChangeFinished() 
                 }
             )
