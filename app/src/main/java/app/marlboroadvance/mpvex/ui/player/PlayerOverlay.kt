@@ -486,13 +486,14 @@ fun PlayerOverlay(
         }
     }
     
-    // FIXED: Progress bar updates every 33ms instead of 500ms for smoother animation
+    // FIXED: Progress bar updates with proper logic to prevent jumpiness
     LaunchedEffect(Unit) {
         var lastSeconds = -1
         while (isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
             val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
             val currentSeconds = currentPos.toInt()
+            
             if (isSeeking) {
                 currentTime = seekTargetTime
                 totalTime = formatTimeSimple(duration)
@@ -503,13 +504,17 @@ fun PlayerOverlay(
                     lastSeconds = currentSeconds
                 }
             }
-            if (!isDragging) {
+            
+            // FIXED: Only update progress bar position when NOT dragging/seeking
+            // This prevents the jumpy behavior during seeking
+            if (!isDragging && !isSeeking) {
                 seekbarPosition = currentPos.toFloat()
                 seekbarDuration = duration.toFloat()
             }
+            
             currentPosition = currentPos
             videoDuration = duration
-            delay(33) // Changed from 500ms to 33ms for smoother updates (~30fps)
+            delay(33) // Smooth updates but only when not interacting
         }
     }
     
@@ -530,6 +535,8 @@ fun PlayerOverlay(
             }
         }
         isDragging = true
+        // FIXED: Only update the seekbar position when we're dragging the progress bar
+        // This prevents the jumpy behavior
         seekbarPosition = newPosition
         val targetPosition = newPosition.toDouble()
         
