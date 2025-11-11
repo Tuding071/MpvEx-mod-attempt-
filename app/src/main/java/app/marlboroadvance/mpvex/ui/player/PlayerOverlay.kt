@@ -558,7 +558,7 @@ fun PlayerOverlay(
                     .height(70.dp)
                     .align(Alignment.BottomStart)
                     .padding(horizontal = 60.dp)
-                    .offset(y = (2).dp) 
+                    .offset(y = (4).dp) 
             ) {
                 Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
@@ -570,7 +570,7 @@ fun PlayerOverlay(
                             )
                         }
                     }
-                    Box(modifier = Modifier.fillMaxWidth().height(72.dp)) {
+                    Box(modifier = Modifier.fillMaxWidth().height(120.dp)) {
                         SimpleDraggableProgressBar(
                             position = seekbarPosition,
                             duration = seekbarDuration,
