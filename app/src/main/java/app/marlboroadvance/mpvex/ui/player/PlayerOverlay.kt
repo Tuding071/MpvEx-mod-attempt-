@@ -87,6 +87,10 @@ fun PlayerOverlay(
     var isSeekInProgress by remember { mutableStateOf(false) }
     val seekThrottleMs = 30L
     
+    // BLACK FRAME STATE
+    var showBlackFrame by remember { mutableStateOf(false) }
+    var blackFrameJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    
     // GESTURE STATES
     var touchStartTime by remember { mutableStateOf(0L) }
     var touchStartX by remember { mutableStateOf(0f) }
@@ -119,7 +123,7 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // MINIMALIST BOUNDARY CROSSING SEEK
+    // BLACK FRAME SEEK FUNCTION
     fun performRealTimeSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         
@@ -129,16 +133,25 @@ fun PlayerOverlay(
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
             val direction = if (targetPosition > currentPos) 1 else -1
             
-            // MINIMALIST APPROACH: Always cross boundaries by seeking slightly past the target
-            val nudgeAmount = 0.3 // seconds - enough to cross most segment boundaries
+            val nudgeAmount = 0.5
             val nudgedPosition = targetPosition + (nudgeAmount * direction)
             
-            // Step 1: Seek to nudged position to cross boundaries
-            MPVLib.command("seek", nudgedPosition.toString(), "absolute", "exact")
-            delay(30) // Brief pause to ensure boundary crossing
+            // Cancel any previous black frame
+            blackFrameJob?.cancel()
             
-            // Step 2: Seek back to exact target position
+            // STEP 1: First seek to cross boundary (no black frame yet)
+            MPVLib.command("seek", nudgedPosition.toString(), "absolute", "exact")
+            delay(15) // Let first seek complete
+            
+            // STEP 2: Show black frame RIGHT BEFORE seekback
+            showBlackFrame = true
+            
+            // STEP 3: Seek back to target (happens while screen is black)
             MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+            delay(20) // Let seekback complete
+            
+            // STEP 4: Remove black frame after seekback is done
+            showBlackFrame = false
             
             delay(seekThrottleMs)
             isSeekInProgress = false
@@ -538,6 +551,15 @@ fun PlayerOverlay(
             }
         }
         
+        // BLACK FRAME OVERLAY - Hides seekback glitch
+        if (showBlackFrame) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+            )
+        }
+        
         // BOTTOM SEEK BAR AREA
         if (showSeekbar) {
             Box(
@@ -546,7 +568,7 @@ fun PlayerOverlay(
                     .height(70.dp)
                     .align(Alignment.BottomStart)
                     .padding(horizontal = 60.dp)
-                    .offset(y = (8).dp) 
+                    .offset(y = (4).dp) 
             ) {
                 Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
@@ -558,7 +580,7 @@ fun PlayerOverlay(
                             )
                         }
                     }
-                    Box(modifier = Modifier.fillMaxWidth().height(180.dp)) {
+                    Box(modifier = Modifier.fillMaxWidth().height(120.dp)) {
                         SimpleDraggableProgressBar(
                             position = seekbarPosition,
                             duration = seekbarDuration,
