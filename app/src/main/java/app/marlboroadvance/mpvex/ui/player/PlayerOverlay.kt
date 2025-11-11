@@ -84,14 +84,12 @@ fun PlayerOverlay(
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
+    // REMOVED: lastSeekTime and seekDebounceMs
+    // ADD: Simple throttle control
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 30L
+    val seekThrottleMs = 30L // Small delay between seek commands
     
-    // BLACK FRAME STATE
-    var showBlackFrame by remember { mutableStateOf(false) }
-    var blackFrameJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    
-    // GESTURE STATES
+    // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
     var touchStartTime by remember { mutableStateOf(0L) }
     var touchStartX by remember { mutableStateOf(0f) }
     var touchStartY by remember { mutableStateOf(0f) }
@@ -101,9 +99,9 @@ fun PlayerOverlay(
     var longTapJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     // THRESHOLDS
-    val longTapThreshold = 300L
-    val horizontalSwipeThreshold = 30f
-    val maxVerticalMovement = 50f
+    val longTapThreshold = 300L // ms
+    val horizontalSwipeThreshold = 30f // pixels - minimum horizontal movement to trigger seeking
+    val maxVerticalMovement = 50f // pixels - maximum vertical movement allowed for horizontal swipe
     
     var showVideoInfo by remember { mutableStateOf(0) }
     var videoTitle by remember { mutableStateOf("Video") }
@@ -123,41 +121,21 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // BLACK FRAME SEEK FUNCTION
+    // UPDATED: performRealTimeSeek with throttle
     fun performRealTimeSeek(targetPosition: Double) {
-        if (isSeekInProgress) return
+        if (isSeekInProgress) return // Skip if we're already processing a seek
         
         isSeekInProgress = true
+        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
         
+        // Reset after throttle period
         coroutineScope.launch {
-            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-            val direction = if (targetPosition > currentPos) 1 else -1
-            
-            val nudgeAmount = 0.5
-            val nudgedPosition = targetPosition + (nudgeAmount * direction)
-            
-            // Cancel any previous black frame
-            blackFrameJob?.cancel()
-            
-            // STEP 1: First seek to cross boundary (no black frame yet)
-            MPVLib.command("seek", nudgedPosition.toString(), "absolute", "exact")
-            delay(15) // Let first seek complete
-            
-            // STEP 2: Show black frame RIGHT BEFORE seekback
-            showBlackFrame = true
-            
-            // STEP 3: Seek back to target (happens while screen is black)
-            MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
-            delay(20) // Let seekback complete
-            
-            // STEP 4: Remove black frame after seekback is done
-            showBlackFrame = false
-            
             delay(seekThrottleMs)
             isSeekInProgress = false
         }
     }
     
+    // NEW: Function to get fresh position from MPV
     fun getFreshPosition(): Float {
         return (MPVLib.getPropertyDouble("time-pos") ?: 0.0).toFloat()
     }
@@ -259,14 +237,18 @@ fun PlayerOverlay(
     }
     
     fun checkForHorizontalSwipe(currentX: Float, currentY: Float): Boolean {
-        if (isHorizontalSwipe || isLongTap) return false
+        if (isHorizontalSwipe || isLongTap) return false // Already determined or long tap active
         
         val deltaX = kotlin.math.abs(currentX - touchStartX)
         val deltaY = kotlin.math.abs(currentY - touchStartY)
         
+        // Only trigger horizontal swipe if:
+        // 1. Horizontal movement is significant (> threshold)
+        // 2. Horizontal movement is greater than vertical movement (primarily horizontal)
+        // 3. Vertical movement is within acceptable limits
         if (deltaX > horizontalSwipeThreshold && deltaX > deltaY && deltaY < maxVerticalMovement) {
             isHorizontalSwipe = true
-            longTapJob?.cancel()
+            longTapJob?.cancel() // Cancel long tap detection
             return true
         }
         return false
@@ -280,25 +262,29 @@ fun PlayerOverlay(
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
+        // REMOVED: lastSeekTime = 0L
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
         }
     }
     
+    // UPDATED: handleHorizontalSeeking without debouncing
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
         val deltaX = currentX - seekStartX
-        val pixelsPerSecond = 12f / 0.041f
+        val pixelsPerSecond = 9f / 0.041f
         val timeDeltaSeconds = deltaX / pixelsPerSecond
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
+        // ALWAYS update UI instantly
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
         
+        // Send seek command with throttle
         performRealTimeSeek(clampedPosition)
     }
     
@@ -329,15 +315,19 @@ fun PlayerOverlay(
         longTapJob?.cancel()
         
         if (isLongTap) {
+            // Long tap ended - reset speed
             isLongTap = false
             isSpeedingUp = false
             MPVLib.setPropertyDouble("speed", 1.0)
         } else if (isHorizontalSwipe) {
+            // Horizontal swipe ended
             endHorizontalSeeking()
             isHorizontalSwipe = false
         } else if (touchDuration < 150) {
+            // Short tap (less than 150ms)
             handleTap()
         }
+        // Reset all gesture states
         isHorizontalSwipe = false
         isLongTap = false
     }
@@ -366,6 +356,7 @@ fun PlayerOverlay(
         scheduleSeekbarHide()
     }
     
+    // Backup speed control
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
             MPVLib.setPropertyDouble("speed", 2.0)
@@ -438,12 +429,14 @@ fun PlayerOverlay(
         else -> ""
     }
     
+    // UPDATED: handleProgressBarDrag with movement threshold
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
+            // REMOVED: lastSeekTime = 0L
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
             }
@@ -452,9 +445,11 @@ fun PlayerOverlay(
         seekbarPosition = newPosition
         val targetPosition = newPosition.toDouble()
         
+        // ALWAYS update UI instantly
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
         
+        // Send seek command with throttle
         performRealTimeSeek(targetPosition)
     }
     
@@ -473,7 +468,7 @@ fun PlayerOverlay(
     }
     
     Box(modifier = modifier.fillMaxSize()) {
-        // MAIN GESTURE AREA
+        // MAIN GESTURE AREA - Full screen divided into areas
         Box(modifier = Modifier.fillMaxSize()) {
             // TOP 5% - Ignore area
             Box(
@@ -503,12 +498,13 @@ fun PlayerOverlay(
                         )
                 )
                 
-                // CENTER 90% - All gestures
+                // CENTER 90% - All gestures (tap, long tap, horizontal swipe)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.9f)
                         .fillMaxHeight()
                         .align(Alignment.Center)
+                        // USE SINGLE pointerInteropFilter FOR ALL GESTURES TO AVOID CONFLICTS
                         .pointerInteropFilter { event ->
                             when (event.action) {
                                 MotionEvent.ACTION_DOWN -> {
@@ -519,12 +515,15 @@ fun PlayerOverlay(
                                 }
                                 MotionEvent.ACTION_MOVE -> {
                                     if (!isHorizontalSwipe && !isLongTap) {
+                                        // Check if this should become a horizontal swipe
                                         if (checkForHorizontalSwipe(event.x, event.y)) {
                                             startHorizontalSeeking(event.x)
                                         }
                                     } else if (isHorizontalSwipe) {
+                                        // Continue horizontal seeking
                                         handleHorizontalSeeking(event.x)
                                     }
+                                    // If it's a long tap, ignore movement (allow slight finger movement during hold)
                                     true
                                 }
                                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -551,15 +550,6 @@ fun PlayerOverlay(
             }
         }
         
-        // BLACK FRAME OVERLAY - Hides seekback glitch
-        if (showBlackFrame) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black)
-            )
-        }
-        
         // BOTTOM SEEK BAR AREA
         if (showSeekbar) {
             Box(
@@ -568,7 +558,7 @@ fun PlayerOverlay(
                     .height(70.dp)
                     .align(Alignment.BottomStart)
                     .padding(horizontal = 60.dp)
-                    .offset(y = (8).dp) 
+                    .offset(y = (3).dp) 
             ) {
                 Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
@@ -586,7 +576,7 @@ fun PlayerOverlay(
                             duration = seekbarDuration,
                             onValueChange = { handleProgressBarDrag(it) },
                             onValueChangeFinished = { handleDragFinished() },
-                            getFreshPosition = { getFreshPosition() },
+                            getFreshPosition = { getFreshPosition() }, // NEW: Pass fresh position function
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -647,8 +637,9 @@ fun SimpleDraggableProgressBar(
     var dragStartX by remember { mutableStateOf(0f) }
     var dragStartPosition by remember { mutableStateOf(0f) }
     var hasPassedThreshold by remember { mutableStateOf(false) }
-    var thresholdStartX by remember { mutableStateOf(0f) }
+    var thresholdStartX by remember { mutableStateOf(0f) } // NEW: Track where threshold was passed
     
+    // Convert 25dp to pixels for the movement threshold
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
     Box(modifier = modifier.height(24.dp)) {
@@ -658,24 +649,28 @@ fun SimpleDraggableProgressBar(
             detectDragGestures(
                 onDragStart = { offset ->
                     dragStartX = offset.x
+                    // GET FRESH POSITION IMMEDIATELY WHEN DRAG STARTS
                     dragStartPosition = getFreshPosition()
-                    hasPassedThreshold = false
-                    thresholdStartX = 0f
+                    hasPassedThreshold = false // Reset threshold flag
+                    thresholdStartX = 0f // Reset threshold start position
                 },
                 onDrag = { change, dragAmount ->
                     change.consume()
                     val currentX = change.position.x
                     val totalMovementX = abs(currentX - dragStartX)
                     
+                    // Check if we've passed the movement threshold
                     if (!hasPassedThreshold) {
                         if (totalMovementX > movementThresholdPx) {
                             hasPassedThreshold = true
-                            thresholdStartX = currentX
+                            thresholdStartX = currentX // NEW: Store position where threshold was passed
                         } else {
+                            // Haven't passed threshold yet, don't seek
                             return@detectDragGestures
                         }
                     }
                     
+                    // Calculate delta from the threshold start position, not the original drag start
                     val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
                     val deltaX = currentX - effectiveStartX
                     val deltaPosition = (deltaX / size.width) * duration
@@ -683,8 +678,8 @@ fun SimpleDraggableProgressBar(
                     onValueChange(newPosition)
                 },
                 onDragEnd = { 
-                    hasPassedThreshold = false
-                    thresholdStartX = 0f
+                    hasPassedThreshold = false // Reset for next drag
+                    thresholdStartX = 0f // Reset threshold start
                     onValueChangeFinished() 
                 }
             )
