@@ -290,7 +290,7 @@ fun PlayerOverlay(
         if (!isSeeking) return
         
         val deltaX = currentX - seekStartX
-        val pixelsPerSecond = 6f / 0.033f
+        val pixelsPerSecond = 12f / 0.041f
         val timeDeltaSeconds = deltaX / pixelsPerSecond
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
@@ -568,7 +568,7 @@ fun PlayerOverlay(
                     .height(70.dp)
                     .align(Alignment.BottomStart)
                     .padding(horizontal = 60.dp)
-                    .offset(y = (4).dp) 
+                    .offset(y = (8).dp) 
             ) {
                 Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
@@ -580,7 +580,7 @@ fun PlayerOverlay(
                             )
                         }
                     }
-                    Box(modifier = Modifier.fillMaxWidth().height(120.dp)) {
+                    Box(modifier = Modifier.fillMaxWidth().height(220.dp)) {
                         SimpleDraggableProgressBar(
                             position = seekbarPosition,
                             duration = seekbarDuration,
