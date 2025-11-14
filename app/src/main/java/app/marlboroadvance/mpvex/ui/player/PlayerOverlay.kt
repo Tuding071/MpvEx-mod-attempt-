@@ -414,9 +414,37 @@ fun PlayerOverlay(
     }
     
     LaunchedEffect(Unit) {
-        // MPV configuration (same as before)
+        // MPV configuration
         MPVLib.setPropertyString("hwdec", "no")
-        // ... rest of MPV config
+        MPVLib.setPropertyString("vo", "gpu")
+        MPVLib.setPropertyString("profile", "fast")
+        MPVLib.setPropertyString("vd-lavc-threads", "4")
+        MPVLib.setPropertyString("audio-channels", "auto")
+        MPVLib.setPropertyString("demuxer-lavf-threads", "4")
+        MPVLib.setPropertyString("cache", "yes")
+        MPVLib.setPropertyInt("demuxer-max-bytes", 150 * 1024 * 1024)
+        MPVLib.setPropertyString("demuxer-readahead-secs", "60")
+        MPVLib.setPropertyString("cache-secs", "60")
+        MPVLib.setPropertyString("cache-pause", "no")
+        MPVLib.setPropertyString("cache-initial", "0.5")
+        MPVLib.setPropertyString("video-sync", "display-resample")
+        MPVLib.setPropertyString("untimed", "yes")
+        MPVLib.setPropertyString("hr-seek", "yes")
+        MPVLib.setPropertyString("hr-seek-framedrop", "no")
+        MPVLib.setPropertyString("vd-lavc-fast", "yes")
+        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
+        MPVLib.setPropertyString("vd-lavc-skipidct", "all")
+        MPVLib.setPropertyString("vd-lavc-assemble", "yes")
+        MPVLib.setPropertyString("demuxer-max-back-bytes", "50M")
+        MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
+        MPVLib.setPropertyString("gpu-dumb-mode", "yes")
+        MPVLib.setPropertyString("opengl-pbo", "yes")
+        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1")
+        MPVLib.setPropertyString("network-timeout", "30")
+        MPVLib.setPropertyString("audio-client-name", "MPVEx-Software-4Core")
+        MPVLib.setPropertyString("audio-samplerate", "auto")
+        MPVLib.setPropertyString("deband", "no")
+        MPVLib.setPropertyString("video-aspect-override", "no")
     }
     
     LaunchedEffect(Unit) {
@@ -485,41 +513,82 @@ fun PlayerOverlay(
     }
     
     Box(modifier = modifier.fillMaxSize()) {
-        // MAIN GESTURE AREA
+        // MAIN GESTURE AREA - Full screen divided into areas
         Box(modifier = Modifier.fillMaxSize()) {
-            // ... (gesture area layout remains the same)
+            // TOP 5% - Ignore area
             Box(
                 modifier = Modifier
-                    .fillMaxWidth(0.9f)
-                    .fillMaxHeight()
-                    .align(Alignment.Center)
-                    .pointerInteropFilter { event ->
-                        when (event.action) {
-                            MotionEvent.ACTION_DOWN -> {
-                                touchStartX = event.x
-                                touchStartY = event.y
-                                startLongTapDetection()
-                                true
-                            }
-                            MotionEvent.ACTION_MOVE -> {
-                                if (!isHorizontalSwipe && !isLongTap) {
-                                    if (checkForHorizontalSwipe(event.x, event.y)) {
-                                        startHorizontalSeeking(event.x)
-                                    }
-                                } else if (isHorizontalSwipe) {
-                                    handleHorizontalSeeking(event.x)
-                                }
-                                true
-                            }
-                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                endTouch()
-                                true
-                            }
-                            else -> false
-                        }
-                    }
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.05f)
+                    .align(Alignment.TopStart)
             )
-            // ... (rest of gesture area)
+            
+            // CENTER AREA - 95% height, divided into left/center/right
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.95f)
+                    .align(Alignment.BottomStart)
+            ) {
+                // LEFT 5% - Video info toggle
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.05f)
+                        .fillMaxHeight()
+                        .align(Alignment.CenterStart)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { toggleVideoInfo() }
+                        )
+                )
+                
+                // CENTER 90% - All gestures (tap, long tap, horizontal swipe)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
+                        .fillMaxHeight()
+                        .align(Alignment.Center)
+                        .pointerInteropFilter { event ->
+                            when (event.action) {
+                                MotionEvent.ACTION_DOWN -> {
+                                    touchStartX = event.x
+                                    touchStartY = event.y
+                                    startLongTapDetection()
+                                    true
+                                }
+                                MotionEvent.ACTION_MOVE -> {
+                                    if (!isHorizontalSwipe && !isLongTap) {
+                                        if (checkForHorizontalSwipe(event.x, event.y)) {
+                                            startHorizontalSeeking(event.x)
+                                        }
+                                    } else if (isHorizontalSwipe) {
+                                        handleHorizontalSeeking(event.x)
+                                    }
+                                    true
+                                }
+                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                    endTouch()
+                                    true
+                                }
+                                else -> false
+                            }
+                        }
+                )
+                
+                // RIGHT 5% - Video info toggle
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.05f)
+                        .fillMaxHeight()
+                        .align(Alignment.CenterEnd)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { toggleVideoInfo() }
+                        )
+                )
+            }
         }
         
         // BOTTOM SEEK BAR AREA
@@ -606,7 +675,6 @@ fun PlayerOverlay(
     }
 }
 
-// Progress bar remains the same
 @Composable
 fun SimpleDraggableProgressBar(
     position: Float,
@@ -616,22 +684,95 @@ fun SimpleDraggableProgressBar(
     getFreshPosition: () -> Float,
     modifier: Modifier = Modifier
 ) {
-    // ... (implementation remains the same)
+    var dragStartX by remember { mutableStateOf(0f) }
+    var dragStartPosition by remember { mutableStateOf(0f) }
+    var hasPassedThreshold by remember { mutableStateOf(false) }
+    var thresholdStartX by remember { mutableStateOf(0f) }
+    
+    // Convert 25dp to pixels for the movement threshold
+    val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
+    
+    Box(modifier = modifier.height(24.dp)) {
+        Box(modifier = Modifier.fillMaxWidth().height(4.dp).align(Alignment.CenterStart).background(Color.Gray.copy(alpha = 0.6f)))
+        Box(modifier = Modifier.fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f).height(4.dp).align(Alignment.CenterStart).background(Color.White))
+        Box(modifier = Modifier.fillMaxWidth().height(24.dp).align(Alignment.CenterStart).pointerInput(Unit) {
+            detectDragGestures(
+                onDragStart = { offset ->
+                    dragStartX = offset.x
+                    // GET FRESH POSITION IMMEDIATELY WHEN DRAG STARTS
+                    dragStartPosition = getFreshPosition()
+                    hasPassedThreshold = false // Reset threshold flag
+                    thresholdStartX = 0f // Reset threshold start position
+                },
+                onDrag = { change, dragAmount ->
+                    change.consume()
+                    val currentX = change.position.x
+                    val totalMovementX = abs(currentX - dragStartX)
+                    
+                    // Check if we've passed the movement threshold
+                    if (!hasPassedThreshold) {
+                        if (totalMovementX > movementThresholdPx) {
+                            hasPassedThreshold = true
+                            thresholdStartX = currentX // NEW: Store position where threshold was passed
+                        } else {
+                            // Haven't passed threshold yet, don't seek
+                            return@detectDragGestures
+                        }
+                    }
+                    
+                    // Calculate delta from the threshold start position, not the original drag start
+                    val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
+                    val deltaX = currentX - effectiveStartX
+                    val deltaPosition = (deltaX / size.width) * duration
+                    val newPosition = (dragStartPosition + deltaPosition).coerceIn(0f, duration)
+                    onValueChange(newPosition)
+                },
+                onDragEnd = { 
+                    hasPassedThreshold = false // Reset for next drag
+                    thresholdStartX = 0f // Reset threshold start
+                    onValueChangeFinished() 
+                }
+            )
+        })
+    }
 }
 
-// Helper functions remain the same
 private fun formatTimeSimple(seconds: Double): String {
-    // ... (implementation remains the same)
+    val totalSeconds = seconds.toInt()
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val secs = totalSeconds % 60
+    return if (hours > 0) String.format("%02d:%02d:%02d", hours, minutes, secs) else String.format("%02d:%02d", minutes, secs)
 }
 
 private fun getFileNameFromUri(uri: Uri?, context: android.content.Context): String {
-    // ... (implementation remains the same)
+    if (uri == null) return getBestAvailableFileName(context)
+    return when {
+        uri.scheme == "file" -> uri.lastPathSegment?.substringBeforeLast(".") ?: getBestAvailableFileName(context)
+        uri.scheme == "content" -> getDisplayNameFromContentUri(uri, context) ?: getBestAvailableFileName(context)
+        uri.scheme in listOf("http", "https") -> uri.lastPathSegment?.substringBeforeLast(".") ?: "Online Video"
+        else -> getBestAvailableFileName(context)
+    }
 }
 
 private fun getDisplayNameFromContentUri(uri: Uri, context: android.content.Context): String? {
-    // ... (implementation remains the same)
+    return try {
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val displayNameIndex = cursor.getColumnIndex("_display_name")
+                val displayName = if (displayNameIndex != -1) cursor.getString(displayNameIndex)?.substringBeforeLast(".") else null
+                displayName ?: uri.lastPathSegment?.substringBeforeLast(".")
+            } else null
+        }
+    } catch (e: Exception) { 
+        null 
+    }
 }
 
 private fun getBestAvailableFileName(context: android.content.Context): String {
-    // ... (implementation remains the same)
+    val mediaTitle = MPVLib.getPropertyString("media-title")
+    if (mediaTitle != null && mediaTitle != "Video" && mediaTitle.isNotBlank()) return mediaTitle.substringBeforeLast(".")
+    val mpvPath = MPVLib.getPropertyString("path")
+    if (mpvPath != null && mpvPath.isNotBlank()) return mpvPath.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "Video" }
+    return "Video"
 }
