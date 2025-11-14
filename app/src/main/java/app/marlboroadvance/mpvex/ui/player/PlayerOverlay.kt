@@ -89,7 +89,7 @@ fun PlayerOverlay(
     var estimatedFps by remember { mutableStateOf(30.0) }
     var isFrameSeeking by remember { mutableStateOf(false) }
     var currentFrame by remember { mutableStateOf(0) }
-    var targetFrameDisplay by remember { mutableStateOf(0) } // Renamed to avoid conflict
+    var targetFrameDisplay by remember { mutableStateOf(0) }
     
     // REMOVED: lastSeekTime and seekDebounceMs
     // ADD: Simple throttle control
@@ -334,28 +334,31 @@ fun PlayerOverlay(
         }
     }
     
-    // UPDATED: handleHorizontalSeeking with TRUE 30fps frame-by-frame seeking
+    // FIXED: handleHorizontalSeeking - SIMPLIFIED to ensure it actually moves frames
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
         val deltaX = currentX - seekStartX
         
-        // Calculate frames based on drag distance
-        // Adjust this value to control sensitivity: lower = more sensitive
-        val pixelsPerFrame = 15f 
+        // SIMPLIFIED: Direct frame calculation - no complex time conversions
+        // 10 pixels = 1 frame for good sensitivity
+        val pixelsPerFrame = 10f 
         val framesDelta = (deltaX / pixelsPerFrame).toInt()
         
+        // Calculate target frame directly from start frame + delta
         val startFrame = (seekStartPosition * estimatedFps).toInt()
-        val targetFrame = startFrame + framesDelta
+        val targetFrame = (startFrame + framesDelta).coerceIn(0, frameCount)
+        
+        // Calculate corresponding time for UI display
         val targetPosition = targetFrame / estimatedFps
         
-        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-        val clampedPosition = targetPosition.coerceIn(0.0, duration)
+        // Update UI
+        seekTargetTime = formatTimeSimple(targetPosition)
+        currentTime = formatTimeSimple(targetPosition)
+        targetFrameDisplay = targetFrame
         
-        // ALWAYS update UI instantly
-        seekTargetTime = formatTimeSimple(clampedPosition)
-        currentTime = formatTimeSimple(clampedPosition)
-        targetFrameDisplay = targetFrame.coerceIn(0, frameCount)
+        // DEBUG: Print frame info to verify it's working
+        println("DEBUG: DeltaX=$deltaX, FramesDelta=$framesDelta, TargetFrame=$targetFrame")
         
         // Send frame-exact seek command
         performFrameSeek(targetFrame)
@@ -363,6 +366,7 @@ fun PlayerOverlay(
     
     fun endHorizontalSeeking() {
         if (isSeeking) {
+            // Final seek to ensure we're exactly on the target frame
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
             performRealTimeSeek(currentPos)
             
@@ -479,8 +483,10 @@ fun PlayerOverlay(
             val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
             val currentSeconds = currentPos.toInt()
             
-            // Update current frame
-            currentFrame = (currentPos * estimatedFps).toInt()
+            // Update current frame (only if not actively frame seeking)
+            if (!isFrameSeeking || !isHorizontalSwipe) {
+                currentFrame = (currentPos * estimatedFps).toInt()
+            }
             
             if (isSeeking) {
                 currentTime = seekTargetTime
