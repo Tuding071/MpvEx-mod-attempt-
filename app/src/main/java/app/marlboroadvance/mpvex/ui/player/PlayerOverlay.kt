@@ -89,7 +89,7 @@ fun PlayerOverlay(
     var estimatedFps by remember { mutableStateOf(30.0) }
     var isFrameSeeking by remember { mutableStateOf(false) }
     var currentFrame by remember { mutableStateOf(0) }
-    var targetFrame by remember { mutableStateOf(0) }
+    var targetFrameDisplay by remember { mutableStateOf(0) } // Renamed to avoid conflict
     
     // REMOVED: lastSeekTime and seekDebounceMs
     // ADD: Simple throttle control
@@ -138,6 +138,29 @@ fun PlayerOverlay(
         frameCount = (duration * fps).toInt()
     }
 
+    // NEW: Perform frame-exact seeking for true 30fps response
+    fun performFrameSeek(targetFrame: Int) {
+        if (isSeekInProgress) return
+        
+        isSeekInProgress = true
+        
+        // Constrain target frame
+        val constrainedFrame = targetFrame.coerceIn(0, frameCount)
+        
+        // Use frame-exact seeking
+        MPVLib.command("seek", constrainedFrame.toString(), "absolute-frame", "exact")
+        
+        // Update frame display
+        currentFrame = constrainedFrame
+        targetFrameDisplay = constrainedFrame
+        
+        // Reset after throttle period
+        coroutineScope.launch {
+            delay(seekThrottleMs)
+            isSeekInProgress = false
+        }
+    }
+
     // UPDATED: performRealTimeSeek with frame-based seeking
     fun performRealTimeSeek(targetPosition: Double) {
         if (isSeekInProgress) return
@@ -158,19 +181,6 @@ fun PlayerOverlay(
             delay(seekThrottleMs)
             isSeekInProgress = false
         }
-    }
-    
-    // NEW: Perform frame-exact seeking for true 30fps response
-    fun performFrameSeek(targetFrame: Int) {
-        // Constrain target frame
-        val constrainedFrame = targetFrame.coerceIn(0, frameCount)
-        
-        // Method 1: Try frame-exact seeking first
-        MPVLib.command("seek", constrainedFrame.toString(), "absolute-frame", "exact")
-        
-        // Update frame display
-        currentFrame = constrainedFrame
-        this.targetFrame = constrainedFrame
     }
     
     // NEW: Function to get fresh position from MPV
@@ -345,7 +355,7 @@ fun PlayerOverlay(
         // ALWAYS update UI instantly
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
-        this.targetFrame = targetFrame.coerceIn(0, frameCount)
+        targetFrameDisplay = targetFrame.coerceIn(0, frameCount)
         
         // Send frame-exact seek command
         performFrameSeek(targetFrame)
