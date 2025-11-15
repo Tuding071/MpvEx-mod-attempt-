@@ -401,8 +401,6 @@ fun PlayerOverlay(
         isLongTap = false
     }
     
-    // ... (rest of your existing LaunchedEffect blocks remain the same)
-    
     LaunchedEffect(Unit) {
         val intent = (context as? android.app.Activity)?.intent
         fileName = when {
@@ -437,7 +435,36 @@ fun PlayerOverlay(
     }
     
     LaunchedEffect(Unit) {
-        // ... (your existing MPV configuration)
+        MPVLib.setPropertyString("hwdec", "no")
+        MPVLib.setPropertyString("vo", "gpu")
+        MPVLib.setPropertyString("profile", "fast")
+        MPVLib.setPropertyString("vd-lavc-threads", "4")
+        MPVLib.setPropertyString("audio-channels", "auto")
+        MPVLib.setPropertyString("demuxer-lavf-threads", "4")
+        MPVLib.setPropertyString("cache", "yes")
+        MPVLib.setPropertyInt("demuxer-max-bytes", 150 * 1024 * 1024)
+        MPVLib.setPropertyString("demuxer-readahead-secs", "60")
+        MPVLib.setPropertyString("cache-secs", "60")
+        MPVLib.setPropertyString("cache-pause", "no")
+        MPVLib.setPropertyString("cache-initial", "0.5")
+        MPVLib.setPropertyString("video-sync", "display-resample")
+        MPVLib.setPropertyString("untimed", "yes")
+        MPVLib.setPropertyString("hr-seek", "yes")
+        MPVLib.setPropertyString("hr-seek-framedrop", "no")
+        MPVLib.setPropertyString("vd-lavc-fast", "yes")
+        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
+        MPVLib.setPropertyString("vd-lavc-skipidct", "all")
+        MPVLib.setPropertyString("vd-lavc-assemble", "yes")
+        MPVLib.setPropertyString("demuxer-max-back-bytes", "50M")
+        MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
+        MPVLib.setPropertyString("gpu-dumb-mode", "yes")
+        MPVLib.setPropertyString("opengl-pbo", "yes")
+        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1")
+        MPVLib.setPropertyString("network-timeout", "30")
+        MPVLib.setPropertyString("audio-client-name", "MPVEx-Software-4Core")
+        MPVLib.setPropertyString("audio-samplerate", "auto")
+        MPVLib.setPropertyString("deband", "no")
+        MPVLib.setPropertyString("video-aspect-override", "no")
     }
     
     LaunchedEffect(Unit) {
@@ -764,4 +791,40 @@ fun SimpleDraggableProgressBar(
     }
 }
 
-// ... (rest of your existing helper functions remain the same)
+private fun formatTimeSimple(seconds: Double): String {
+    val totalSeconds = seconds.toInt()
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val secs = totalSeconds % 60
+    return if (hours > 0) String.format("%02d:%02d:%02d", hours, minutes, secs) else String.format("%02d:%02d", minutes, secs)
+}
+
+private fun getFileNameFromUri(uri: Uri?, context: android.content.Context): String {
+    if (uri == null) return getBestAvailableFileName(context)
+    return when {
+        uri.scheme == "file" -> uri.lastPathSegment?.substringBeforeLast(".") ?: getBestAvailableFileName(context)
+        uri.scheme == "content" -> getDisplayNameFromContentUri(uri, context) ?: getBestAvailableFileName(context)
+        uri.scheme in listOf("http", "https") -> uri.lastPathSegment?.substringBeforeLast(".") ?: "Online Video"
+        else -> getBestAvailableFileName(context)
+    }
+}
+
+private fun getDisplayNameFromContentUri(uri: Uri, context: android.content.Context): String? {
+    return try {
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val displayNameIndex = cursor.getColumnIndex("_display_name")
+                val displayName = if (displayNameIndex != -1) cursor.getString(displayNameIndex)?.substringBeforeLast(".") else null
+                displayName ?: uri.lastPathSegment?.substringBeforeLast(".")
+            } else null
+        }
+    } catch (e: Exception) { null }
+}
+
+private fun getBestAvailableFileName(context: android.content.Context): String {
+    val mediaTitle = MPVLib.getPropertyString("media-title")
+    if (mediaTitle != null && mediaTitle != "Video" && mediaTitle.isNotBlank()) return mediaTitle.substringBeforeLast(".")
+    val mpvPath = MPVLib.getPropertyString("path")
+    if (mpvPath != null && mpvPath.isNotBlank()) return mpvPath.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "Video" }
+    return "Video"
+}
