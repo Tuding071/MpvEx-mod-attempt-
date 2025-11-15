@@ -120,18 +120,22 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // UPDATED: Frame-accurate seek with visual updates
+    // UPDATED: Frame-accurate seek with DOUBLE commands for segment boundaries
     fun performFrameAccurateSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         
         isSeekInProgress = true
         
-        // Use exact seeking for frame accuracy during drag
+        // DOUBLE SEEK COMMANDS with very small gap
         MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
         
-        // Force immediate visual update by querying position
         coroutineScope.launch {
-            delay(10L) // Small delay to allow seek processing
+            // Second seek command after very small delay (5ms)
+            delay(5L)
+            MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+            
+            // Force immediate visual update by querying position
+            delay(5L)
             val freshPos = MPVLib.getPropertyDouble("time-pos") ?: targetPosition
             seekbarPosition = freshPos.toFloat() // Force UI update with actual position
             
@@ -140,11 +144,18 @@ fun PlayerOverlay(
         }
     }
     
-    // NEW: Final accurate seek for when dragging ends
+    // NEW: Final accurate seek for when dragging ends with DOUBLE commands
     fun performFinalAccurateSeek(targetPosition: Double) {
-        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact+key")
-        // Force frame update
-        MPVLib.getPropertyDouble("time-pos")
+        // DOUBLE SEEK COMMANDS for final position
+        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+        
+        coroutineScope.launch {
+            delay(5L)
+            MPVLib.command("seek", targetPosition.toString(), "absolute", "exact+key")
+            // Force frame update
+            delay(5L)
+            MPVLib.getPropertyDouble("time-pos")
+        }
     }
     
     // Function to get fresh position from MPV
@@ -276,7 +287,7 @@ fun PlayerOverlay(
         }
     }
     
-    // UPDATED: handleHorizontalSeeking with frame-accurate updates
+    // UPDATED: handleHorizontalSeeking with frame-accurate updates and DOUBLE commands
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
@@ -292,7 +303,7 @@ fun PlayerOverlay(
         currentTime = formatTimeSimple(clampedPosition)
         seekbarPosition = clampedPosition.toFloat() // Force immediate UI update
         
-        // Use frame-accurate seeking for visual feedback
+        // Use frame-accurate seeking with DOUBLE commands for visual feedback
         performFrameAccurateSeek(clampedPosition)
     }
     
@@ -300,7 +311,7 @@ fun PlayerOverlay(
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
             
-            // Final accurate seek to ensure perfect frame alignment
+            // Final accurate seek with DOUBLE commands to ensure perfect frame alignment
             performFinalAccurateSeek(currentPos)
             
             if (wasPlayingBeforeSeek) {
@@ -444,7 +455,7 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // UPDATED: handleProgressBarDrag with frame-accurate seeking
+    // UPDATED: handleProgressBarDrag with frame-accurate seeking and DOUBLE commands
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
@@ -463,7 +474,7 @@ fun PlayerOverlay(
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
         
-        // Use frame-accurate seeking during drag
+        // Use frame-accurate seeking with DOUBLE commands during drag
         performFrameAccurateSeek(targetPosition)
     }
     
@@ -471,7 +482,7 @@ fun PlayerOverlay(
         isDragging = false
         val finalPosition = seekbarPosition.toDouble()
         
-        // Final accurate seek when drag ends
+        // Final accurate seek with DOUBLE commands when drag ends
         performFinalAccurateSeek(finalPosition)
         
         if (wasPlayingBeforeSeek) {
