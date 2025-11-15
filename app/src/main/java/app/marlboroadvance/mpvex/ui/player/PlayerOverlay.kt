@@ -135,6 +135,13 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
+    // ADD: Pre-warm decoder function
+    fun preWarmDecoder() {
+        // This sends a tiny seek to wake up the decoder and prepare it for seeking
+        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+        MPVLib.command("seek", currentPos.toString(), "absolute", "keyframes")
+    }
+    
     // UPDATED: performRealTimeSeek with throttle
     fun performRealTimeSeek(targetPosition: Double) {
         if (isSeekInProgress) return // Skip if we're already processing a seek
@@ -498,13 +505,19 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // UPDATED: handleProgressBarDrag with movement threshold and direction
+    // UPDATED: handleProgressBarDrag with movement threshold and direction AND PRE-WARMING
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
+            
+            // ADD: PRE-WARM DECODER WHEN DRAG STARTS
+            coroutineScope.launch {
+                preWarmDecoder()
+            }
+            
             // REMOVED: lastSeekTime = 0L
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
