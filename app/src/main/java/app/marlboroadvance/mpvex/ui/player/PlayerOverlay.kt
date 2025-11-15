@@ -230,7 +230,13 @@ fun PlayerOverlay(
                 // Start continuous seeking
                 startVerticalContinuousSeek(verticalSwipeDirection)
                 showSeekTime = true
-                cancelAutoHide()
+                // FIXED: Use the local cancelAutoHide function
+                hideSeekbarJob?.cancel()
+                userInteracting = true
+                coroutineScope.launch {
+                    delay(100)
+                    userInteracting = false
+                }
             }
         }
     }
@@ -271,6 +277,7 @@ fun PlayerOverlay(
         }
     }
     
+    // FIXED: Make cancelAutoHide accessible to all functions
     fun cancelAutoHide() {
         userInteracting = true
         hideSeekbarJob?.cancel()
@@ -352,7 +359,7 @@ fun PlayerOverlay(
     
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
-        cancelAutoHide()
+        cancelAutoHide() // FIXED: Now accessible
         seekStartX = startX
         seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
@@ -550,7 +557,7 @@ fun PlayerOverlay(
     
     // UPDATED: handleProgressBarDrag with movement threshold + enhanced feedback
     fun handleProgressBarDrag(newPosition: Float) {
-        cancelAutoHide()
+        cancelAutoHide() // FIXED: Now accessible
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
@@ -690,7 +697,7 @@ fun PlayerOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(70.dp)
+                    .height(90.dp)
                     .align(Alignment.BottomStart)
                     .padding(horizontal = 60.dp)
                     .offset(y = (3).dp) 
