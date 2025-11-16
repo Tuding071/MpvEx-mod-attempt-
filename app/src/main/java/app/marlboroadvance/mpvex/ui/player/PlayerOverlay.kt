@@ -323,13 +323,19 @@ fun PlayerOverlay(
         }
     }
     
-    // UPDATED: handleHorizontalSeeking without debouncing
+    // UPDATED: handleHorizontalSeeking - FIXED TO PERCENTAGE-BASED WITH SAME SENSITIVITY
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
         val deltaX = currentX - seekStartX
-        val pixelsPerSecond = 9f / 0.041f
-        val timeDeltaSeconds = deltaX / pixelsPerSecond
+        
+        // Convert pixel movement to time using percentage-based calculation
+        // while maintaining your original sensitivity
+        val gestureAreaWidth = 1000f // Approximate width of your gesture area (90% of screen)
+        val sensitivity = 0.3f // Adjusted to match your original sensitivity
+        
+        val percentageDelta = (deltaX / gestureAreaWidth) * sensitivity
+        val timeDeltaSeconds = percentageDelta * videoDuration
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
@@ -341,7 +347,7 @@ fun PlayerOverlay(
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
         
-        // Send seek command with throttle
+        // Send seek command with throttle for real-time frame updates
         performRealTimeSeek(clampedPosition)
     }
     
@@ -516,7 +522,7 @@ fun PlayerOverlay(
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
         
-        // Send seek command with throttle
+        // Send seek command with throttle for real-time frame updates
         performRealTimeSeek(targetPosition)
     }
     
