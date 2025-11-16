@@ -332,7 +332,7 @@ fun PlayerOverlay(
         // Convert pixel movement to time using percentage-based calculation
         // while maintaining your original sensitivity
         val gestureAreaWidth = 1000f // Approximate width of your gesture area (90% of screen)
-        val sensitivity = 0.3f // Adjusted to match your original sensitivity
+        val sensitivity = 15f // Adjusted to match your original sensitivity
         
         val percentageDelta = (deltaX / gestureAreaWidth) * sensitivity
         val timeDeltaSeconds = percentageDelta * videoDuration
