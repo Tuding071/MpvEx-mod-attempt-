@@ -435,12 +435,15 @@ fun PlayerOverlay(
     }
     
     LaunchedEffect(Unit) {
-        MPVLib.setPropertyString("hwdec", "no")
+        MPVLib.setPropertyString("hwdec", "mediacodec-copy")
         MPVLib.setPropertyString("vo", "vulkan")
+        MPVLib.setPropertyString("gpu-api", "vulkan")
+        MPVLib.setPropertyString("vulkan-queue-count", "2")
+        MPVLib.setPropertyString("gpu-shader-cache", "yes")
         MPVLib.setPropertyString("profile", "fast")
         MPVLib.setPropertyString("vd-lavc-threads", "4")
         MPVLib.setPropertyString("audio-channels", "auto")
-        MPVLib.setPropertyString("demuxer-lavf-threads", "4")
+        MPVLib.setPropertyString("demuxer-lavf-threads", "2")
         MPVLib.setPropertyString("cache", "yes")
         MPVLib.setPropertyInt("demuxer-max-bytes", 150 * 1024 * 1024)
         MPVLib.setPropertyString("demuxer-readahead-secs", "60")
