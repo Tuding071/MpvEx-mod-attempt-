@@ -435,8 +435,8 @@ fun PlayerOverlay(
     }
     
     LaunchedEffect(Unit) {
-        MPVLib.setPropertyString("hwdec", "mediacodec-copy")
-        MPVLib.setPropertyString("vo", "gpu")
+        MPVLib.setPropertyString("hwdec", "no")
+        MPVLib.setPropertyString("vo", "libmpv")
         MPVLib.setPropertyString("profile", "fast")
         MPVLib.setPropertyString("vd-lavc-threads", "8")
         MPVLib.setPropertyString("audio-channels", "auto")
@@ -455,7 +455,7 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
         MPVLib.setPropertyString("vd-lavc-skipidct", "all")
         MPVLib.setPropertyString("vd-lavc-assemble", "yes")
-        MPVLib.setPropertyString("demuxer-max-back-bytes", "100M")
+        MPVLib.setPropertyString("demuxer-max-back-bytes", "50M")
         MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
         MPVLib.setPropertyString("demuxer-backward-playback", "yes")
         MPVLib.setPropertyString("cache-backbuffer", "15")
