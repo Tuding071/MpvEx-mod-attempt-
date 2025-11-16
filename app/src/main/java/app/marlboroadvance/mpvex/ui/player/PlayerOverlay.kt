@@ -436,7 +436,7 @@ fun PlayerOverlay(
     
     LaunchedEffect(Unit) {
         MPVLib.setPropertyString("hwdec", "no")
-        MPVLib.setPropertyString("vo", "libmpv")
+        MPVLib.setPropertyString("vo", "android")
         MPVLib.setPropertyString("profile", "fast")
         MPVLib.setPropertyString("vd-lavc-threads", "8")
         MPVLib.setPropertyString("audio-channels", "auto")
