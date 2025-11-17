@@ -90,7 +90,7 @@ fun PlayerOverlay(
     // REMOVED: lastSeekTime and seekDebounceMs
     // ADD: Simple throttle control
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 30L // Small delay between seek commands
+    val seekThrottleMs = 1000L // Small delay between seek commands
     
     // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
     var touchStartTime by remember { mutableStateOf(0L) }
