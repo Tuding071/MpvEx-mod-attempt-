@@ -223,10 +223,12 @@ fun PlayerOverlay(
     }
 
     // UPDATED: Enable motion blur for smooth seeking
-    fun enableMotionBlur() {
-        MPVLib.setPropertyString("interpolation", "yes")
-        MPVLib.setPropertyString("tscale", "oversample")
-        MPVLib.setPropertyString("video-sync", "display-resample")
+    fun enableHeavyMotionBlur() {
+    MPVLib.setPropertyString("interpolation", "yes")
+    MPVLib.setPropertyString("tscale", "oversample")
+    MPVLib.setPropertyString("tscale-radius", "1.5")
+    MPVLib.setPropertyString("tscale-clamp", "0.0")
+    MPVLib.setPropertyString("video-sync", "display-resample")
     }
     
     // UPDATED: Disable motion blur after seeking
