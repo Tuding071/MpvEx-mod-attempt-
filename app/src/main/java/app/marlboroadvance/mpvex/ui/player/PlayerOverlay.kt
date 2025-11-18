@@ -56,11 +56,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import android.content.Intent
 import android.net.Uri
 import kotlin.math.abs
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.geometry.Offset
 
 @Composable
 fun PlayerOverlay(
@@ -94,8 +89,6 @@ fun PlayerOverlay(
     var seekStartX by remember { mutableStateOf(0f) }
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
-    var originalSpeed by remember { mutableStateOf(1.0) }
-    var originalMute by remember { mutableStateOf(false) }
     
     // ADD: Seek direction for feedback
     var seekDirection by remember { mutableStateOf("") } // "+" or "-" or ""
@@ -154,17 +147,17 @@ fun PlayerOverlay(
         preprocessingProgress = 0
         
         coroutineScope.launch {
-            // STEP 1: Configure MPV for TS-in-MP4 files
-            MPVLib.setPropertyString("demuxer-mkv-subtitle-preroll", "yes")
-            MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
-            MPVLib.setPropertyString("demuxer-thread", "yes")
-            MPVLib.setPropertyBoolean("correct-pts", true)
-            
             // MUTE VIDEO DURING PREPROCESSING
             val wasMuted = MPVLib.getPropertyBoolean("mute") ?: false
             if (!wasMuted) {
                 MPVLib.setPropertyBoolean("mute", true)
             }
+            
+            // STEP 1: Configure MPV for TS-in-MP4 files
+            MPVLib.setPropertyString("demuxer-mkv-subtitle-preroll", "yes")
+            MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
+            MPVLib.setPropertyString("demuxer-thread", "yes")
+            MPVLib.setPropertyBoolean("correct-pts", true)
             
             preprocessingProgress = 10
             delay(100)
@@ -227,6 +220,19 @@ fun PlayerOverlay(
             // Start playback
             MPVLib.setPropertyBoolean("pause", false)
         }
+    }
+
+    // UPDATED: Enable motion blur for smooth seeking
+    fun enableMotionBlur() {
+        MPVLib.setPropertyString("interpolation", "yes")
+        MPVLib.setPropertyString("tscale", "oversample")
+        MPVLib.setPropertyString("video-sync", "display-resample")
+    }
+    
+    // UPDATED: Disable motion blur after seeking
+    fun disableMotionBlur() {
+        MPVLib.setPropertyString("interpolation", "no")
+        MPVLib.setPropertyString("video-sync", "display-resample")
     }
 
     // UPDATED: performRealTimeSeek with throttle
@@ -383,25 +389,21 @@ fun PlayerOverlay(
         return ""
     }
     
-    // UPDATED: startHorizontalSeeking with SUPER SLOW MOTION (0.05x) instead of pause
+    // UPDATED: startHorizontalSeeking with MOTION BLUR
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
         seekStartX = startX
         seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
-        
-        // Store original state
-        originalSpeed = MPVLib.getPropertyDouble("speed") ?: 1.0
-        originalMute = MPVLib.getPropertyBoolean("mute") ?: false
-        
         isSeeking = true
         showSeekTime = true
         
+        // ENABLE MOTION BLUR FOR SMOOTH SEEKING
+        enableMotionBlur()
+        
         if (wasPlayingBeforeSeek) {
-            // SUPER SLOW MOTION: 0.05x speed + mute for interpolation effect
-            MPVLib.setPropertyBoolean("mute", true)
-            MPVLib.setPropertyDouble("speed", 0.05) // 20x slower for super slow motion
+            MPVLib.setPropertyBoolean("pause", true)
         }
     }
     
@@ -452,18 +454,19 @@ fun PlayerOverlay(
         performRealTimeSeek(clampedPosition)
     }
     
-    // UPDATED: endHorizontalSeeking with restore of speed and audio
+    // UPDATED: endHorizontalSeeking with DISABLE MOTION BLUR
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
             performRealTimeSeek(currentPos)
             
+            // DISABLE MOTION BLUR AFTER SEEKING
+            disableMotionBlur()
+            
             if (wasPlayingBeforeSeek) {
-                // Restore original speed and audio state
                 coroutineScope.launch {
                     delay(100)
-                    MPVLib.setPropertyDouble("speed", originalSpeed)
-                    MPVLib.setPropertyBoolean("mute", originalMute)
+                    MPVLib.setPropertyBoolean("pause", false)
                 }
             }
             
@@ -586,13 +589,6 @@ fun PlayerOverlay(
         MPVLib.setPropertyBoolean("correct-pts", true)
         MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
         MPVLib.setPropertyString("demuxer-thread", "yes")
-        
-        // ADD INTERPOLATION SETTINGS FOR SMOOTH SLOW MOTION
-        MPVLib.setPropertyString("interpolation", "yes")
-        MPVLib.setPropertyString("video-sync", "display-resample")
-        MPVLib.setPropertyString("tscale", "oversample")
-        MPVLib.setPropertyString("tscale-radius", "0.90")
-        MPVLib.setPropertyString("tscale-clamp", "0.90")
     }
     
     LaunchedEffect(Unit) {
@@ -626,14 +622,17 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // UPDATED: handleProgressBarDrag - KEEP ORIGINAL PAUSE/RESUME BEHAVIOR
+    // UPDATED: handleProgressBarDrag with MOTION BLUR
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
-            // REMOVED: lastSeekTime = 0L
+            
+            // ENABLE MOTION BLUR FOR SMOOTH SEEKING
+            enableMotionBlur()
+            
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
             }
@@ -655,9 +654,13 @@ fun PlayerOverlay(
         performRealTimeSeek(targetPosition)
     }
     
-    // UPDATED: handleDragFinished - KEEP ORIGINAL PAUSE/RESUME BEHAVIOR
+    // UPDATED: handleDragFinished with DISABLE MOTION BLUR
     fun handleDragFinished() {
         isDragging = false
+        
+        // DISABLE MOTION BLUR AFTER SEEKING
+        disableMotionBlur()
+        
         if (wasPlayingBeforeSeek) {
             coroutineScope.launch {
                 delay(100)
@@ -677,7 +680,7 @@ fun PlayerOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0xFF121212)) // SOLID DARK BACKGROUND
+                    .background(Color.Black) // SOLID BLACK BACKGROUND
                     .align(Alignment.Center),
                 contentAlignment = Alignment.Center
             ) {
@@ -685,44 +688,15 @@ fun PlayerOverlay(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    // Loading spinner
-                    Box(
-                        modifier = Modifier
-                            .size(60.dp)
-                            .background(Color.Transparent),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        // Simple rotating animation
-                        var rotation by remember { mutableStateOf(0f) }
-                        val animatedRotation by animateFloatAsState(
-                            targetValue = rotation,
-                            animationSpec = tween(durationMillis = 1000, easing = LinearEasing)
+                    // SIMPLE PERCENTAGE TEXT ONLY - NO SPINNER
+                    Text(
+                        text = "$preprocessingProgress%",
+                        style = TextStyle(
+                            color = Color.White, 
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Bold
                         )
-                        
-                        LaunchedEffect(Unit) {
-                            while (isPreprocessing) {
-                                rotation += 360f
-                                delay(1000)
-                            }
-                        }
-                        
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .background(
-                                    brush = Brush.sweepGradient(
-                                        colors = listOf(
-                                            Color.Transparent,
-                                            Color.White.copy(alpha = 0.8f),
-                                            Color.White
-                                        ),
-                                        center = Offset(0.5f, 0.5f)
-                                    ),
-                                    shape = CircleShape
-                                )
-                                .rotate(animatedRotation)
-                        )
-                    }
+                    )
                     
                     Text(
                         text = "Preparing video for smooth seeking...",
@@ -730,38 +704,6 @@ fun PlayerOverlay(
                             color = Color.White, 
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Medium
-                        ),
-                        textAlign = TextAlign.Center
-                    )
-                    
-                    // Progress bar
-                    Box(
-                        modifier = Modifier
-                            .width(250.dp)
-                            .height(6.dp)
-                            .background(Color.Gray.copy(alpha = 0.5f))
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .width((250 * preprocessingProgress / 100).dp)
-                                .height(6.dp)
-                                .background(Color.White)
-                        )
-                    }
-                    
-                    Text(
-                        text = "$preprocessingProgress%",
-                        style = TextStyle(
-                            color = Color.White, 
-                            fontSize = 14.sp
-                        )
-                    )
-                    
-                    Text(
-                        text = "Scanning video segments for perfect seeking",
-                        style = TextStyle(
-                            color = Color.White.copy(alpha = 0.7f), 
-                            fontSize = 12.sp
                         ),
                         textAlign = TextAlign.Center
                     )
