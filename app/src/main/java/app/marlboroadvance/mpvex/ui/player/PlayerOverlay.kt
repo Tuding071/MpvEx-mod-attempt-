@@ -143,11 +143,18 @@ fun PlayerOverlay(
     
     // ADD MOTION BLUR FUNCTIONS
     fun enableHeavyMotionBlur() {
-        MPVLib.setPropertyString("interpolation", "yes")
-        MPVLib.setPropertyString("tscale", "oversample")
-        MPVLib.setPropertyString("tscale-radius", "1.5")
-        MPVLib.setPropertyString("tscale-clamp", "0.0")
-        MPVLib.setPropertyString("video-sync", "display-resample")
+    // NUCLEAR OPTION - Should be extremely obvious
+    MPVLib.setPropertyString("interpolation", "yes")
+    MPVLib.setPropertyString("tscale", "mitchell")  // Mitchell filter creates heavy blur
+    MPVLib.setPropertyString("tscale-radius", "3.0")  // Even larger radius
+    MPVLib.setPropertyString("tscale-clamp", "0.0")
+    MPVLib.setPropertyString("video-sync", "display-desync")
+    MPVLib.setPropertyDouble("interpolation-threshold", 100.0) // Always interpolate
+    MPVLib.setPropertyString("scale", "spline36") // Add scaling blur too
+    MPVLib.setPropertyString("cscale", "spline36") // Chroma scaling blur
+    MPVLib.setPropertyString("dscale", "mitchell") // Display scaling blur
+    MPVLib.setPropertyString("scale-blur", "1.0") // Maximum scale blur
+    MPVLib.setPropertyString("scale-cutoff", "0.0") // No cutoff = more blur
     }
     
     fun disableMotionBlur() {
