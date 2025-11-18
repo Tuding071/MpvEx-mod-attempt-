@@ -141,6 +141,20 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
+    // ADD MOTION BLUR FUNCTIONS
+    fun enableHeavyMotionBlur() {
+        MPVLib.setPropertyString("interpolation", "yes")
+        MPVLib.setPropertyString("tscale", "oversample")
+        MPVLib.setPropertyString("tscale-radius", "1.5")
+        MPVLib.setPropertyString("tscale-clamp", "0.0")
+        MPVLib.setPropertyString("video-sync", "display-resample")
+    }
+    
+    fun disableMotionBlur() {
+        MPVLib.setPropertyString("interpolation", "no")
+        MPVLib.setPropertyString("video-sync", "display-resample")
+    }
+
     // IMPROVED: Better segment scanning - scans multiple key points
     fun preprocessOfflineFile() {
         isPreprocessing = true
@@ -220,21 +234,6 @@ fun PlayerOverlay(
             // Start playback
             MPVLib.setPropertyBoolean("pause", false)
         }
-    }
-
-    // UPDATED: Enable motion blur for smooth seeking
-    fun enableHeavyMotionBlur() {
-    MPVLib.setPropertyString("interpolation", "yes")
-    MPVLib.setPropertyString("tscale", "oversample")
-    MPVLib.setPropertyString("tscale-radius", "1.5")
-    MPVLib.setPropertyString("tscale-clamp", "0.0")
-    MPVLib.setPropertyString("video-sync", "display-resample")
-    }
-    
-    // UPDATED: Disable motion blur after seeking
-    fun disableMotionBlur() {
-        MPVLib.setPropertyString("interpolation", "no")
-        MPVLib.setPropertyString("video-sync", "display-resample")
     }
 
     // UPDATED: performRealTimeSeek with throttle
@@ -402,7 +401,7 @@ fun PlayerOverlay(
         showSeekTime = true
         
         // ENABLE MOTION BLUR FOR SMOOTH SEEKING
-        enableMotionBlur()
+        enableHeavyMotionBlur()
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
@@ -633,7 +632,7 @@ fun PlayerOverlay(
             showSeekTime = true
             
             // ENABLE MOTION BLUR FOR SMOOTH SEEKING
-            enableMotionBlur()
+            enableHeavyMotionBlur()
             
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
