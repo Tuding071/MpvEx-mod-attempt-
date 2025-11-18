@@ -149,19 +149,19 @@ fun PlayerOverlay(
     val minVelocityForSmoothing = 50f // pixels/sec - minimum velocity to apply smoothing
     
     // VELOCITY-BASED SMOOTHING FUNCTIONS
-    fun calculateVelocity(currentX: Float, currentTime: Long): Float {
+    fun calculateVelocity(currentX: Float, currentTimeMillis: Long): Float {
         if (lastSeekTime == 0L) {
             lastSeekX = currentX
-            lastSeekTime = currentTime
+            lastSeekTime = currentTimeMillis
             return 0f
         }
         
         val deltaX = currentX - lastSeekX
-        val deltaTime = (currentTime - lastSeekTime).coerceAtLeast(1) // Avoid division by zero
+        val deltaTime = (currentTimeMillis - lastSeekTime).coerceAtLeast(1) // Avoid division by zero
         val currentVelocity = (deltaX / deltaTime) * 1000f // Convert to pixels per second
         
         lastSeekX = currentX
-        lastSeekTime = currentTime
+        lastSeekTime = currentTimeMillis
         
         return currentVelocity
     }
@@ -462,8 +462,8 @@ fun PlayerOverlay(
         if (!isSeeking) return
         
         // CALCULATE VELOCITY
-        val currentTime = System.currentTimeMillis()
-        velocity = calculateVelocity(currentX, currentTime)
+        val currentTimeMillis = System.currentTimeMillis()
+        velocity = calculateVelocity(currentX, currentTimeMillis)
         
         val deltaX = currentX - seekStartX
         
