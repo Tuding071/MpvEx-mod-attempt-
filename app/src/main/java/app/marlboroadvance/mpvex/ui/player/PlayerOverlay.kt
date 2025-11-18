@@ -140,27 +140,6 @@ fun PlayerOverlay(
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
-    
-    // ADD MOTION BLUR FUNCTIONS
-    fun enableHeavyMotionBlur() {
-    // NUCLEAR OPTION - Should be extremely obvious
-    MPVLib.setPropertyString("interpolation", "yes")
-    MPVLib.setPropertyString("tscale", "mitchell")  // Mitchell filter creates heavy blur
-    MPVLib.setPropertyString("tscale-radius", "3.0")  // Even larger radius
-    MPVLib.setPropertyString("tscale-clamp", "0.0")
-    MPVLib.setPropertyString("video-sync", "display-desync")
-    MPVLib.setPropertyDouble("interpolation-threshold", 100.0) // Always interpolate
-    MPVLib.setPropertyString("scale", "spline36") // Add scaling blur too
-    MPVLib.setPropertyString("cscale", "spline36") // Chroma scaling blur
-    MPVLib.setPropertyString("dscale", "mitchell") // Display scaling blur
-    MPVLib.setPropertyString("scale-blur", "1.0") // Maximum scale blur
-    MPVLib.setPropertyString("scale-cutoff", "0.0") // No cutoff = more blur
-    }
-    
-    fun disableMotionBlur() {
-        MPVLib.setPropertyString("interpolation", "no")
-        MPVLib.setPropertyString("video-sync", "display-resample")
-    }
 
     // IMPROVED: Better segment scanning - scans multiple key points
     fun preprocessOfflineFile() {
@@ -397,7 +376,7 @@ fun PlayerOverlay(
         return ""
     }
     
-    // UPDATED: startHorizontalSeeking with MOTION BLUR
+    // UPDATED: startHorizontalSeeking - MOTION BLUR REMOVED
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
@@ -406,9 +385,6 @@ fun PlayerOverlay(
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
-        
-        // ENABLE MOTION BLUR FOR SMOOTH SEEKING
-        enableHeavyMotionBlur()
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
@@ -462,14 +438,11 @@ fun PlayerOverlay(
         performRealTimeSeek(clampedPosition)
     }
     
-    // UPDATED: endHorizontalSeeking with DISABLE MOTION BLUR
+    // UPDATED: endHorizontalSeeking - MOTION BLUR REMOVED
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
             performRealTimeSeek(currentPos)
-            
-            // DISABLE MOTION BLUR AFTER SEEKING
-            disableMotionBlur()
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -630,16 +603,13 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // UPDATED: handleProgressBarDrag with MOTION BLUR
+    // UPDATED: handleProgressBarDrag - MOTION BLUR REMOVED
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
-            
-            // ENABLE MOTION BLUR FOR SMOOTH SEEKING
-            enableHeavyMotionBlur()
             
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
@@ -662,12 +632,9 @@ fun PlayerOverlay(
         performRealTimeSeek(targetPosition)
     }
     
-    // UPDATED: handleDragFinished with DISABLE MOTION BLUR
+    // UPDATED: handleDragFinished - MOTION BLUR REMOVED
     fun handleDragFinished() {
         isDragging = false
-        
-        // DISABLE MOTION BLUR AFTER SEEKING
-        disableMotionBlur()
         
         if (wasPlayingBeforeSeek) {
             coroutineScope.launch {
