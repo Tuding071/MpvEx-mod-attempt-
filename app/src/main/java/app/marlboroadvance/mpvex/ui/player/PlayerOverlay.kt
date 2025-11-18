@@ -58,10 +58,8 @@ import android.net.Uri
 import kotlin.math.abs
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.TileMode
-import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.ui.draw.rotate
 
 @Composable
 fun PlayerOverlay(
@@ -679,7 +677,8 @@ fun PlayerOverlay(
                                             Color.Transparent,
                                             Color.White.copy(alpha = 0.7f),
                                             Color.White
-                                        )
+                                        ),
+                                        center = androidx.compose.ui.geometry.Offset(0.5f, 0.5f)
                                     ),
                                     shape = CircleShape
                                 )
