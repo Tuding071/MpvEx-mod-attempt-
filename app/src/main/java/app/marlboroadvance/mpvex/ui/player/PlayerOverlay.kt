@@ -94,6 +94,8 @@ fun PlayerOverlay(
     var seekStartX by remember { mutableStateOf(0f) }
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
+    var originalSpeed by remember { mutableStateOf(1.0) }
+    var originalMute by remember { mutableStateOf(false) }
     
     // ADD: Seek direction for feedback
     var seekDirection by remember { mutableStateOf("") } // "+" or "-" or ""
@@ -370,18 +372,25 @@ fun PlayerOverlay(
         return ""
     }
     
+    // UPDATED: startHorizontalSeeking with mute + slow motion instead of pause
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
         seekStartX = startX
         seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
+        
+        // Store original state
+        originalSpeed = MPVLib.getPropertyDouble("speed") ?: 1.0
+        originalMute = MPVLib.getPropertyBoolean("mute") ?: false
+        
         isSeeking = true
         showSeekTime = true
-        // REMOVED: lastSeekTime = 0L
         
         if (wasPlayingBeforeSeek) {
-            MPVLib.setPropertyBoolean("pause", true)
+            // Instead of pausing, use mute + slow motion
+            MPVLib.setPropertyBoolean("mute", true)
+            MPVLib.setPropertyDouble("speed", 0.25)
         }
     }
     
@@ -432,15 +441,18 @@ fun PlayerOverlay(
         performRealTimeSeek(clampedPosition)
     }
     
+    // UPDATED: endHorizontalSeeking with restore of speed and audio
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
             performRealTimeSeek(currentPos)
             
             if (wasPlayingBeforeSeek) {
+                // Restore original speed and audio state
                 coroutineScope.launch {
                     delay(100)
-                    MPVLib.setPropertyBoolean("pause", false)
+                    MPVLib.setPropertyDouble("speed", originalSpeed)
+                    MPVLib.setPropertyBoolean("mute", originalMute)
                 }
             }
             
@@ -596,16 +608,23 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // UPDATED: handleProgressBarDrag with movement threshold and direction
+    // UPDATED: handleProgressBarDrag with mute + slow motion instead of pause
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
+            
+            // Store original state
+            originalSpeed = MPVLib.getPropertyDouble("speed") ?: 1.0
+            originalMute = MPVLib.getPropertyBoolean("mute") ?: false
+            
             showSeekTime = true
-            // REMOVED: lastSeekTime = 0L
+            
             if (wasPlayingBeforeSeek) {
-                MPVLib.setPropertyBoolean("pause", true)
+                // Instead of pausing, use mute + slow motion
+                MPVLib.setPropertyBoolean("mute", true)
+                MPVLib.setPropertyDouble("speed", 0.25)
             }
         }
         isDragging = true
@@ -625,12 +644,15 @@ fun PlayerOverlay(
         performRealTimeSeek(targetPosition)
     }
     
+    // UPDATED: handleDragFinished with restore of speed and audio
     fun handleDragFinished() {
         isDragging = false
         if (wasPlayingBeforeSeek) {
+            // Restore original speed and audio state
             coroutineScope.launch {
                 delay(100)
-                MPVLib.setPropertyBoolean("pause", false)
+                MPVLib.setPropertyDouble("speed", originalSpeed)
+                MPVLib.setPropertyBoolean("mute", originalMute)
             }
         }
         isSeeking = false
@@ -646,7 +668,7 @@ fun PlayerOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.9f))
+                    .background(Color(0xFF121212)) // SOLID DARK BACKGROUND
                     .align(Alignment.Center),
                 contentAlignment = Alignment.Center
             ) {
