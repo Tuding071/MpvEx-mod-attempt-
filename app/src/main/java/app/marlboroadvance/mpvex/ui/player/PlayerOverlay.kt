@@ -160,6 +160,12 @@ fun PlayerOverlay(
             MPVLib.setPropertyString("demuxer-thread", "yes")
             MPVLib.setPropertyBoolean("correct-pts", true)
             
+            // MUTE VIDEO DURING PREPROCESSING
+            val wasMuted = MPVLib.getPropertyBoolean("mute") ?: false
+            if (!wasMuted) {
+                MPVLib.setPropertyBoolean("mute", true)
+            }
+            
             preprocessingProgress = 10
             delay(100)
 
@@ -209,6 +215,11 @@ fun PlayerOverlay(
             
             preprocessingProgress = 100
             delay(50)
+            
+            // RESTORE MUTE STATE AFTER PREPROCESSING
+            if (!wasMuted) {
+                MPVLib.setPropertyBoolean("mute", false)
+            }
             
             isPreprocessing = false
             isStreamPrepared = true
@@ -372,7 +383,7 @@ fun PlayerOverlay(
         return ""
     }
     
-    // UPDATED: startHorizontalSeeking with mute + slow motion instead of pause
+    // UPDATED: startHorizontalSeeking with SUPER SLOW MOTION (0.05x) instead of pause
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
@@ -388,9 +399,9 @@ fun PlayerOverlay(
         showSeekTime = true
         
         if (wasPlayingBeforeSeek) {
-            // Instead of pausing, use mute + slow motion
+            // SUPER SLOW MOTION: 0.05x speed + mute for interpolation effect
             MPVLib.setPropertyBoolean("mute", true)
-            MPVLib.setPropertyDouble("speed", 0.25)
+            MPVLib.setPropertyDouble("speed", 0.05) // 20x slower for super slow motion
         }
     }
     
@@ -575,6 +586,13 @@ fun PlayerOverlay(
         MPVLib.setPropertyBoolean("correct-pts", true)
         MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
         MPVLib.setPropertyString("demuxer-thread", "yes")
+        
+        // ADD INTERPOLATION SETTINGS FOR SMOOTH SLOW MOTION
+        MPVLib.setPropertyString("interpolation", "yes")
+        MPVLib.setPropertyString("video-sync", "display-resample")
+        MPVLib.setPropertyString("tscale", "oversample")
+        MPVLib.setPropertyString("tscale-radius", "0.90")
+        MPVLib.setPropertyString("tscale-clamp", "0.90")
     }
     
     LaunchedEffect(Unit) {
@@ -608,23 +626,16 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // UPDATED: handleProgressBarDrag with mute + slow motion instead of pause
+    // UPDATED: handleProgressBarDrag - KEEP ORIGINAL PAUSE/RESUME BEHAVIOR
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
-            
-            // Store original state
-            originalSpeed = MPVLib.getPropertyDouble("speed") ?: 1.0
-            originalMute = MPVLib.getPropertyBoolean("mute") ?: false
-            
             showSeekTime = true
-            
+            // REMOVED: lastSeekTime = 0L
             if (wasPlayingBeforeSeek) {
-                // Instead of pausing, use mute + slow motion
-                MPVLib.setPropertyBoolean("mute", true)
-                MPVLib.setPropertyDouble("speed", 0.25)
+                MPVLib.setPropertyBoolean("pause", true)
             }
         }
         isDragging = true
@@ -644,15 +655,13 @@ fun PlayerOverlay(
         performRealTimeSeek(targetPosition)
     }
     
-    // UPDATED: handleDragFinished with restore of speed and audio
+    // UPDATED: handleDragFinished - KEEP ORIGINAL PAUSE/RESUME BEHAVIOR
     fun handleDragFinished() {
         isDragging = false
         if (wasPlayingBeforeSeek) {
-            // Restore original speed and audio state
             coroutineScope.launch {
                 delay(100)
-                MPVLib.setPropertyDouble("speed", originalSpeed)
-                MPVLib.setPropertyBoolean("mute", originalMute)
+                MPVLib.setPropertyBoolean("pause", false)
             }
         }
         isSeeking = false
