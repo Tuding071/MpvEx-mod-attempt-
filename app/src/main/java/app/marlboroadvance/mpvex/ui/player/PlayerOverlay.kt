@@ -141,73 +141,6 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
 
-    // PERFORMANCE OPTIMIZATION FUNCTIONS FOR SEEKING
-    fun enableSeekingOptimization() {
-        // Switch to fastest rendering mode
-        MPVLib.setPropertyString("profile", "fast")
-        
-        // Reduce rendering quality for speed
-        MPVLib.setPropertyString("scale", "nearest") // Fastest scaling
-        MPVLib.setPropertyString("cscale", "nearest")
-        MPVLib.setPropertyString("dscale", "nearest")
-        
-        // Enable hardware acceleration if available
-        MPVLib.setPropertyString("hwdec", "auto")
-        
-        // Reduce video output quality
-        MPVLib.setPropertyString("video-output-levels", "limited")
-        MPVLib.setPropertyString("dither-depth", "auto")
-        
-        // Optimize for seeking performance
-        MPVLib.setPropertyString("correct-pts", "no")
-        MPVLib.setPropertyString("framedrop", "yes")
-        MPVLib.setPropertyString("video-sync", "display-desync")
-        
-        // Fast decoding settings
-        MPVLib.setPropertyString("vd-lavc-fast", "yes")
-        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
-        MPVLib.setPropertyString("vd-lavc-skipidct", "all")
-        MPVLib.setPropertyString("vd-lavc-assemble", "no")
-        
-        // Reduce CPU usage
-        MPVLib.setPropertyString("vd-lavc-threads", "1")
-        
-        println("🔄 ENABLED SEEKING OPTIMIZATION")
-    }
-    
-    fun disableSeekingOptimization() {
-        // Restore quality settings
-        MPVLib.setPropertyString("profile", "high-quality")
-        
-        // Restore scaling quality
-        MPVLib.setPropertyString("scale", "")
-        MPVLib.setPropertyString("cscale", "")
-        MPVLib.setPropertyString("dscale", "")
-        
-        // Restore hardware decoding to your preference
-        MPVLib.setPropertyString("hwdec", "no")
-        
-        // Restore video quality
-        MPVLib.setPropertyString("video-output-levels", "")
-        MPVLib.setPropertyString("dither-depth", "")
-        
-        // Restore normal playback settings
-        MPVLib.setPropertyString("correct-pts", "yes")
-        MPVLib.setPropertyString("framedrop", "no")
-        MPVLib.setPropertyString("video-sync", "display-resample")
-        
-        // Restore decoding quality
-        MPVLib.setPropertyString("vd-lavc-fast", "no")
-        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "none")
-        MPVLib.setPropertyString("vd-lavc-skipidct", "none")
-        MPVLib.setPropertyString("vd-lavc-assemble", "yes")
-        
-        // Restore CPU usage
-        MPVLib.setPropertyString("vd-lavc-threads", "8")
-        
-        println("🔄 DISABLED SEEKING OPTIMIZATION")
-    }
-
     // IMPROVED: Better segment scanning - scans multiple key points
     fun preprocessOfflineFile() {
         isPreprocessing = true
@@ -443,7 +376,7 @@ fun PlayerOverlay(
         return ""
     }
     
-    // UPDATED: startHorizontalSeeking - ENABLE OPTIMIZATION
+    // UPDATED: startHorizontalSeeking - MOTION BLUR REMOVED
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
@@ -452,9 +385,6 @@ fun PlayerOverlay(
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
-        
-        // ENABLE PERFORMANCE OPTIMIZATION FOR SEEKING
-        enableSeekingOptimization()
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
@@ -508,14 +438,11 @@ fun PlayerOverlay(
         performRealTimeSeek(clampedPosition)
     }
     
-    // UPDATED: endHorizontalSeeking - DISABLE OPTIMIZATION
+    // UPDATED: endHorizontalSeeking - MOTION BLUR REMOVED
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
             performRealTimeSeek(currentPos)
-            
-            // DISABLE OPTIMIZATION AND RESTORE QUALITY
-            disableSeekingOptimization()
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -617,14 +544,14 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
         MPVLib.setPropertyString("profile", "fast")
-        MPVLib.setPropertyString("vd-lavc-threads", "8")
+        MPVLib.setPropertyString("vd-lavc-threads", "1")
         MPVLib.setPropertyString("audio-channels", "auto")
-        MPVLib.setPropertyString("demuxer-lavf-threads", "4")
+        MPVLib.setPropertyString("demuxer-lavf-threads", "1")
         MPVLib.setPropertyString("cache-initial", "0.5")
         MPVLib.setPropertyString("video-sync", "display-resample")
         MPVLib.setPropertyString("untimed", "yes")
         MPVLib.setPropertyString("hr-seek", "yes")
-        MPVLib.setPropertyString("hr-seek-framedrop", "no")
+        MPVLib.setPropertyString("hr-seek-framedrop", "yes")
         MPVLib.setPropertyString("vd-lavc-fast", "yes")
         MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
         MPVLib.setPropertyString("vd-lavc-skipidct", "all")
@@ -676,16 +603,13 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // UPDATED: handleProgressBarDrag - WITH OPTIMIZATION
+    // UPDATED: handleProgressBarDrag - MOTION BLUR REMOVED
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
-            
-            // ENABLE PERFORMANCE OPTIMIZATION FOR SEEKING
-            enableSeekingOptimization()
             
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
@@ -708,12 +632,9 @@ fun PlayerOverlay(
         performRealTimeSeek(targetPosition)
     }
     
-    // UPDATED: handleDragFinished - DISABLE OPTIMIZATION
+    // UPDATED: handleDragFinished - MOTION BLUR REMOVED
     fun handleDragFinished() {
         isDragging = false
-        
-        // DISABLE OPTIMIZATION AND RESTORE QUALITY
-        disableSeekingOptimization()
         
         if (wasPlayingBeforeSeek) {
             coroutineScope.launch {
@@ -994,7 +915,7 @@ fun SimpleDraggableProgressBar(
                                 thresholdStartX = currentX // NEW: Store position where threshold was passed
                             } else {
                                 // Haven't passed threshold yet, don't seek
-                                return@detactDragGestures
+                                return@detectDragGestures
                             }
                         }
                         
