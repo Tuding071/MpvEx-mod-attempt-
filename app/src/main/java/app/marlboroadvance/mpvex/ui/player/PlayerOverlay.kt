@@ -96,7 +96,7 @@ fun PlayerOverlay(
     // REMOVED: lastSeekTime and seekDebounceMs
     // ADD: Simple throttle control
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 16L // Small delay between seek commands
+    val seekThrottleMs = 11L // Small delay between seek commands
     
     // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
     var touchStartTime by remember { mutableStateOf(0L) }
@@ -140,6 +140,48 @@ fun PlayerOverlay(
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
+    
+    // VELOCITY-BASED SMOOTHING VARIABLES
+    var lastSeekX by remember { mutableStateOf(0f) }
+    var lastSeekTime by remember { mutableStateOf(0L) }
+    var velocity by remember { mutableStateOf(0f) } // pixels per second
+    val smoothingFactor = 1.0f // How much smoothing to apply (0 = no smoothing, 1 = max smoothing)
+    val minVelocityForSmoothing = 20f // pixels/sec - minimum velocity to apply smoothing
+    
+    // VELOCITY-BASED SMOOTHING FUNCTIONS
+    fun calculateVelocity(currentX: Float, currentTimeMillis: Long): Float {
+        if (lastSeekTime == 0L) {
+            lastSeekX = currentX
+            lastSeekTime = currentTimeMillis
+            return 0f
+        }
+        
+        val deltaX = currentX - lastSeekX
+        val deltaTime = (currentTimeMillis - lastSeekTime).coerceAtLeast(1) // Avoid division by zero
+        val currentVelocity = (deltaX / deltaTime) * 1000f // Convert to pixels per second
+        
+        lastSeekX = currentX
+        lastSeekTime = currentTimeMillis
+        
+        return currentVelocity
+    }
+    
+    fun applySmoothing(rawPosition: Double, velocity: Float): Double {
+        // Only apply smoothing if we're moving fast enough
+        if (abs(velocity) < minVelocityForSmoothing) {
+            return rawPosition
+        }
+        
+        // Calculate smoothing factor based on velocity
+        // Faster movement = more smoothing
+        val dynamicSmoothing = smoothingFactor * (abs(velocity) / 1000f).coerceIn(0f, 1f)
+        
+        // Simple low-pass filter for smoothing
+        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: rawPosition
+        val smoothedPosition = currentPos + (rawPosition - currentPos) * (1f - dynamicSmoothing).toDouble()
+        
+        return smoothedPosition
+    }
 
     // IMPROVED: Better segment scanning - scans multiple key points
     fun preprocessOfflineFile() {
@@ -376,7 +418,7 @@ fun PlayerOverlay(
         return ""
     }
     
-    // UPDATED: startHorizontalSeeking - MOTION BLUR REMOVED
+    // UPDATED: startHorizontalSeeking - INITIALIZE VELOCITY TRACKING
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
@@ -385,6 +427,11 @@ fun PlayerOverlay(
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
+        
+        // INITIALIZE VELOCITY TRACKING
+        lastSeekX = startX
+        lastSeekTime = System.currentTimeMillis()
+        velocity = 0f
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
@@ -410,9 +457,13 @@ fun PlayerOverlay(
         }
     }
     
-    // UPDATED: handleHorizontalSeeking - FIXED TO PERCENTAGE-BASED WITH SAME SENSITIVITY
+    // UPDATED: handleHorizontalSeeking - WITH VELOCITY-BASED SMOOTHING
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
+        
+        // CALCULATE VELOCITY
+        val currentTimeMillis = System.currentTimeMillis()
+        velocity = calculateVelocity(currentX, currentTimeMillis)
         
         val deltaX = currentX - seekStartX
         
@@ -423,9 +474,12 @@ fun PlayerOverlay(
         
         val percentageDelta = (deltaX / gestureAreaWidth) * sensitivity
         val timeDeltaSeconds = percentageDelta * videoDuration
-        val newPositionSeconds = seekStartPosition + timeDeltaSeconds
+        val rawPositionSeconds = seekStartPosition + timeDeltaSeconds
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-        val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
+        
+        // APPLY VELOCITY-BASED SMOOTHING
+        val smoothedPosition = applySmoothing(rawPositionSeconds, velocity)
+        val clampedPosition = smoothedPosition.coerceIn(0.0, duration)
         
         // UPDATE: Set seek direction based on movement
         seekDirection = if (deltaX > 0) "+" else "-"
@@ -438,7 +492,7 @@ fun PlayerOverlay(
         performRealTimeSeek(clampedPosition)
     }
     
-    // UPDATED: endHorizontalSeeking - MOTION BLUR REMOVED
+    // UPDATED: endHorizontalSeeking - RESET VELOCITY TRACKING
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
@@ -457,6 +511,12 @@ fun PlayerOverlay(
             seekStartPosition = 0.0
             wasPlayingBeforeSeek = false
             seekDirection = "" // Reset direction
+            
+            // RESET VELOCITY TRACKING
+            lastSeekX = 0f
+            lastSeekTime = 0L
+            velocity = 0f
+            
             scheduleSeekbarHide()
         }
     }
@@ -603,7 +663,7 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // UPDATED: handleProgressBarDrag - MOTION BLUR REMOVED
+    // UPDATED: handleProgressBarDrag - NO SMOOTHING (keep original behavior for seekbar)
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
@@ -632,7 +692,7 @@ fun PlayerOverlay(
         performRealTimeSeek(targetPosition)
     }
     
-    // UPDATED: handleDragFinished - MOTION BLUR REMOVED
+    // UPDATED: handleDragFinished
     fun handleDragFinished() {
         isDragging = false
         
