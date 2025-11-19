@@ -148,6 +148,47 @@ fun PlayerOverlay(
     val smoothingFactor = 0.7f // How much smoothing to apply (0 = no smoothing, 1 = max smoothing)
     val minVelocityForSmoothing = 50f // pixels/sec - minimum velocity to apply smoothing
     
+    // 144P DOWNSCALING FUNCTIONS
+    fun enable144pSeeking() {
+        // Extreme downscaling for maximum performance during seeking
+        MPVLib.setPropertyString("scale", "bilinear") // Fast scaling algorithm
+        MPVLib.setPropertyInt("scale-w", 256)  // 144p width (4:3 aspect)
+        MPVLib.setPropertyInt("scale-h", 144)  // 144p height
+        
+        // Also scale chroma for even more performance
+        MPVLib.setPropertyString("cscale", "bilinear")
+        MPVLib.setPropertyInt("cscale-w", 128)
+        MPVLib.setPropertyInt("cscale-h", 72)
+        
+        // Additional seeking optimizations
+        MPVLib.setPropertyString("correct-pts", "no") // Faster but less accurate
+        MPVLib.setPropertyString("framedrop", "yes")
+        MPVLib.setPropertyString("video-sync", "display-desync") // Reduce sync overhead
+        
+        // Reduce decoding quality for speed
+        MPVLib.setPropertyString("vd-lavc-fast", "yes")
+        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
+        MPVLib.setPropertyString("vd-lavc-skipidct", "all")
+        MPVLib.setPropertyString("vd-lavc-assemble", "no")
+    }
+    
+    fun disable144pSeeking() {
+        // Restore original quality settings
+        MPVLib.setPropertyString("scale", "")
+        MPVLib.setPropertyString("cscale", "")
+        
+        // Restore normal playback settings
+        MPVLib.setPropertyString("correct-pts", "yes")
+        MPVLib.setPropertyString("framedrop", "no")
+        MPVLib.setPropertyString("video-sync", "display-resample")
+        
+        // Restore decoding quality
+        MPVLib.setPropertyString("vd-lavc-fast", "no")
+        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "none")
+        MPVLib.setPropertyString("vd-lavc-skipidct", "none")
+        MPVLib.setPropertyString("vd-lavc-assemble", "yes")
+    }
+
     // VELOCITY-BASED SMOOTHING FUNCTIONS
     fun calculateVelocity(currentX: Float, currentTimeMillis: Long): Float {
         if (lastSeekTime == 0L) {
@@ -418,7 +459,7 @@ fun PlayerOverlay(
         return ""
     }
     
-    // UPDATED: startHorizontalSeeking - INITIALIZE VELOCITY TRACKING
+    // UPDATED: startHorizontalSeeking - INITIALIZE VELOCITY TRACKING + ENABLE 144P
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
@@ -432,6 +473,9 @@ fun PlayerOverlay(
         lastSeekX = startX
         lastSeekTime = System.currentTimeMillis()
         velocity = 0f
+        
+        // ENABLE 144P FOR SMOOTH SEEKING
+        enable144pSeeking()
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
@@ -492,11 +536,14 @@ fun PlayerOverlay(
         performRealTimeSeek(clampedPosition)
     }
     
-    // UPDATED: endHorizontalSeeking - RESET VELOCITY TRACKING
+    // UPDATED: endHorizontalSeeking - RESET VELOCITY TRACKING + DISABLE 144P
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
             performRealTimeSeek(currentPos)
+            
+            // DISABLE 144P AND RESTORE QUALITY
+            disable144pSeeking()
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -663,13 +710,16 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // UPDATED: handleProgressBarDrag - NO SMOOTHING (keep original behavior for seekbar)
+    // UPDATED: handleProgressBarDrag - WITH 144P OPTIMIZATION
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
+            
+            // ENABLE 144P FOR SMOOTH SEEKBAR DRAGGING
+            enable144pSeeking()
             
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
@@ -692,9 +742,12 @@ fun PlayerOverlay(
         performRealTimeSeek(targetPosition)
     }
     
-    // UPDATED: handleDragFinished
+    // UPDATED: handleDragFinished - DISABLE 144P
     fun handleDragFinished() {
         isDragging = false
+        
+        // DISABLE 144P AND RESTORE QUALITY
+        disable144pSeeking()
         
         if (wasPlayingBeforeSeek) {
             coroutineScope.launch {
