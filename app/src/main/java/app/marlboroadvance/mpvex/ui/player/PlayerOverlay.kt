@@ -410,19 +410,13 @@ fun PlayerOverlay(
         }
     }
     
-    // UPDATED: handleHorizontalSeeking - FIXED TO PERCENTAGE-BASED WITH SAME SENSITIVITY
+    // REPLACED: handleHorizontalSeeking with fixed sensitivity approach
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
         val deltaX = currentX - seekStartX
-        
-        // Convert pixel movement to time using percentage-based calculation
-        // while maintaining your original sensitivity
-        val gestureAreaWidth = 1000f // Approximate width of your gesture area (90% of screen)
-        val sensitivity = 0.0075f // Adjusted to match your original sensitivity
-        
-        val percentageDelta = (deltaX / gestureAreaWidth) * sensitivity
-        val timeDeltaSeconds = percentageDelta * videoDuration
+        val pixelsPerSecond = 9f / 0.041f
+        val timeDeltaSeconds = deltaX / pixelsPerSecond
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
@@ -544,9 +538,9 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
         MPVLib.setPropertyString("profile", "fast")
-        MPVLib.setPropertyString("vd-lavc-threads", "1")
+        MPVLib.setPropertyString("vd-lavc-threads", "8")
         MPVLib.setPropertyString("audio-channels", "auto")
-        MPVLib.setPropertyString("demuxer-lavf-threads", "1")
+        MPVLib.setPropertyString("demuxer-lavf-threads", "4")
         MPVLib.setPropertyString("cache-initial", "0.5")
         MPVLib.setPropertyString("video-sync", "display-resample")
         MPVLib.setPropertyString("untimed", "yes")
