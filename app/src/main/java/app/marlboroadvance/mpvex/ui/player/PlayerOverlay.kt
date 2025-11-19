@@ -64,10 +64,13 @@ fun PlayerOverlay(
 ) {
     val context = LocalContext.current
     
-    // ADD PREPROCESSING STATES
+    // ENHANCED PREPROCESSING STATES
     var isPreprocessing by remember { mutableStateOf(false) }
     var preprocessingProgress by remember { mutableStateOf(0) }
+    var preprocessingStage by remember { mutableStateOf("") }
     var isStreamPrepared by remember { mutableStateOf(false) }
+    var detectedSegments by remember { mutableStateOf(0) }
+    var requiresEnhancedProcessing by remember { mutableStateOf(false) }
     
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
@@ -141,84 +144,154 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
 
-    // IMPROVED: Better segment scanning - scans multiple key points
-    fun preprocessOfflineFile() {
+    // ENHANCED: Smart preprocessing with segment detection
+    fun preprocessVideoFile() {
         isPreprocessing = true
         preprocessingProgress = 0
+        preprocessingStage = "Analyzing video structure..."
         
         coroutineScope.launch {
-            // MUTE VIDEO DURING PREPROCESSING
+            // STEP 1: Initial MPV configuration
+            preprocessingStage = "Configuring player..."
+            preprocessingProgress = 10
+            
+            // Mute during preprocessing
             val wasMuted = MPVLib.getPropertyBoolean("mute") ?: false
             if (!wasMuted) {
                 MPVLib.setPropertyBoolean("mute", true)
             }
             
-            // STEP 1: Configure MPV for TS-in-MP4 files
+            // Enhanced configuration for segmented files
             MPVLib.setPropertyString("demuxer-mkv-subtitle-preroll", "yes")
-            MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
+            MPVLib.setPropertyString("demuxer-seekable-cache", "yes") 
             MPVLib.setPropertyString("demuxer-thread", "yes")
             MPVLib.setPropertyBoolean("correct-pts", true)
-            
-            preprocessingProgress = 10
-            delay(100)
-
-            // STEP 2: Scan multiple key points for better segment coverage
-            val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-            
-            if (duration > 10) {
-                // Scan multiple key points for comprehensive segment mapping
-                val scanPoints = listOf(
-                    0.05,  // 5% - beginning
-                    0.15,  // 15% 
-                    0.30,  // 30%
-                    0.50,  // 50% - middle
-                    0.70,  // 70%
-                    0.85,  // 85%
-                    0.95   // 95% - near end
-                )
-                
-                val progressPerPoint = 70 / scanPoints.size // 70% of progress for scanning
-                
-                for ((index, point) in scanPoints.withIndex()) {
-                    val targetTime = duration * point
-                    MPVLib.command("seek", targetTime.toString(), "absolute", "keyframes")
-                    delay(80) // Short delay between seeks
-                    
-                    preprocessingProgress = 10 + (index + 1) * progressPerPoint
-                }
-            } else {
-                // For short videos, just scan beginning, middle, end
-                MPVLib.command("seek", (duration * 0.3).toString(), "absolute", "keyframes")
-                preprocessingProgress = 40
-                delay(80)
-                
-                MPVLib.command("seek", (duration * 0.7).toString(), "absolute", "keyframes")
-                preprocessingProgress = 70
-                delay(80)
-            }
-            
-            // STEP 3: Return to start
-            MPVLib.command("seek", "0", "absolute", "keyframes")
-            preprocessingProgress = 90
-            delay(100)
-
-            // STEP 4: Final configuration
+            MPVLib.setPropertyString("demuxer-lavf-o", "seekable=1:fflags=+fastseek+genpts")
+            MPVLib.setPropertyString("video-sync", "display-resample")
             MPVLib.setPropertyString("hr-seek", "absolute")
             MPVLib.setPropertyString("hr-seek-framedrop", "no")
+
+            delay(100)
+
+            // STEP 2: Detect segmented file structure
+            preprocessingStage = "Detecting video segments..."
+            preprocessingProgress = 20
             
-            preprocessingProgress = 100
-            delay(50)
+            val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+            val videoFormat = MPVLib.getPropertyString("file-format") ?: "unknown"
             
-            // RESTORE MUTE STATE AFTER PREPROCESSING
+            // Check for common segmented file indicators
+            val isLikelySegmented = detectSegmentedFile(videoFormat, duration)
+            requiresEnhancedProcessing = isLikelySegmented
+            
+            if (isLikelySegmented) {
+                preprocessingStage = "Processing segmented video..."
+                preprocessingProgress = 30
+                
+                // Enhanced scanning for segmented files
+                performEnhancedSegmentScanning(duration)
+            } else {
+                preprocessingStage = "Quick scan for normal video..."
+                preprocessingProgress = 50
+                
+                // Light scan for normal files
+                performQuickScan(duration)
+            }
+
+            // STEP 3: Final preparation
+            preprocessingStage = "Finalizing playback..."
+            preprocessingProgress = 90
+            
+            // Return to start and final config
+            MPVLib.command("seek", "0", "absolute", "keyframes")
+            delay(100)
+
+            // STEP 4: Restore audio and complete
             if (!wasMuted) {
                 MPVLib.setPropertyBoolean("mute", false)
             }
+            
+            preprocessingProgress = 100
+            delay(50)
             
             isPreprocessing = false
             isStreamPrepared = true
             
             // Start playback
             MPVLib.setPropertyBoolean("pause", false)
+        }
+    }
+
+    // NEW: Detect segmented files based on format and behavior
+    fun detectSegmentedFile(format: String, duration: Double): Boolean {
+        // Check file format indicators
+        val segmentedFormats = listOf("mp4", "mov", "m4v", "ismv")
+        val isProblematicFormat = format.lowercase() in segmentedFormats
+        
+        // Check for TS-like behavior (common in social media downloads)
+        val hasInconsistentTimestamps = duration <= 0 || duration > 36000 // 10+ hours often indicates issues
+        
+        // Check for known problematic patterns
+        val fileName = MPVLib.getPropertyString("path") ?: ""
+        val isLikelySocialMedia = fileName.contains("tiktok", ignoreCase = true) ||
+                                 fileName.contains("instagram", ignoreCase = true) ||
+                                 fileName.contains("whatsapp", ignoreCase = true)
+        
+        return isProblematicFormat && (hasInconsistentTimestamps || isLikelySocialMedia)
+    }
+
+    // NEW: Enhanced scanning for segmented files
+    fun performEnhancedSegmentScanning(duration: Double) {
+        coroutineScope.launch {
+            if (duration > 10) {
+                // Comprehensive scan for segmented files
+                val scanPoints = listOf(0.05, 0.10, 0.20, 0.35, 0.50, 0.65, 0.80, 0.95)
+                val progressPerPoint = 50 / scanPoints.size
+                var segmentsFound = 0
+                
+                for ((index, point) in scanPoints.withIndex()) {
+                    val targetTime = duration * point
+                    MPVLib.command("seek", targetTime.toString(), "absolute", "keyframes")
+                    delay(100) // Longer delay for problematic files
+                    
+                    // Check if seek was successful
+                    val actualPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+                    if (abs(actualPos - targetTime) > 2.0) {
+                        segmentsFound++
+                    }
+                    
+                    preprocessingProgress = 30 + (index + 1) * progressPerPoint
+                }
+                
+                detectedSegments = segmentsFound
+                preprocessingStage = "Found $segmentsFound segments - Optimizing..."
+            } else {
+                // Short video - quick scan
+                MPVLib.command("seek", (duration * 0.3).toString(), "absolute", "keyframes")
+                preprocessingProgress = 50
+                delay(80)
+                
+                MPVLib.command("seek", (duration * 0.7).toString(), "absolute", "keyframes")
+                preprocessingProgress = 70
+                delay(80)
+            }
+        }
+    }
+
+    // NEW: Quick scan for normal files
+    fun performQuickScan(duration: Double) {
+        coroutineScope.launch {
+            if (duration > 30) {
+                // Just scan key points quickly
+                MPVLib.command("seek", (duration * 0.2).toString(), "absolute", "keyframes")
+                preprocessingProgress = 60
+                delay(50)
+                
+                MPVLib.command("seek", (duration * 0.8).toString(), "absolute", "keyframes")
+                preprocessingProgress = 80
+                delay(50)
+            }
+            // For very short videos, no scanning needed
         }
     }
 
@@ -508,8 +581,8 @@ fun PlayerOverlay(
         val title = MPVLib.getPropertyString("media-title") ?: "Video"
         videoTitle = title
         
-        // START PREPROCESSING
-        preprocessOfflineFile()
+        // START ENHANCED PREPROCESSING
+        preprocessVideoFile()
         
         // Show video info briefly (after preprocessing)
         if (!isPreprocessing) {
@@ -533,7 +606,7 @@ fun PlayerOverlay(
         }
     }
     
-    // MODIFIED: Enhanced MPV config for TS-in-MP4 files
+    // MODIFIED: Enhanced MPV config for segmented files
     LaunchedEffect(Unit) {
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
@@ -559,11 +632,12 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("deband", "no")
         MPVLib.setPropertyString("video-aspect-override", "no")
         
-        // ENHANCED CONFIG FOR TS-IN-MP4 FILES
-        MPVLib.setPropertyString("demuxer-lavf-o", "seekable=1:fflags=+fastseek")
+        // ENHANCED CONFIG FOR SEGMENTED FILES
+        MPVLib.setPropertyString("demuxer-lavf-o", "seekable=1:fflags=+fastseek+genpts+sortdts")
         MPVLib.setPropertyBoolean("correct-pts", true)
         MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
         MPVLib.setPropertyString("demuxer-thread", "yes")
+        MPVLib.setPropertyString("demuxer-mkv-subtitle-preroll", "yes")
     }
     
     LaunchedEffect(Unit) {
@@ -644,12 +718,12 @@ fun PlayerOverlay(
     }
     
     Box(modifier = modifier.fillMaxSize()) {
-        // PREPROCESSING OVERLAY - Shows before video starts
+        // ENHANCED PREPROCESSING OVERLAY
         if (isPreprocessing) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black) // SOLID BLACK BACKGROUND
+                    .background(Color.Black)
                     .align(Alignment.Center),
                 contentAlignment = Alignment.Center
             ) {
@@ -657,7 +731,7 @@ fun PlayerOverlay(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    // SIMPLE PERCENTAGE TEXT ONLY - NO SPINNER
+                    // PROGRESS PERCENTAGE
                     Text(
                         text = "$preprocessingProgress%",
                         style = TextStyle(
@@ -667,8 +741,9 @@ fun PlayerOverlay(
                         )
                     )
                     
+                    // PROCESSING STAGE
                     Text(
-                        text = "Preparing video for smooth seeking...",
+                        text = preprocessingStage,
                         style = TextStyle(
                             color = Color.White, 
                             fontSize = 16.sp,
@@ -676,11 +751,24 @@ fun PlayerOverlay(
                         ),
                         textAlign = TextAlign.Center
                     )
+                    
+                    // SEGMENT DETECTION INFO
+                    if (detectedSegments > 0) {
+                        Text(
+                            text = "Detected $detectedSegments segments - optimizing playback",
+                            style = TextStyle(
+                                color = Color.Yellow,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Normal
+                            ),
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 }
             }
         }
         
-        // YOUR EXISTING UI - Only show when not preprocessing
+        // MAIN UI - Only show when not preprocessing
         if (!isPreprocessing) {
             // MAIN GESTURE AREA - Full screen divided into areas
             Box(modifier = Modifier.fillMaxSize()) {
@@ -789,14 +877,14 @@ fun PlayerOverlay(
                                 )
                             }
                         }
-                        Box(modifier = Modifier.fillMaxWidth().height(48.dp)) { // CHANGED: Increased height for better touch area
+                        Box(modifier = Modifier.fillMaxWidth().height(48.dp)) {
                             SimpleDraggableProgressBar(
                                 position = seekbarPosition,
                                 duration = seekbarDuration,
                                 onValueChange = { handleProgressBarDrag(it) },
                                 onValueChangeFinished = { handleDragFinished() },
                                 getFreshPosition = { getFreshPosition() },
-                                modifier = Modifier.fillMaxSize().height(48.dp) // CHANGED: Increased height
+                                modifier = Modifier.fillMaxSize().height(48.dp)
                             )
                         }
                     }
@@ -829,13 +917,12 @@ fun PlayerOverlay(
                         style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                         modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                     )
-                    showQuickSeekFeedback -> Text( // ADD: Quick seek feedback
+                    showQuickSeekFeedback -> Text(
                         text = quickSeekFeedbackText,
                         style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                         modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                     )
                     showSeekTime -> Text(
-                        // UPDATED: Add direction indicator to seek time
                         text = if (seekDirection.isNotEmpty()) "$seekTargetTime $seekDirection" else seekTargetTime,
                         style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                         modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
@@ -868,7 +955,7 @@ fun SimpleDraggableProgressBar(
     // Convert 25dp to pixels for the movement threshold
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
-    Box(modifier = modifier.height(48.dp)) { // CHANGED: Increased container height
+    Box(modifier = modifier.height(48.dp)) {
         // Progress bar background
         Box(modifier = Modifier
             .fillMaxWidth()
@@ -886,7 +973,7 @@ fun SimpleDraggableProgressBar(
         // CHANGED: Increased touch area to full 48dp height
         Box(modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp) // This makes the entire 48dp area draggable
+            .height(48.dp)
             .align(Alignment.CenterStart)
             .pointerInput(Unit) {
                 detectDragGestures(
