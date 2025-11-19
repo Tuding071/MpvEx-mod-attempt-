@@ -56,8 +56,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import android.content.Intent
 import android.net.Uri
 import java.io.File
-import java.io.InputStream
-import java.io.OutputStream
 import kotlin.math.abs
 
 @Composable
@@ -268,10 +266,6 @@ fun PlayerOverlay(
             fixProgress = 20
             
             // Use FFmpeg to remux the file into a continuous MP4
-            // This command will:
-            // 1. Copy all streams without re-encoding (-c copy)
-            // 2. Force continuous timestamps
-            // 3. Create a proper MP4 structure
             val ffmpegCommand = arrayOf(
                 "ffmpeg",
                 "-y", // Overwrite output file
@@ -368,7 +362,7 @@ fun PlayerOverlay(
             val intent = (context as? android.app.Activity)?.intent
             currentVideoUri = when {
                 intent?.action == Intent.ACTION_SEND -> {
-                    intent.getParcelableExtra(Intent.EXTRA_STREAM)
+                    intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
                 }
                 intent?.action == Intent.ACTION_VIEW -> {
                     intent.data
@@ -729,7 +723,7 @@ fun PlayerOverlay(
         val intent = (context as? android.app.Activity)?.intent
         fileName = when {
             intent?.action == Intent.ACTION_SEND -> {
-                getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context)
+                getFileNameFromUri(intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM), context)
             }
             intent?.action == Intent.ACTION_VIEW -> {
                 getFileNameFromUri(intent.data, context)
@@ -1247,4 +1241,120 @@ fun PlayerOverlay(
     }
 }
 
-// [Include all your existing helper functions - SimpleDraggableProgressBar, formatTimeSimple, etc.]
+@Composable
+fun SimpleDraggableProgressBar(
+    position: Float,
+    duration: Float,
+    onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit,
+    getFreshPosition: () -> Float,
+    modifier: Modifier = Modifier
+) {
+    var dragStartX by remember { mutableStateOf(0f) }
+    var dragStartPosition by remember { mutableStateOf(0f) }
+    var hasPassedThreshold by remember { mutableStateOf(false) }
+    var thresholdStartX by remember { mutableStateOf(0f) }
+    
+    // Convert 25dp to pixels for the movement threshold
+    val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
+    
+    Box(modifier = modifier.height(48.dp)) {
+        // Progress bar background
+        Box(modifier = Modifier
+            .fillMaxWidth()
+            .height(4.dp)
+            .align(Alignment.CenterStart)
+            .background(Color.Gray.copy(alpha = 0.6f)))
+        
+        // Progress bar fill
+        Box(modifier = Modifier
+            .fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f)
+            .height(4.dp)
+            .align(Alignment.CenterStart)
+            .background(Color.White))
+        
+        // CHANGED: Increased touch area to full 48dp height
+        Box(modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .align(Alignment.CenterStart)
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { offset ->
+                        dragStartX = offset.x
+                        // GET FRESH POSITION IMMEDIATELY WHEN DRAG STARTS
+                        dragStartPosition = getFreshPosition()
+                        hasPassedThreshold = false // Reset threshold flag
+                        thresholdStartX = 0f // Reset threshold start position
+                    },
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        val currentX = change.position.x
+                        val totalMovementX = abs(currentX - dragStartX)
+                        
+                        // Check if we've passed the movement threshold
+                        if (!hasPassedThreshold) {
+                            if (totalMovementX > movementThresholdPx) {
+                                hasPassedThreshold = true
+                                thresholdStartX = currentX // NEW: Store position where threshold was passed
+                            } else {
+                                // Haven't passed threshold yet, don't seek
+                                return@detectDragGestures
+                            }
+                        }
+                        
+                        // Calculate delta from the threshold start position, not the original drag start
+                        val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
+                        val deltaX = currentX - effectiveStartX
+                        val deltaPosition = (deltaX / size.width) * duration
+                        val newPosition = (dragStartPosition + deltaPosition).coerceIn(0f, duration)
+                        onValueChange(newPosition)
+                    },
+                    onDragEnd = { 
+                        hasPassedThreshold = false // Reset for next drag
+                        thresholdStartX = 0f // Reset threshold start
+                        onValueChangeFinished() 
+                    }
+                )
+            }
+        )
+    }
+}
+
+private fun formatTimeSimple(seconds: Double): String {
+    val totalSeconds = seconds.toInt()
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val secs = totalSeconds % 60
+    return if (hours > 0) String.format("%02d:%02d:%02d", hours, minutes, secs) else String.format("%02d:%02d", minutes, secs)
+}
+
+private fun getFileNameFromUri(uri: Uri?, context: android.content.Context): String {
+    if (uri == null) return getBestAvailableFileName(context)
+    return when {
+        uri.scheme == "file" -> uri.lastPathSegment?.substringBeforeLast(".") ?: getBestAvailableFileName(context)
+        uri.scheme == "content" -> getDisplayNameFromContentUri(uri, context) ?: getBestAvailableFileName(context)
+        uri.scheme in listOf("http", "https") -> uri.lastPathSegment?.substringBeforeLast(".") ?: "Online Video"
+        else -> getBestAvailableFileName(context)
+    }
+}
+
+private fun getDisplayNameFromContentUri(uri: Uri, context: android.content.Context): String? {
+    return try {
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val displayNameIndex = cursor.getColumnIndex("_display_name")
+                val displayName = if (displayNameIndex != -1) cursor.getString(displayNameIndex)?.substringBeforeLast(".") else null
+                displayName ?: uri.lastPathSegment?.substringBeforeLast(".")
+            } else null
+        }
+    } catch (e: Exception) { null }
+}
+
+private fun getBestAvailableFileName(context: android.content.Context): String {
+    val mediaTitle = MPVLib.getPropertyString("media-title")
+    if (mediaTitle != null && mediaTitle != "Video" && mediaTitle.isNotBlank()) return mediaTitle.substringBeforeLast(".")
+    val mpvPath = MPVLib.getPropertyString("path")
+    if (mpvPath != null && mpvPath.isNotBlank()) return mpvPath.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "Video" }
+    return "Video"
+}
