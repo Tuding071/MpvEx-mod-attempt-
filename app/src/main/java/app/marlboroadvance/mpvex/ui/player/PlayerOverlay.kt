@@ -141,16 +141,22 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
 
-    // LOW RESOLUTION SEEKING FUNCTIONS
-    fun enableLowResSeeking() {
-        // Use MPV's built-in scaling for performance
-        MPVLib.setPropertyString("scale", "bilinear")
-        MPVLib.setPropertyString("cscale", "bilinear")
-        MPVLib.setPropertyString("dscale", "bilinear")
+    // PERFORMANCE OPTIMIZATION FUNCTIONS FOR SEEKING
+    fun enableSeekingOptimization() {
+        // Switch to fastest rendering mode
+        MPVLib.setPropertyString("profile", "fast")
         
-        // Set low resolution scaling
-        MPVLib.setPropertyString("scale", "w=256:h=144")
-        MPVLib.setPropertyString("cscale", "w=128:h=72")
+        // Reduce rendering quality for speed
+        MPVLib.setPropertyString("scale", "nearest") // Fastest scaling
+        MPVLib.setPropertyString("cscale", "nearest")
+        MPVLib.setPropertyString("dscale", "nearest")
+        
+        // Enable hardware acceleration if available
+        MPVLib.setPropertyString("hwdec", "auto")
+        
+        // Reduce video output quality
+        MPVLib.setPropertyString("video-output-levels", "limited")
+        MPVLib.setPropertyString("dither-depth", "auto")
         
         // Optimize for seeking performance
         MPVLib.setPropertyString("correct-pts", "no")
@@ -163,15 +169,27 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("vd-lavc-skipidct", "all")
         MPVLib.setPropertyString("vd-lavc-assemble", "no")
         
-        // Reduce output quality for faster processing
-        MPVLib.setPropertyString("profile", "fast")
+        // Reduce CPU usage
+        MPVLib.setPropertyString("vd-lavc-threads", "1")
+        
+        println("🔄 ENABLED SEEKING OPTIMIZATION")
     }
     
-    fun disableLowResSeeking() {
-        // Restore original quality settings
+    fun disableSeekingOptimization() {
+        // Restore quality settings
+        MPVLib.setPropertyString("profile", "high-quality")
+        
+        // Restore scaling quality
         MPVLib.setPropertyString("scale", "")
         MPVLib.setPropertyString("cscale", "")
         MPVLib.setPropertyString("dscale", "")
+        
+        // Restore hardware decoding to your preference
+        MPVLib.setPropertyString("hwdec", "no")
+        
+        // Restore video quality
+        MPVLib.setPropertyString("video-output-levels", "")
+        MPVLib.setPropertyString("dither-depth", "")
         
         // Restore normal playback settings
         MPVLib.setPropertyString("correct-pts", "yes")
@@ -184,8 +202,10 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("vd-lavc-skipidct", "none")
         MPVLib.setPropertyString("vd-lavc-assemble", "yes")
         
-        // Restore quality profile
-        MPVLib.setPropertyString("profile", "high-quality")
+        // Restore CPU usage
+        MPVLib.setPropertyString("vd-lavc-threads", "8")
+        
+        println("🔄 DISABLED SEEKING OPTIMIZATION")
     }
 
     // IMPROVED: Better segment scanning - scans multiple key points
@@ -423,7 +443,7 @@ fun PlayerOverlay(
         return ""
     }
     
-    // UPDATED: startHorizontalSeeking - ENABLE LOW RES
+    // UPDATED: startHorizontalSeeking - ENABLE OPTIMIZATION
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
@@ -433,8 +453,8 @@ fun PlayerOverlay(
         isSeeking = true
         showSeekTime = true
         
-        // ENABLE LOW RESOLUTION FOR SMOOTH SEEKING
-        enableLowResSeeking()
+        // ENABLE PERFORMANCE OPTIMIZATION FOR SEEKING
+        enableSeekingOptimization()
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
@@ -488,14 +508,14 @@ fun PlayerOverlay(
         performRealTimeSeek(clampedPosition)
     }
     
-    // UPDATED: endHorizontalSeeking - DISABLE LOW RES
+    // UPDATED: endHorizontalSeeking - DISABLE OPTIMIZATION
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
             performRealTimeSeek(currentPos)
             
-            // DISABLE LOW RESOLUTION AND RESTORE QUALITY
-            disableLowResSeeking()
+            // DISABLE OPTIMIZATION AND RESTORE QUALITY
+            disableSeekingOptimization()
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -656,7 +676,7 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // UPDATED: handleProgressBarDrag - WITH LOW RES OPTIMIZATION
+    // UPDATED: handleProgressBarDrag - WITH OPTIMIZATION
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
@@ -664,8 +684,8 @@ fun PlayerOverlay(
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
             
-            // ENABLE LOW RESOLUTION FOR SMOOTH SEEKBAR DRAGGING
-            enableLowResSeeking()
+            // ENABLE PERFORMANCE OPTIMIZATION FOR SEEKING
+            enableSeekingOptimization()
             
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
@@ -688,12 +708,12 @@ fun PlayerOverlay(
         performRealTimeSeek(targetPosition)
     }
     
-    // UPDATED: handleDragFinished - DISABLE LOW RES
+    // UPDATED: handleDragFinished - DISABLE OPTIMIZATION
     fun handleDragFinished() {
         isDragging = false
         
-        // DISABLE LOW RESOLUTION AND RESTORE QUALITY
-        disableLowResSeeking()
+        // DISABLE OPTIMIZATION AND RESTORE QUALITY
+        disableSeekingOptimization()
         
         if (wasPlayingBeforeSeek) {
             coroutineScope.launch {
@@ -974,7 +994,7 @@ fun SimpleDraggableProgressBar(
                                 thresholdStartX = currentX // NEW: Store position where threshold was passed
                             } else {
                                 // Haven't passed threshold yet, don't seek
-                                return@detectDragGestures
+                                return@detactDragGestures
                             }
                         }
                         
