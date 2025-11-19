@@ -156,6 +156,120 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
 
+    // MOVE THESE FUNCTIONS TO THE TOP TO FIX COMPILATION ERRORS
+
+    fun showPlaybackFeedback(text: String) {
+        playbackFeedbackJob?.cancel()
+        showPlaybackFeedback = true
+        playbackFeedbackText = text
+        playbackFeedbackJob = coroutineScope.launch {
+            delay(1000)
+            showPlaybackFeedback = false
+        }
+    }
+
+    fun scheduleSeekbarHide() {
+        if (userInteracting) return
+        hideSeekbarJob?.cancel()
+        hideSeekbarJob = coroutineScope.launch {
+            delay(4000)
+            showSeekbar = false
+        }
+    }
+    
+    fun cancelAutoHide() {
+        userInteracting = true
+        hideSeekbarJob?.cancel()
+        coroutineScope.launch {
+            delay(100)
+            userInteracting = false
+        }
+    }
+    
+    fun showSeekbarWithTimeout() {
+        showSeekbar = true
+        scheduleSeekbarHide()
+    }
+
+    fun handleTap() {
+        val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
+        if (currentPaused) {
+            coroutineScope.launch {
+                val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+                MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
+                delay(100)
+                MPVLib.setPropertyBoolean("pause", false)
+            }
+            showPlaybackFeedback("Resume")
+        } else {
+            MPVLib.setPropertyBoolean("pause", true)
+            showPlaybackFeedback("Pause")
+        }
+        if (showSeekbar) {
+            showSeekbar = false
+        } else {
+            showSeekbarWithTimeout()
+        }
+        isPausing = !currentPaused
+    }
+
+    // UPDATED: performRealTimeSeek with throttle
+    fun performRealTimeSeek(targetPosition: Double) {
+        if (isSeekInProgress) return
+        
+        isSeekInProgress = true
+        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+        
+        coroutineScope.launch {
+            delay(seekThrottleMs)
+            isSeekInProgress = false
+        }
+    }
+    
+    // NEW: Function to get fresh position from MPV
+    fun getFreshPosition(): Float {
+        return (MPVLib.getPropertyDouble("time-pos") ?: 0.0).toFloat()
+    }
+    
+    // ADD: Quick seek function
+    fun performQuickSeek(seconds: Int) {
+        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+        val newPosition = (currentPos + seconds).coerceIn(0.0, duration)
+        
+        // Show feedback
+        quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
+        showQuickSeekFeedback = true
+        quickSeekFeedbackJob?.cancel()
+        quickSeekFeedbackJob = coroutineScope.launch {
+            delay(1000)
+            showQuickSeekFeedback = false
+        }
+        
+        // Perform seek
+        MPVLib.command("seek", seconds.toString(), "relative", "exact")
+    }
+    
+    fun toggleVideoInfo() {
+        showVideoInfo = if (showVideoInfo == 0) 1 else 0
+        if (showVideoInfo != 0) {
+            videoInfoJob?.cancel()
+            videoInfoJob = coroutineScope.launch {
+                delay(4000)
+                showVideoInfo = 0
+            }
+        }
+    }
+    
+    val showVolumeFeedback: (Int) -> Unit = { volume ->
+        volumeFeedbackJob?.cancel()
+        showVolumeFeedbackState = true
+        volumeFeedbackJob = coroutineScope.launch {
+            delay(1000)
+            showVolumeFeedbackState = false
+        }
+    }
+
     // NEW: Detect segmented files based on format and behavior
     fun detectSegmentedFile(format: String, duration: Double, filePath: String): Boolean {
         // Check file format indicators
@@ -449,125 +563,6 @@ fun PlayerOverlay(
             MPVLib.setPropertyBoolean("pause", false)
             showPlaybackFeedback("Playing original file (may have seeking issues)")
         }
-    }
-
-    // UPDATED: performRealTimeSeek with throttle
-    fun performRealTimeSeek(targetPosition: Double) {
-        if (isSeekInProgress) return
-        
-        isSeekInProgress = true
-        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
-        
-        coroutineScope.launch {
-            delay(seekThrottleMs)
-            isSeekInProgress = false
-        }
-    }
-    
-    // NEW: Function to get fresh position from MPV
-    fun getFreshPosition(): Float {
-        return (MPVLib.getPropertyDouble("time-pos") ?: 0.0).toFloat()
-    }
-    
-    // ADD: Quick seek function
-    fun performQuickSeek(seconds: Int) {
-        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-        val newPosition = (currentPos + seconds).coerceIn(0.0, duration)
-        
-        // Show feedback
-        quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
-        showQuickSeekFeedback = true
-        quickSeekFeedbackJob?.cancel()
-        quickSeekFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showQuickSeekFeedback = false
-        }
-        
-        // Perform seek
-        MPVLib.command("seek", seconds.toString(), "relative", "exact")
-    }
-    
-    fun toggleVideoInfo() {
-        showVideoInfo = if (showVideoInfo == 0) 1 else 0
-        if (showVideoInfo != 0) {
-            videoInfoJob?.cancel()
-            videoInfoJob = coroutineScope.launch {
-                delay(4000)
-                showVideoInfo = 0
-            }
-        }
-    }
-    
-    val showVolumeFeedback: (Int) -> Unit = { volume ->
-        volumeFeedbackJob?.cancel()
-        showVolumeFeedbackState = true
-        volumeFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showVolumeFeedbackState = false
-        }
-    }
-    
-    LaunchedEffect(viewModel.currentVolume) {
-        viewModel.currentVolume.collect { volume ->
-            currentVolume = volume
-            showVolumeFeedback(volume)
-        }
-    }
-    
-    fun scheduleSeekbarHide() {
-        if (userInteracting) return
-        hideSeekbarJob?.cancel()
-        hideSeekbarJob = coroutineScope.launch {
-            delay(4000)
-            showSeekbar = false
-        }
-    }
-    
-    fun cancelAutoHide() {
-        userInteracting = true
-        hideSeekbarJob?.cancel()
-        coroutineScope.launch {
-            delay(100)
-            userInteracting = false
-        }
-    }
-    
-    fun showSeekbarWithTimeout() {
-        showSeekbar = true
-        scheduleSeekbarHide()
-    }
-    
-    fun showPlaybackFeedback(text: String) {
-        playbackFeedbackJob?.cancel()
-        showPlaybackFeedback = true
-        playbackFeedbackText = text
-        playbackFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showPlaybackFeedback = false
-        }
-    }
-    
-    fun handleTap() {
-        val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
-        if (currentPaused) {
-            coroutineScope.launch {
-                val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-                MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
-                delay(100)
-                MPVLib.setPropertyBoolean("pause", false)
-            }
-            showPlaybackFeedback("Resume")
-        } else {
-            MPVLib.setPropertyBoolean("pause", true)
-            showPlaybackFeedback("Pause")
-        }
-        if (showSeekbar) {
-            showSeekbar = false
-        } else {
-            showSeekbarWithTimeout()
-        }
-        isPausing = !currentPaused
     }
     
     fun startLongTapDetection() {
@@ -1240,6 +1235,8 @@ fun PlayerOverlay(
         }
     }
 }
+
+// KEEP ALL THE HELPER FUNCTIONS AT THE BOTTOM
 
 @Composable
 fun SimpleDraggableProgressBar(
