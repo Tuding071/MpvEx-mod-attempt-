@@ -144,6 +144,75 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
 
+    // NEW: Detect segmented files based on format and behavior
+    fun detectSegmentedFile(format: String, duration: Double): Boolean {
+        // Check file format indicators
+        val segmentedFormats = listOf("mp4", "mov", "m4v", "ismv")
+        val isProblematicFormat = format.lowercase() in segmentedFormats
+        
+        // Check for TS-like behavior (common in social media downloads)
+        val hasInconsistentTimestamps = duration <= 0 || duration > 36000 // 10+ hours often indicates issues
+        
+        // Check for known problematic patterns
+        val fileName = MPVLib.getPropertyString("path") ?: ""
+        val isLikelySocialMedia = fileName.contains("tiktok", ignoreCase = true) ||
+                                 fileName.contains("instagram", ignoreCase = true) ||
+                                 fileName.contains("whatsapp", ignoreCase = true)
+        
+        return isProblematicFormat && (hasInconsistentTimestamps || isLikelySocialMedia)
+    }
+
+    // NEW: Enhanced scanning for segmented files
+    suspend fun performEnhancedSegmentScanning(duration: Double) {
+        if (duration > 10) {
+            // Comprehensive scan for segmented files
+            val scanPoints = listOf(0.05, 0.10, 0.20, 0.35, 0.50, 0.65, 0.80, 0.95)
+            val progressPerPoint = 50 / scanPoints.size
+            var segmentsFound = 0
+            
+            for ((index, point) in scanPoints.withIndex()) {
+                val targetTime = duration * point
+                MPVLib.command("seek", targetTime.toString(), "absolute", "keyframes")
+                delay(100) // Longer delay for problematic files
+                
+                // Check if seek was successful
+                val actualPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+                if (abs(actualPos - targetTime) > 2.0) {
+                    segmentsFound++
+                }
+                
+                preprocessingProgress = 30 + (index + 1) * progressPerPoint
+            }
+            
+            detectedSegments = segmentsFound
+            preprocessingStage = "Found $segmentsFound segments - Optimizing..."
+        } else {
+            // Short video - quick scan
+            MPVLib.command("seek", (duration * 0.3).toString(), "absolute", "keyframes")
+            preprocessingProgress = 50
+            delay(80)
+            
+            MPVLib.command("seek", (duration * 0.7).toString(), "absolute", "keyframes")
+            preprocessingProgress = 70
+            delay(80)
+        }
+    }
+
+    // NEW: Quick scan for normal files
+    suspend fun performQuickScan(duration: Double) {
+        if (duration > 30) {
+            // Just scan key points quickly
+            MPVLib.command("seek", (duration * 0.2).toString(), "absolute", "keyframes")
+            preprocessingProgress = 60
+            delay(50)
+            
+            MPVLib.command("seek", (duration * 0.8).toString(), "absolute", "keyframes")
+            preprocessingProgress = 80
+            delay(50)
+        }
+        // For very short videos, no scanning needed
+    }
+
     // ENHANCED: Smart preprocessing with segment detection
     fun preprocessVideoFile() {
         isPreprocessing = true
@@ -219,79 +288,6 @@ fun PlayerOverlay(
             
             // Start playback
             MPVLib.setPropertyBoolean("pause", false)
-        }
-    }
-
-    // NEW: Detect segmented files based on format and behavior
-    fun detectSegmentedFile(format: String, duration: Double): Boolean {
-        // Check file format indicators
-        val segmentedFormats = listOf("mp4", "mov", "m4v", "ismv")
-        val isProblematicFormat = format.lowercase() in segmentedFormats
-        
-        // Check for TS-like behavior (common in social media downloads)
-        val hasInconsistentTimestamps = duration <= 0 || duration > 36000 // 10+ hours often indicates issues
-        
-        // Check for known problematic patterns
-        val fileName = MPVLib.getPropertyString("path") ?: ""
-        val isLikelySocialMedia = fileName.contains("tiktok", ignoreCase = true) ||
-                                 fileName.contains("instagram", ignoreCase = true) ||
-                                 fileName.contains("whatsapp", ignoreCase = true)
-        
-        return isProblematicFormat && (hasInconsistentTimestamps || isLikelySocialMedia)
-    }
-
-    // NEW: Enhanced scanning for segmented files
-    fun performEnhancedSegmentScanning(duration: Double) {
-        coroutineScope.launch {
-            if (duration > 10) {
-                // Comprehensive scan for segmented files
-                val scanPoints = listOf(0.05, 0.10, 0.20, 0.35, 0.50, 0.65, 0.80, 0.95)
-                val progressPerPoint = 50 / scanPoints.size
-                var segmentsFound = 0
-                
-                for ((index, point) in scanPoints.withIndex()) {
-                    val targetTime = duration * point
-                    MPVLib.command("seek", targetTime.toString(), "absolute", "keyframes")
-                    delay(100) // Longer delay for problematic files
-                    
-                    // Check if seek was successful
-                    val actualPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-                    if (abs(actualPos - targetTime) > 2.0) {
-                        segmentsFound++
-                    }
-                    
-                    preprocessingProgress = 30 + (index + 1) * progressPerPoint
-                }
-                
-                detectedSegments = segmentsFound
-                preprocessingStage = "Found $segmentsFound segments - Optimizing..."
-            } else {
-                // Short video - quick scan
-                MPVLib.command("seek", (duration * 0.3).toString(), "absolute", "keyframes")
-                preprocessingProgress = 50
-                delay(80)
-                
-                MPVLib.command("seek", (duration * 0.7).toString(), "absolute", "keyframes")
-                preprocessingProgress = 70
-                delay(80)
-            }
-        }
-    }
-
-    // NEW: Quick scan for normal files
-    fun performQuickScan(duration: Double) {
-        coroutineScope.launch {
-            if (duration > 30) {
-                // Just scan key points quickly
-                MPVLib.command("seek", (duration * 0.2).toString(), "absolute", "keyframes")
-                preprocessingProgress = 60
-                delay(50)
-                
-                MPVLib.command("seek", (duration * 0.8).toString(), "absolute", "keyframes")
-                preprocessingProgress = 80
-                delay(50)
-            }
-            // For very short videos, no scanning needed
         }
     }
 
@@ -488,7 +484,7 @@ fun PlayerOverlay(
         if (!isSeeking) return
         
         val deltaX = currentX - seekStartX
-        val pixelsPerSecond = 4f / 0.016f
+        val pixelsPerSecond = 4f / 0.016f // 250 pixels per second
         val timeDeltaSeconds = deltaX / pixelsPerSecond
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
