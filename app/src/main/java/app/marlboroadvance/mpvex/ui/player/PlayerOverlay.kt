@@ -56,6 +56,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import android.content.Intent
 import android.net.Uri
 import kotlin.math.abs
+import java.util.concurrent.locks.ReentrantLock
 
 @Composable
 fun PlayerOverlay(
@@ -88,9 +89,9 @@ fun PlayerOverlay(
     var seekDirection by remember { mutableStateOf("") } // "+" or "-" or ""
     
     // GUARANTEED SEEK EXECUTION SYSTEM
-    var seekCommandQueue by remember { mutableStateOf<MutableList<Double>>(mutableListOf()) }
+    var seekCommandQueue by remember { mutableStateOf(mutableListOf<Double>()) }
     var isSeekExecuting by remember { mutableStateOf(false) }
-    val seekMutex = remember { java.util.concurrent.locks.ReentrantLock() }
+    val seekMutex = remember { ReentrantLock() }
     
     // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
     var touchStartTime by remember { mutableStateOf(0L) }
@@ -193,27 +194,12 @@ fun PlayerOverlay(
         delay(500)
     }
     
-    // GUARANTEED SEEK EXECUTION SYSTEM
-    fun performRealTimeSeek(targetPosition: Double) {
-        coroutineScope.launch {
-            seekMutex.lock()
-            try {
-                seekCommandQueue.add(targetPosition)
-                if (!isSeekExecuting) {
-                    processSeekQueue()
-                }
-            } finally {
-                seekMutex.unlock()
-            }
-        }
-    }
-    
     // Process seek queue sequentially
     fun processSeekQueue() {
         coroutineScope.launch {
             seekMutex.lock()
             try {
-                if (isSeekExecuting || seekCommandQueue.isEmpty()) return
+                if (isSeekExecuting || seekCommandQueue.isEmpty()) return@launch
                 
                 isSeekExecuting = true
                 val targetPosition = seekCommandQueue.first()
@@ -249,6 +235,21 @@ fun PlayerOverlay(
                 } finally {
                     seekMutex.unlock()
                 }
+            }
+        }
+    }
+    
+    // GUARANTEED SEEK EXECUTION SYSTEM
+    fun performRealTimeSeek(targetPosition: Double) {
+        coroutineScope.launch {
+            seekMutex.lock()
+            try {
+                seekCommandQueue.add(targetPosition)
+                if (!isSeekExecuting) {
+                    processSeekQueue()
+                }
+            } finally {
+                seekMutex.unlock()
             }
         }
     }
