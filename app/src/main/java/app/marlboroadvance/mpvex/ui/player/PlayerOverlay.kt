@@ -154,49 +154,87 @@ fun PlayerOverlay(
     val convertedVideos = remember { mutableSetOf<String>() }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
+
+    // ========== FUNCTION DEFINITIONS - MOVED TO TOP ==========
     
-    // NEW: Video Conversion Functions - SIMPLIFIED
-    fun shouldConvertVideo(): Boolean {
-        if (currentVideoPath.isEmpty()) return false
-        if (!File(currentVideoPath).exists()) return false
-        
-        // Check if already converted in this session
-        if (convertedVideos.contains(currentVideoPath)) return false
-        
-        // Always ask for conversion if not converted yet
-        return true
-    }
-    
-    fun startConversion() {
-        showConversionPrompt = false
-        isConverting = true
-        conversionProgress = 0
-        
-        conversionJob = coroutineScope.launch {
-            val success = convertVideoToH264(currentVideoPath) { progress ->
-                conversionProgress = progress
-            }
-            
-            if (success) {
-                // Mark as converted
-                convertedVideos.add(currentVideoPath)
-                // Reload the converted video
-                MPVLib.command("loadfile", currentVideoPath)
-                startNormalPreprocessing()
-            } else {
-                // Conversion failed, fall back to normal playback
-                showPlaybackFeedback("Conversion failed")
-                startNormalPreprocessing()
-            }
-            isConverting = false
+    // SOLUTION 1: Fast Pre-scan with UI
+    fun preScanVideo(): kotlinx.coroutines.Job = coroutineScope.launch {
+        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+        if (duration <= 0) {
+            isPreprocessing = false
+            return@launch
         }
+        
+        // Store original state
+        val originalSpeed = MPVLib.getPropertyDouble("speed") ?: 1.0
+        val wasPaused = MPVLib.getPropertyBoolean("pause") ?: true
+        val originalVolume = MPVLib.getPropertyDouble("volume") ?: 100.0
+        val originalMute = MPVLib.getPropertyBoolean("mute") ?: false
+        
+        // Mute audio and set high speed for fast scanning
+        MPVLib.setPropertyBoolean("mute", true)
+        MPVLib.setPropertyDouble("speed", 16.0)
+        MPVLib.setPropertyBoolean("pause", false)
+        
+        val totalSteps = 20
+        val scanStep = (duration * 0.05).toLong() // 5% steps
+        
+        preprocessingText = "Caching video for smooth seeking..."
+        
+        // Scan through the video in steps
+        for (i in 0 until totalSteps) {
+            if (!isActive) break
+            
+            val targetTime = (i * scanStep).coerceAtMost(duration.toLong())
+            preprocessingProgress = ((i.toDouble() / totalSteps) * 100).toInt()
+            
+            MPVLib.command("seek", targetTime.toString(), "absolute", "keyframes")
+            delay(50) // Small delay between seeks
+            
+            // Update progress text
+            preprocessingText = "Caching video... ${preprocessingProgress}%"
+        }
+        
+        // Return to beginning and restore state
+        MPVLib.command("seek", "0", "absolute", "exact")
+        MPVLib.setPropertyDouble("speed", originalSpeed)
+        MPVLib.setPropertyBoolean("pause", wasPaused)
+        MPVLib.setPropertyBoolean("mute", originalMute)
+        MPVLib.setPropertyDouble("volume", originalVolume)
+        
+        // Mark preprocessing as complete
+        isPreprocessing = false
+        preprocessingText = "Ready!"
+        
+        // Brief delay to show completion
+        delay(500)
     }
     
-    fun skipConversion() {
-        showConversionPrompt = false
-        // Mark as skipped (so we don't ask again for this video in current session)
-        convertedVideos.add(currentVideoPath)
-        startNormalPreprocessing()
+    fun startNormalPreprocessing() {
+        preScanVideo().invokeOnCompletion {
+            // After preprocessing, initialize the rest
+            val intent = (context as? android.app.Activity)?.intent
+            fileName = when {
+                intent?.action == Intent.ACTION_SEND -> {
+                    getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context)
+                }
+                intent?.action == Intent.ACTION_VIEW -> {
+                    getFileNameFromUri(intent.data, context)
+                }
+                else -> {
+                    getBestAvailableFileName(context)
+                }
+            }
+            val title = MPVLib.getPropertyString("media-title") ?: "Video"
+            videoTitle = title
+            showVideoInfo = 1
+            videoInfoJob?.cancel()
+            videoInfoJob = coroutineScope.launch {
+                delay(4000)
+                showVideoInfo = 0
+            }
+            scheduleSeekbarHide()
+        }
     }
     
     suspend fun convertVideoToH264(originalPath: String, onProgress: (Int) -> Unit): Boolean {
@@ -249,32 +287,354 @@ fun PlayerOverlay(
         }
     }
     
-    fun startNormalPreprocessing() {
-        preScanVideo().invokeOnCompletion {
-            // After preprocessing, initialize the rest
-            val intent = (context as? android.app.Activity)?.intent
-            fileName = when {
-                intent?.action == Intent.ACTION_SEND -> {
-                    getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context)
-                }
-                intent?.action == Intent.ACTION_VIEW -> {
-                    getFileNameFromUri(intent.data, context)
-                }
-                else -> {
-                    getBestAvailableFileName(context)
-                }
+    // NEW: Video Conversion Functions - SIMPLIFIED
+    fun shouldConvertVideo(): Boolean {
+        if (currentVideoPath.isEmpty()) return false
+        if (!File(currentVideoPath).exists()) return false
+        
+        // Check if already converted in this session
+        if (convertedVideos.contains(currentVideoPath)) return false
+        
+        // Always ask for conversion if not converted yet
+        return true
+    }
+    
+    fun startConversion() {
+        showConversionPrompt = false
+        isConverting = true
+        conversionProgress = 0
+        
+        conversionJob = coroutineScope.launch {
+            val success = convertVideoToH264(currentVideoPath) { progress ->
+                conversionProgress = progress
             }
-            val title = MPVLib.getPropertyString("media-title") ?: "Video"
-            videoTitle = title
-            showVideoInfo = 1
+            
+            if (success) {
+                // Mark as converted
+                convertedVideos.add(currentVideoPath)
+                // Reload the converted video
+                MPVLib.command("loadfile", currentVideoPath)
+                startNormalPreprocessing()
+            } else {
+                // Conversion failed, fall back to normal playback
+                showPlaybackFeedback("Conversion failed")
+                startNormalPreprocessing()
+            }
+            isConverting = false
+        }
+    }
+    
+    fun skipConversion() {
+        showConversionPrompt = false
+        // Mark as skipped (so we don't ask again for this video in current session)
+        convertedVideos.add(currentVideoPath)
+        startNormalPreprocessing()
+    }
+    
+    // UPDATED: performRealTimeSeek with throttle
+    fun performRealTimeSeek(targetPosition: Double) {
+        if (isSeekInProgress) return // Skip if we're already processing a seek
+        
+        isSeekInProgress = true
+        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+        
+        // Reset after throttle period
+        coroutineScope.launch {
+            delay(seekThrottleMs)
+            isSeekInProgress = false
+        }
+    }
+    
+    // NEW: Function to get fresh position from MPV
+    fun getFreshPosition(): Float {
+        return (MPVLib.getPropertyDouble("time-pos") ?: 0.0).toFloat()
+    }
+    
+    // ADD: Quick seek function
+    fun performQuickSeek(seconds: Int) {
+        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+        val newPosition = (currentPos + seconds).coerceIn(0.0, duration)
+        
+        // Show feedback
+        quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
+        showQuickSeekFeedback = true
+        quickSeekFeedbackJob?.cancel()
+        quickSeekFeedbackJob = coroutineScope.launch {
+            delay(1000)
+            showQuickSeekFeedback = false
+        }
+        
+        // Perform seek
+        MPVLib.command("seek", seconds.toString(), "relative", "exact")
+    }
+    
+    fun toggleVideoInfo() {
+        showVideoInfo = if (showVideoInfo == 0) 1 else 0
+        if (showVideoInfo != 0) {
             videoInfoJob?.cancel()
             videoInfoJob = coroutineScope.launch {
                 delay(4000)
                 showVideoInfo = 0
             }
+        }
+    }
+    
+    val showVolumeFeedback: (Int) -> Unit = { volume ->
+        volumeFeedbackJob?.cancel()
+        showVolumeFeedbackState = true
+        volumeFeedbackJob = coroutineScope.launch {
+            delay(1000)
+            showVolumeFeedbackState = false
+        }
+    }
+    
+    fun scheduleSeekbarHide() {
+        if (userInteracting) return
+        hideSeekbarJob?.cancel()
+        hideSeekbarJob = coroutineScope.launch {
+            delay(4000)
+            showSeekbar = false
+        }
+    }
+    
+    fun cancelAutoHide() {
+        userInteracting = true
+        hideSeekbarJob?.cancel()
+        coroutineScope.launch {
+            delay(100)
+            userInteracting = false
+        }
+    }
+    
+    fun showSeekbarWithTimeout() {
+        showSeekbar = true
+        scheduleSeekbarHide()
+    }
+    
+    fun showPlaybackFeedback(text: String) {
+        playbackFeedbackJob?.cancel()
+        showPlaybackFeedback = true
+        playbackFeedbackText = text
+        playbackFeedbackJob = coroutineScope.launch {
+            delay(1000)
+            showPlaybackFeedback = false
+        }
+    }
+    
+    fun handleTap() {
+        val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
+        if (currentPaused) {
+            coroutineScope.launch {
+                val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+                MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
+                delay(100)
+                MPVLib.setPropertyBoolean("pause", false)
+            }
+            showPlaybackFeedback("Resume")
+        } else {
+            MPVLib.setPropertyBoolean("pause", true)
+            showPlaybackFeedback("Pause")
+        }
+        if (showSeekbar) {
+            showSeekbar = false
+        } else {
+            showSeekbarWithTimeout()
+        }
+        isPausing = !currentPaused
+    }
+    
+    fun startLongTapDetection() {
+        isTouching = true
+        touchStartTime = System.currentTimeMillis()
+        longTapJob?.cancel()
+        longTapJob = coroutineScope.launch {
+            delay(longTapThreshold)
+            if (isTouching && !isHorizontalSwipe && !isVerticalSwipe) {
+                isLongTap = true
+                isSpeedingUp = true
+                MPVLib.setPropertyDouble("speed", 2.0)
+            }
+        }
+    }
+    
+    // UPDATED: checkForHorizontalSwipe to also check for vertical swipes
+    fun checkForSwipeDirection(currentX: Float, currentY: Float): String {
+        if (isHorizontalSwipe || isVerticalSwipe || isLongTap) return "" // Already determined or long tap active
+        
+        val deltaX = kotlin.math.abs(currentX - touchStartX)
+        val deltaY = kotlin.math.abs(currentY - touchStartY)
+        
+        // Check for horizontal swipe
+        if (deltaX > horizontalSwipeThreshold && deltaX > deltaY && deltaY < maxVerticalMovement) {
+            return "horizontal"
+        }
+        
+        // Check for vertical swipe
+        if (deltaY > verticalSwipeThreshold && deltaY > deltaX && deltaX < maxHorizontalMovement) {
+            return "vertical"
+        }
+        
+        return ""
+    }
+    
+    fun startHorizontalSeeking(startX: Float) {
+        isHorizontalSwipe = true
+        cancelAutoHide()
+        seekStartX = startX
+        seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+        wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
+        isSeeking = true
+        showSeekTime = true
+        // REMOVED: lastSeekTime = 0L
+        
+        if (wasPlayingBeforeSeek) {
+            MPVLib.setPropertyBoolean("pause", true)
+        }
+    }
+    
+    // ADD: Start vertical swipe detection
+    fun startVerticalSwipe(startY: Float) {
+        isVerticalSwipe = true
+        cancelAutoHide()
+        // Determine direction based on initial movement
+        val currentY = startY
+        val deltaY = currentY - touchStartY
+        
+        if (deltaY < 0) {
+            // Swipe up - seek forward
+            seekDirection = "+"
+            performQuickSeek(quickSeekAmount)
+        } else {
+            // Swipe down - seek backward
+            seekDirection = "-"
+            performQuickSeek(-quickSeekAmount)
+        }
+    }
+    
+    // UPDATED: handleHorizontalSeeking without debouncing
+    fun handleHorizontalSeeking(currentX: Float) {
+        if (!isSeeking) return
+        
+        val deltaX = currentX - seekStartX
+        val pixelsPerSecond = 4f / 0.016f
+        val timeDeltaSeconds = deltaX / pixelsPerSecond
+        val newPositionSeconds = seekStartPosition + timeDeltaSeconds
+        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+        val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
+        
+        // UPDATE: Set seek direction based on movement
+        seekDirection = if (deltaX > 0) "+" else "-"
+        
+        // ALWAYS update UI instantly
+        seekTargetTime = formatTimeSimple(clampedPosition)
+        currentTime = formatTimeSimple(clampedPosition)
+        
+        // Send seek command with throttle
+        performRealTimeSeek(clampedPosition)
+    }
+    
+    fun endHorizontalSeeking() {
+        if (isSeeking) {
+            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
+            performRealTimeSeek(currentPos)
+            
+            if (wasPlayingBeforeSeek) {
+                coroutineScope.launch {
+                    delay(100)
+                    MPVLib.setPropertyBoolean("pause", false)
+                }
+            }
+            
+            isSeeking = false
+            showSeekTime = false
+            seekStartX = 0f
+            seekStartPosition = 0.0
+            wasPlayingBeforeSeek = false
+            seekDirection = "" // Reset direction
             scheduleSeekbarHide()
         }
     }
+    
+    // ADD: End vertical swipe
+    fun endVerticalSwipe() {
+        isVerticalSwipe = false
+        scheduleSeekbarHide()
+    }
+    
+    fun endTouch() {
+        val touchDuration = System.currentTimeMillis() - touchStartTime
+        isTouching = false
+        longTapJob?.cancel()
+        
+        if (isLongTap) {
+            // Long tap ended - reset speed
+            isLongTap = false
+            isSpeedingUp = false
+            MPVLib.setPropertyDouble("speed", 1.0)
+        } else if (isHorizontalSwipe) {
+            // Horizontal swipe ended
+            endHorizontalSeeking()
+            isHorizontalSwipe = false
+        } else if (isVerticalSwipe) {
+            // Vertical swipe ended
+            endVerticalSwipe()
+            isVerticalSwipe = false
+        } else if (touchDuration < 150) {
+            // Short tap (less than 150ms)
+            handleTap()
+        }
+        // Reset all gesture states
+        isHorizontalSwipe = false
+        isVerticalSwipe = false
+        isLongTap = false
+    }
+    
+    // UPDATED: handleProgressBarDrag with movement threshold and direction
+    fun handleProgressBarDrag(newPosition: Float) {
+        cancelAutoHide()
+        if (!isSeeking) {
+            isSeeking = true
+            wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
+            showSeekTime = true
+            // REMOVED: lastSeekTime = 0L
+            if (wasPlayingBeforeSeek) {
+                MPVLib.setPropertyBoolean("pause", true)
+            }
+        }
+        isDragging = true
+        val oldPosition = seekbarPosition
+        seekbarPosition = newPosition
+        
+        // UPDATE: Set seek direction based on movement
+        seekDirection = if (newPosition > oldPosition) "+" else "-"
+        
+        val targetPosition = newPosition.toDouble()
+        
+        // ALWAYS update UI instantly
+        seekTargetTime = formatTimeSimple(targetPosition)
+        currentTime = formatTimeSimple(targetPosition)
+        
+        // Send seek command with throttle
+        performRealTimeSeek(targetPosition)
+    }
+    
+    fun handleDragFinished() {
+        isDragging = false
+        if (wasPlayingBeforeSeek) {
+            coroutineScope.launch {
+                delay(100)
+                MPVLib.setPropertyBoolean("pause", false)
+            }
+        }
+        isSeeking = false
+        showSeekTime = false
+        wasPlayingBeforeSeek = false
+        seekDirection = "" // Reset direction
+        scheduleSeekbarHide()
+    }
+
+    // ========== COMPOSABLE FUNCTIONS ==========
     
     // NEW: Conversion Prompt Composable
     @Composable
@@ -526,324 +886,14 @@ fun PlayerOverlay(
             }
         }
     }
-    
-    // SOLUTION 1: Fast Pre-scan with UI
-    fun preScanVideo(): kotlinx.coroutines.Job = coroutineScope.launch {
-        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-        if (duration <= 0) {
-            isPreprocessing = false
-            return@launch
-        }
-        
-        // Store original state
-        val originalSpeed = MPVLib.getPropertyDouble("speed") ?: 1.0
-        val wasPaused = MPVLib.getPropertyBoolean("pause") ?: true
-        val originalVolume = MPVLib.getPropertyDouble("volume") ?: 100.0
-        val originalMute = MPVLib.getPropertyBoolean("mute") ?: false
-        
-        // Mute audio and set high speed for fast scanning
-        MPVLib.setPropertyBoolean("mute", true)
-        MPVLib.setPropertyDouble("speed", 16.0)
-        MPVLib.setPropertyBoolean("pause", false)
-        
-        val totalSteps = 20
-        val scanStep = (duration * 0.05).toLong() // 5% steps
-        
-        preprocessingText = "Caching video for smooth seeking..."
-        
-        // Scan through the video in steps
-        for (i in 0 until totalSteps) {
-            if (!isActive) break
-            
-            val targetTime = (i * scanStep).coerceAtMost(duration.toLong())
-            preprocessingProgress = ((i.toDouble() / totalSteps) * 100).toInt()
-            
-            MPVLib.command("seek", targetTime.toString(), "absolute", "keyframes")
-            delay(50) // Small delay between seeks
-            
-            // Update progress text
-            preprocessingText = "Caching video... ${preprocessingProgress}%"
-        }
-        
-        // Return to beginning and restore state
-        MPVLib.command("seek", "0", "absolute", "exact")
-        MPVLib.setPropertyDouble("speed", originalSpeed)
-        MPVLib.setPropertyBoolean("pause", wasPaused)
-        MPVLib.setPropertyBoolean("mute", originalMute)
-        MPVLib.setPropertyDouble("volume", originalVolume)
-        
-        // Mark preprocessing as complete
-        isPreprocessing = false
-        preprocessingText = "Ready!"
-        
-        // Brief delay to show completion
-        delay(500)
-    }
-    
-    // UPDATED: performRealTimeSeek with throttle
-    fun performRealTimeSeek(targetPosition: Double) {
-        if (isSeekInProgress) return // Skip if we're already processing a seek
-        
-        isSeekInProgress = true
-        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
-        
-        // Reset after throttle period
-        coroutineScope.launch {
-            delay(seekThrottleMs)
-            isSeekInProgress = false
-        }
-    }
-    
-    // NEW: Function to get fresh position from MPV
-    fun getFreshPosition(): Float {
-        return (MPVLib.getPropertyDouble("time-pos") ?: 0.0).toFloat()
-    }
-    
-    // ADD: Quick seek function
-    fun performQuickSeek(seconds: Int) {
-        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-        val newPosition = (currentPos + seconds).coerceIn(0.0, duration)
-        
-        // Show feedback
-        quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
-        showQuickSeekFeedback = true
-        quickSeekFeedbackJob?.cancel()
-        quickSeekFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showQuickSeekFeedback = false
-        }
-        
-        // Perform seek
-        MPVLib.command("seek", seconds.toString(), "relative", "exact")
-    }
-    
-    fun toggleVideoInfo() {
-        showVideoInfo = if (showVideoInfo == 0) 1 else 0
-        if (showVideoInfo != 0) {
-            videoInfoJob?.cancel()
-            videoInfoJob = coroutineScope.launch {
-                delay(4000)
-                showVideoInfo = 0
-            }
-        }
-    }
-    
-    val showVolumeFeedback: (Int) -> Unit = { volume ->
-        volumeFeedbackJob?.cancel()
-        showVolumeFeedbackState = true
-        volumeFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showVolumeFeedbackState = false
-        }
-    }
+
+    // ========== LAUNCHED EFFECTS AND MAIN LOGIC ==========
     
     LaunchedEffect(viewModel.currentVolume) {
         viewModel.currentVolume.collect { volume ->
             currentVolume = volume
             showVolumeFeedback(volume)
         }
-    }
-    
-    fun scheduleSeekbarHide() {
-        if (userInteracting) return
-        hideSeekbarJob?.cancel()
-        hideSeekbarJob = coroutineScope.launch {
-            delay(4000)
-            showSeekbar = false
-        }
-    }
-    
-    fun cancelAutoHide() {
-        userInteracting = true
-        hideSeekbarJob?.cancel()
-        coroutineScope.launch {
-            delay(100)
-            userInteracting = false
-        }
-    }
-    
-    fun showSeekbarWithTimeout() {
-        showSeekbar = true
-        scheduleSeekbarHide()
-    }
-    
-    fun showPlaybackFeedback(text: String) {
-        playbackFeedbackJob?.cancel()
-        showPlaybackFeedback = true
-        playbackFeedbackText = text
-        playbackFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showPlaybackFeedback = false
-        }
-    }
-    
-    fun handleTap() {
-        val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
-        if (currentPaused) {
-            coroutineScope.launch {
-                val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-                MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
-                delay(100)
-                MPVLib.setPropertyBoolean("pause", false)
-            }
-            showPlaybackFeedback("Resume")
-        } else {
-            MPVLib.setPropertyBoolean("pause", true)
-            showPlaybackFeedback("Pause")
-        }
-        if (showSeekbar) {
-            showSeekbar = false
-        } else {
-            showSeekbarWithTimeout()
-        }
-        isPausing = !currentPaused
-    }
-    
-    fun startLongTapDetection() {
-        isTouching = true
-        touchStartTime = System.currentTimeMillis()
-        longTapJob?.cancel()
-        longTapJob = coroutineScope.launch {
-            delay(longTapThreshold)
-            if (isTouching && !isHorizontalSwipe && !isVerticalSwipe) {
-                isLongTap = true
-                isSpeedingUp = true
-                MPVLib.setPropertyDouble("speed", 2.0)
-            }
-        }
-    }
-    
-    // UPDATED: checkForHorizontalSwipe to also check for vertical swipes
-    fun checkForSwipeDirection(currentX: Float, currentY: Float): String {
-        if (isHorizontalSwipe || isVerticalSwipe || isLongTap) return "" // Already determined or long tap active
-        
-        val deltaX = kotlin.math.abs(currentX - touchStartX)
-        val deltaY = kotlin.math.abs(currentY - touchStartY)
-        
-        // Check for horizontal swipe
-        if (deltaX > horizontalSwipeThreshold && deltaX > deltaY && deltaY < maxVerticalMovement) {
-            return "horizontal"
-        }
-        
-        // Check for vertical swipe
-        if (deltaY > verticalSwipeThreshold && deltaY > deltaX && deltaX < maxHorizontalMovement) {
-            return "vertical"
-        }
-        
-        return ""
-    }
-    
-    fun startHorizontalSeeking(startX: Float) {
-        isHorizontalSwipe = true
-        cancelAutoHide()
-        seekStartX = startX
-        seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-        wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
-        isSeeking = true
-        showSeekTime = true
-        // REMOVED: lastSeekTime = 0L
-        
-        if (wasPlayingBeforeSeek) {
-            MPVLib.setPropertyBoolean("pause", true)
-        }
-    }
-    
-    // ADD: Start vertical swipe detection
-    fun startVerticalSwipe(startY: Float) {
-        isVerticalSwipe = true
-        cancelAutoHide()
-        // Determine direction based on initial movement
-        val currentY = startY
-        val deltaY = currentY - touchStartY
-        
-        if (deltaY < 0) {
-            // Swipe up - seek forward
-            seekDirection = "+"
-            performQuickSeek(quickSeekAmount)
-        } else {
-            // Swipe down - seek backward
-            seekDirection = "-"
-            performQuickSeek(-quickSeekAmount)
-        }
-    }
-    
-    // UPDATED: handleHorizontalSeeking without debouncing
-    fun handleHorizontalSeeking(currentX: Float) {
-        if (!isSeeking) return
-        
-        val deltaX = currentX - seekStartX
-        val pixelsPerSecond = 4f / 0.016f
-        val timeDeltaSeconds = deltaX / pixelsPerSecond
-        val newPositionSeconds = seekStartPosition + timeDeltaSeconds
-        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-        val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
-        
-        // UPDATE: Set seek direction based on movement
-        seekDirection = if (deltaX > 0) "+" else "-"
-        
-        // ALWAYS update UI instantly
-        seekTargetTime = formatTimeSimple(clampedPosition)
-        currentTime = formatTimeSimple(clampedPosition)
-        
-        // Send seek command with throttle
-        performRealTimeSeek(clampedPosition)
-    }
-    
-    fun endHorizontalSeeking() {
-        if (isSeeking) {
-            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
-            performRealTimeSeek(currentPos)
-            
-            if (wasPlayingBeforeSeek) {
-                coroutineScope.launch {
-                    delay(100)
-                    MPVLib.setPropertyBoolean("pause", false)
-                }
-            }
-            
-            isSeeking = false
-            showSeekTime = false
-            seekStartX = 0f
-            seekStartPosition = 0.0
-            wasPlayingBeforeSeek = false
-            seekDirection = "" // Reset direction
-            scheduleSeekbarHide()
-        }
-    }
-    
-    // ADD: End vertical swipe
-    fun endVerticalSwipe() {
-        isVerticalSwipe = false
-        scheduleSeekbarHide()
-    }
-    
-    fun endTouch() {
-        val touchDuration = System.currentTimeMillis() - touchStartTime
-        isTouching = false
-        longTapJob?.cancel()
-        
-        if (isLongTap) {
-            // Long tap ended - reset speed
-            isLongTap = false
-            isSpeedingUp = false
-            MPVLib.setPropertyDouble("speed", 1.0)
-        } else if (isHorizontalSwipe) {
-            // Horizontal swipe ended
-            endHorizontalSeeking()
-            isHorizontalSwipe = false
-        } else if (isVerticalSwipe) {
-            // Vertical swipe ended
-            endVerticalSwipe()
-            isVerticalSwipe = false
-        } else if (touchDuration < 150) {
-            // Short tap (less than 150ms)
-            handleTap()
-        }
-        // Reset all gesture states
-        isHorizontalSwipe = false
-        isVerticalSwipe = false
-        isLongTap = false
     }
     
     // UPDATED: LaunchedEffect to check for conversion first
@@ -945,50 +995,8 @@ fun PlayerOverlay(
         1 -> fileName
         else -> ""
     }
-    
-    // UPDATED: handleProgressBarDrag with movement threshold and direction
-    fun handleProgressBarDrag(newPosition: Float) {
-        cancelAutoHide()
-        if (!isSeeking) {
-            isSeeking = true
-            wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
-            showSeekTime = true
-            // REMOVED: lastSeekTime = 0L
-            if (wasPlayingBeforeSeek) {
-                MPVLib.setPropertyBoolean("pause", true)
-            }
-        }
-        isDragging = true
-        val oldPosition = seekbarPosition
-        seekbarPosition = newPosition
-        
-        // UPDATE: Set seek direction based on movement
-        seekDirection = if (newPosition > oldPosition) "+" else "-"
-        
-        val targetPosition = newPosition.toDouble()
-        
-        // ALWAYS update UI instantly
-        seekTargetTime = formatTimeSimple(targetPosition)
-        currentTime = formatTimeSimple(targetPosition)
-        
-        // Send seek command with throttle
-        performRealTimeSeek(targetPosition)
-    }
-    
-    fun handleDragFinished() {
-        isDragging = false
-        if (wasPlayingBeforeSeek) {
-            coroutineScope.launch {
-                delay(100)
-                MPVLib.setPropertyBoolean("pause", false)
-            }
-        }
-        isSeeking = false
-        showSeekTime = false
-        wasPlayingBeforeSeek = false
-        seekDirection = "" // Reset direction
-        scheduleSeekbarHide()
-    }
+
+    // ========== MAIN UI ==========
     
     Box(modifier = modifier.fillMaxSize()) {
         // 1. CONVERSION PROMPT (shows first if needed)
