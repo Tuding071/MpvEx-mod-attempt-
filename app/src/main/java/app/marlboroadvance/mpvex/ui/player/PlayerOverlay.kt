@@ -1173,7 +1173,6 @@ fun PlayerOverlay(
                             }
                         }
                         Box(modifier = Modifier.fillMaxWidth().height(48.dp)) {
-                            // FIXED: Use the correct parameter name
                             SimpleDraggableProgressBar(
                                 position = seekbarPosition,
                                 duration = seekbarDuration,
