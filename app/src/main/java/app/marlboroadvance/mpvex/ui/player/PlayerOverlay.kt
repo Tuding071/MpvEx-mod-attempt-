@@ -67,6 +67,8 @@ fun PlayerOverlay(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    
+    // ========== ALL STATE VARIABLES ==========
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
     var seekTargetTime by remember { mutableStateOf("00:00") }
@@ -155,180 +157,60 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
 
-    // ========== FUNCTION DEFINITIONS - MOVED TO TOP ==========
+    // ========== ALL FUNCTION DEFINITIONS - AT THE VERY TOP ==========
     
-    // SOLUTION 1: Fast Pre-scan with UI
-    fun preScanVideo(): kotlinx.coroutines.Job = coroutineScope.launch {
-        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-        if (duration <= 0) {
-            isPreprocessing = false
-            return@launch
+    // Helper functions first
+    fun scheduleSeekbarHide() {
+        if (userInteracting) return
+        hideSeekbarJob?.cancel()
+        hideSeekbarJob = coroutineScope.launch {
+            delay(4000)
+            showSeekbar = false
         }
-        
-        // Store original state
-        val originalSpeed = MPVLib.getPropertyDouble("speed") ?: 1.0
-        val wasPaused = MPVLib.getPropertyBoolean("pause") ?: true
-        val originalVolume = MPVLib.getPropertyDouble("volume") ?: 100.0
-        val originalMute = MPVLib.getPropertyBoolean("mute") ?: false
-        
-        // Mute audio and set high speed for fast scanning
-        MPVLib.setPropertyBoolean("mute", true)
-        MPVLib.setPropertyDouble("speed", 16.0)
-        MPVLib.setPropertyBoolean("pause", false)
-        
-        val totalSteps = 20
-        val scanStep = (duration * 0.05).toLong() // 5% steps
-        
-        preprocessingText = "Caching video for smooth seeking..."
-        
-        // Scan through the video in steps
-        for (i in 0 until totalSteps) {
-            if (!isActive) break
-            
-            val targetTime = (i * scanStep).coerceAtMost(duration.toLong())
-            preprocessingProgress = ((i.toDouble() / totalSteps) * 100).toInt()
-            
-            MPVLib.command("seek", targetTime.toString(), "absolute", "keyframes")
-            delay(50) // Small delay between seeks
-            
-            // Update progress text
-            preprocessingText = "Caching video... ${preprocessingProgress}%"
-        }
-        
-        // Return to beginning and restore state
-        MPVLib.command("seek", "0", "absolute", "exact")
-        MPVLib.setPropertyDouble("speed", originalSpeed)
-        MPVLib.setPropertyBoolean("pause", wasPaused)
-        MPVLib.setPropertyBoolean("mute", originalMute)
-        MPVLib.setPropertyDouble("volume", originalVolume)
-        
-        // Mark preprocessing as complete
-        isPreprocessing = false
-        preprocessingText = "Ready!"
-        
-        // Brief delay to show completion
-        delay(500)
     }
     
-    fun startNormalPreprocessing() {
-        preScanVideo().invokeOnCompletion {
-            // After preprocessing, initialize the rest
-            val intent = (context as? android.app.Activity)?.intent
-            fileName = when {
-                intent?.action == Intent.ACTION_SEND -> {
-                    getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context)
-                }
-                intent?.action == Intent.ACTION_VIEW -> {
-                    getFileNameFromUri(intent.data, context)
-                }
-                else -> {
-                    getBestAvailableFileName(context)
-                }
-            }
-            val title = MPVLib.getPropertyString("media-title") ?: "Video"
-            videoTitle = title
-            showVideoInfo = 1
+    fun cancelAutoHide() {
+        userInteracting = true
+        hideSeekbarJob?.cancel()
+        coroutineScope.launch {
+            delay(100)
+            userInteracting = false
+        }
+    }
+    
+    fun showSeekbarWithTimeout() {
+        showSeekbar = true
+        scheduleSeekbarHide()
+    }
+    
+    fun showPlaybackFeedback(text: String) {
+        playbackFeedbackJob?.cancel()
+        showPlaybackFeedback = true
+        playbackFeedbackText = text
+        playbackFeedbackJob = coroutineScope.launch {
+            delay(1000)
+            showPlaybackFeedback = false
+        }
+    }
+    
+    fun toggleVideoInfo() {
+        showVideoInfo = if (showVideoInfo == 0) 1 else 0
+        if (showVideoInfo != 0) {
             videoInfoJob?.cancel()
             videoInfoJob = coroutineScope.launch {
                 delay(4000)
                 showVideoInfo = 0
             }
-            scheduleSeekbarHide()
         }
     }
     
-    suspend fun convertVideoToH264(originalPath: String, onProgress: (Int) -> Unit): Boolean {
-        return withContext(Dispatchers.IO) {
-            try {
-                val tempPath = "$originalPath.tmp"
-                
-                // FFmpeg conversion command - convert ANY video to H.264
-                val cmd = arrayOf(
-                    "ffmpeg", "-i", originalPath,
-                    "-c:v", "libx264", "-preset", "medium", "-crf", "23",
-                    "-c:a", "aac", "-b:a", "128k",
-                    "-y", // Overwrite output file
-                    tempPath
-                )
-                
-                // Execute conversion
-                val process = Runtime.getRuntime().exec(cmd)
-                
-                // Simulate progress (in real implementation, parse ffmpeg output)
-                var progress = 0
-                while (progress < 100 && process.isAlive) {
-                    delay(500)
-                    progress += 5
-                    if (progress > 95) progress = 95
-                    onProgress(progress)
-                }
-                
-                val exitCode = process.waitFor()
-                
-                if (exitCode == 0) {
-                    // Replace original file with converted one
-                    val originalFile = File(originalPath)
-                    val tempFile = File(tempPath)
-                    
-                    if (originalFile.delete() && tempFile.renameTo(originalFile)) {
-                        onProgress(100)
-                        delay(500)
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                false
-            }
+    val showVolumeFeedback: (Int) -> Unit = { volume ->
+        volumeFeedbackJob?.cancel()
+        showVolumeFeedbackState = true
+        volumeFeedbackJob = coroutineScope.launch {
+            delay(1000)
+            showVolumeFeedbackState = false
         }
-    }
-    
-    // NEW: Video Conversion Functions - SIMPLIFIED
-    fun shouldConvertVideo(): Boolean {
-        if (currentVideoPath.isEmpty()) return false
-        if (!File(currentVideoPath).exists()) return false
-        
-        // Check if already converted in this session
-        if (convertedVideos.contains(currentVideoPath)) return false
-        
-        // Always ask for conversion if not converted yet
-        return true
-    }
-    
-    fun startConversion() {
-        showConversionPrompt = false
-        isConverting = true
-        conversionProgress = 0
-        
-        conversionJob = coroutineScope.launch {
-            val success = convertVideoToH264(currentVideoPath) { progress ->
-                conversionProgress = progress
-            }
-            
-            if (success) {
-                // Mark as converted
-                convertedVideos.add(currentVideoPath)
-                // Reload the converted video
-                MPVLib.command("loadfile", currentVideoPath)
-                startNormalPreprocessing()
-            } else {
-                // Conversion failed, fall back to normal playback
-                showPlaybackFeedback("Conversion failed")
-                startNormalPreprocessing()
-            }
-            isConverting = false
-        }
-    }
-    
-    fun skipConversion() {
-        showConversionPrompt = false
-        // Mark as skipped (so we don't ask again for this video in current session)
-        convertedVideos.add(currentVideoPath)
-        startNormalPreprocessing()
     }
     
     // UPDATED: performRealTimeSeek with throttle
@@ -367,59 +249,6 @@ fun PlayerOverlay(
         
         // Perform seek
         MPVLib.command("seek", seconds.toString(), "relative", "exact")
-    }
-    
-    fun toggleVideoInfo() {
-        showVideoInfo = if (showVideoInfo == 0) 1 else 0
-        if (showVideoInfo != 0) {
-            videoInfoJob?.cancel()
-            videoInfoJob = coroutineScope.launch {
-                delay(4000)
-                showVideoInfo = 0
-            }
-        }
-    }
-    
-    val showVolumeFeedback: (Int) -> Unit = { volume ->
-        volumeFeedbackJob?.cancel()
-        showVolumeFeedbackState = true
-        volumeFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showVolumeFeedbackState = false
-        }
-    }
-    
-    fun scheduleSeekbarHide() {
-        if (userInteracting) return
-        hideSeekbarJob?.cancel()
-        hideSeekbarJob = coroutineScope.launch {
-            delay(4000)
-            showSeekbar = false
-        }
-    }
-    
-    fun cancelAutoHide() {
-        userInteracting = true
-        hideSeekbarJob?.cancel()
-        coroutineScope.launch {
-            delay(100)
-            userInteracting = false
-        }
-    }
-    
-    fun showSeekbarWithTimeout() {
-        showSeekbar = true
-        scheduleSeekbarHide()
-    }
-    
-    fun showPlaybackFeedback(text: String) {
-        playbackFeedbackJob?.cancel()
-        showPlaybackFeedback = true
-        playbackFeedbackText = text
-        playbackFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showPlaybackFeedback = false
-        }
     }
     
     fun handleTap() {
@@ -632,6 +461,180 @@ fun PlayerOverlay(
         wasPlayingBeforeSeek = false
         seekDirection = "" // Reset direction
         scheduleSeekbarHide()
+    }
+    
+    // SOLUTION 1: Fast Pre-scan with UI
+    fun preScanVideo(): kotlinx.coroutines.Job = coroutineScope.launch {
+        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+        if (duration <= 0) {
+            isPreprocessing = false
+            return@launch
+        }
+        
+        // Store original state
+        val originalSpeed = MPVLib.getPropertyDouble("speed") ?: 1.0
+        val wasPaused = MPVLib.getPropertyBoolean("pause") ?: true
+        val originalVolume = MPVLib.getPropertyDouble("volume") ?: 100.0
+        val originalMute = MPVLib.getPropertyBoolean("mute") ?: false
+        
+        // Mute audio and set high speed for fast scanning
+        MPVLib.setPropertyBoolean("mute", true)
+        MPVLib.setPropertyDouble("speed", 16.0)
+        MPVLib.setPropertyBoolean("pause", false)
+        
+        val totalSteps = 20
+        val scanStep = (duration * 0.05).toLong() // 5% steps
+        
+        preprocessingText = "Caching video for smooth seeking..."
+        
+        // Scan through the video in steps
+        for (i in 0 until totalSteps) {
+            if (!isActive) break
+            
+            val targetTime = (i * scanStep).coerceAtMost(duration.toLong())
+            preprocessingProgress = ((i.toDouble() / totalSteps) * 100).toInt()
+            
+            MPVLib.command("seek", targetTime.toString(), "absolute", "keyframes")
+            delay(50) // Small delay between seeks
+            
+            // Update progress text
+            preprocessingText = "Caching video... ${preprocessingProgress}%"
+        }
+        
+        // Return to beginning and restore state
+        MPVLib.command("seek", "0", "absolute", "exact")
+        MPVLib.setPropertyDouble("speed", originalSpeed)
+        MPVLib.setPropertyBoolean("pause", wasPaused)
+        MPVLib.setPropertyBoolean("mute", originalMute)
+        MPVLib.setPropertyDouble("volume", originalVolume)
+        
+        // Mark preprocessing as complete
+        isPreprocessing = false
+        preprocessingText = "Ready!"
+        
+        // Brief delay to show completion
+        delay(500)
+    }
+    
+    fun startNormalPreprocessing() {
+        preScanVideo().invokeOnCompletion {
+            // After preprocessing, initialize the rest
+            val intent = (context as? android.app.Activity)?.intent
+            fileName = when {
+                intent?.action == Intent.ACTION_SEND -> {
+                    getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context)
+                }
+                intent?.action == Intent.ACTION_VIEW -> {
+                    getFileNameFromUri(intent.data, context)
+                }
+                else -> {
+                    getBestAvailableFileName(context)
+                }
+            }
+            val title = MPVLib.getPropertyString("media-title") ?: "Video"
+            videoTitle = title
+            showVideoInfo = 1
+            videoInfoJob?.cancel()
+            videoInfoJob = coroutineScope.launch {
+                delay(4000)
+                showVideoInfo = 0
+            }
+            scheduleSeekbarHide()
+        }
+    }
+    
+    suspend fun convertVideoToH264(originalPath: String, onProgress: (Int) -> Unit): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                val tempPath = "$originalPath.tmp"
+                
+                // FFmpeg conversion command - convert ANY video to H.264
+                val cmd = arrayOf(
+                    "ffmpeg", "-i", originalPath,
+                    "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                    "-c:a", "aac", "-b:a", "128k",
+                    "-y", // Overwrite output file
+                    tempPath
+                )
+                
+                // Execute conversion
+                val process = Runtime.getRuntime().exec(cmd)
+                
+                // Simulate progress (in real implementation, parse ffmpeg output)
+                var progress = 0
+                while (progress < 100 && process.isAlive) {
+                    delay(500)
+                    progress += 5
+                    if (progress > 95) progress = 95
+                    onProgress(progress)
+                }
+                
+                val exitCode = process.waitFor()
+                
+                if (exitCode == 0) {
+                    // Replace original file with converted one
+                    val originalFile = File(originalPath)
+                    val tempFile = File(tempPath)
+                    
+                    if (originalFile.delete() && tempFile.renameTo(originalFile)) {
+                        onProgress(100)
+                        delay(500)
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                false
+            }
+        }
+    }
+    
+    // NEW: Video Conversion Functions - SIMPLIFIED
+    fun shouldConvertVideo(): Boolean {
+        if (currentVideoPath.isEmpty()) return false
+        if (!File(currentVideoPath).exists()) return false
+        
+        // Check if already converted in this session
+        if (convertedVideos.contains(currentVideoPath)) return false
+        
+        // Always ask for conversion if not converted yet
+        return true
+    }
+    
+    fun startConversion() {
+        showConversionPrompt = false
+        isConverting = true
+        conversionProgress = 0
+        
+        conversionJob = coroutineScope.launch {
+            val success = convertVideoToH264(currentVideoPath) { progress ->
+                conversionProgress = progress
+            }
+            
+            if (success) {
+                // Mark as converted
+                convertedVideos.add(currentVideoPath)
+                // Reload the converted video
+                MPVLib.command("loadfile", currentVideoPath)
+                startNormalPreprocessing()
+            } else {
+                // Conversion failed, fall back to normal playback
+                showPlaybackFeedback("Conversion failed")
+                startNormalPreprocessing()
+            }
+            isConverting = false
+        }
+    }
+    
+    fun skipConversion() {
+        showConversionPrompt = false
+        // Mark as skipped (so we don't ask again for this video in current session)
+        convertedVideos.add(currentVideoPath)
+        startNormalPreprocessing()
     }
 
     // ========== COMPOSABLE FUNCTIONS ==========
@@ -1063,6 +1066,7 @@ fun PlayerOverlay(
         
         // MAIN GESTURE AREA - Full screen divided into areas (only show after preprocessing)
         if (!isPreprocessing && !showConversionPrompt && !isConverting) {
+            // ... (rest of your existing UI code)
             Box(modifier = Modifier.fillMaxSize()) {
                 // TOP 5% - Ignore area
                 Box(
@@ -1231,7 +1235,7 @@ fun PlayerOverlay(
     }
 }
 
-// FIXED: SimpleDraggableProgressBar with correct parameter name
+// FIXED: SimpleDraggableProgressBar with correct parameter
 @Composable
 fun SimpleDraggableProgressBar(
     position: Float,
@@ -1249,7 +1253,7 @@ fun SimpleDraggableProgressBar(
     // Convert 25dp to pixels for the movement threshold
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
-    Box(modifier = modifier.height(48.dp)) { // CHANGED: Increased container height
+    Box(modifier = modifier.height(48.dp)) {
         // Progress bar background
         Box(modifier = Modifier
             .fillMaxWidth()
@@ -1267,7 +1271,7 @@ fun SimpleDraggableProgressBar(
         // CHANGED: Increased touch area to full 48dp height
         Box(modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp) // This makes the entire 48dp area draggable
+            .height(48.dp)
             .align(Alignment.CenterStart)
             .pointerInput(Unit) {
                 detectDragGestures(
@@ -1275,8 +1279,8 @@ fun SimpleDraggableProgressBar(
                         dragStartX = offset.x
                         // GET FRESH POSITION IMMEDIATELY WHEN DRAG STARTS
                         dragStartPosition = getFreshPosition()
-                        hasPassedThreshold = false // Reset threshold flag
-                        thresholdStartX = 0f // Reset threshold start position
+                        hasPassedThreshold = false
+                        thresholdStartX = 0f
                     },
                     onDrag = { change, dragAmount ->
                         change.consume()
@@ -1287,14 +1291,13 @@ fun SimpleDraggableProgressBar(
                         if (!hasPassedThreshold) {
                             if (totalMovementX > movementThresholdPx) {
                                 hasPassedThreshold = true
-                                thresholdStartX = currentX // NEW: Store position where threshold was passed
+                                thresholdStartX = currentX
                             } else {
-                                // Haven't passed threshold yet, don't seek
                                 return@detectDragGestures
                             }
                         }
                         
-                        // Calculate delta from the threshold start position, not the original drag start
+                        // Calculate delta from the threshold start position
                         val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
                         val deltaX = currentX - effectiveStartX
                         val deltaPosition = (deltaX / size.width) * duration
@@ -1302,8 +1305,8 @@ fun SimpleDraggableProgressBar(
                         onValueChange(newPosition)
                     },
                     onDragEnd = { 
-                        hasPassedThreshold = false // Reset for next drag
-                        thresholdStartX = 0f // Reset threshold start
+                        hasPassedThreshold = false
+                        thresholdStartX = 0f
                         onValueChangeFinished() 
                     }
                 )
@@ -1312,6 +1315,7 @@ fun SimpleDraggableProgressBar(
     }
 }
 
+// ... (keep the helper functions at the bottom)
 private fun formatTimeSimple(seconds: Double): String {
     val totalSeconds = seconds.toInt()
     val hours = totalSeconds / 3600
