@@ -67,281 +67,35 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.ImageBitmap
-import java.io.ByteArrayOutputStream
-import java.nio.ByteBuffer
 
-// ============================================================================
-// COMPRESSED VIDEO SLIDING WINDOW SYSTEM
-// ============================================================================
-
-data class VideoSegment(
-    val startTimeMicros: Long, // Start time of this 1-second segment
-    val compressedData: ByteBuffer, // Compressed video data for this segment
-    val durationMicros: Long = 1_000_000L, // 1 second
-    val isLoaded: Boolean = true
-) {
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (javaClass != other?.javaClass) return false
-        other as VideoSegment
-        return startTimeMicros == other.startTimeMicros
-    }
-
-    override fun hashCode(): Int = startTimeMicros.hashCode()
-}
-
-/**
- * ALWAYS-READY compressed video buffer for instant horizontal drag seeking
- * Maintains 20-second window around current position (10s past + 10s future)
- */
-class CompressedVideoBuffer(
-    private val context: android.content.Context,
-    private val windowSizeSeconds: Int = 20
-) {
-    private val segments = LinkedHashMap<Long, VideoSegment>() // Ordered by timestamp
-    private var currentCenterTimeMicros: Long = 0L
-    private var currentVideoPath: String = ""
-    private var isBufferReady = false
-    private var maintenanceJob: Job? = null
-    private val segmentSizeMicros = 1_000_000L // 1 second per segment
+// SIMPLE FRAME CACHE FOR SMOOTH SCRUBBING
+class SimpleFrameCache(private val cacheSize: Int = 50) {
+    private val cache: LruCache<Long, CachedFrame> = LruCache(cacheSize)
     
-    companion object {
-        private const val TAG = "CompressedVideoBuffer"
+    data class CachedFrame(
+        val timestamp: Long,
+        val bitmap: Bitmap? = null,
+        val isKeyframe: Boolean = false
+    )
+    
+    fun getFrame(timestamp: Long): CachedFrame? {
+        return cache.get(timestamp)
     }
     
-    // ==================== PUBLIC API ====================
-    
-    /**
-     * Initialize buffer around current position - CALL THIS WHEN VIDEO LOADS
-     */
-    suspend fun initialize(videoPath: String, centerTimeMicros: Long) {
-        currentVideoPath = videoPath
-        currentCenterTimeMicros = centerTimeMicros
-        isBufferReady = false
-        
-        // Clear existing segments
-        segments.clear()
-        
-        // Load initial 20-second window
-        rebuildBufferAround(centerTimeMicros)
-        
-        isBufferReady = true
+    fun cacheFrame(timestamp: Long, frame: CachedFrame) {
+        cache.put(timestamp, frame)
     }
     
-    /**
-     * Get video segment for target time - INSTANT access during drag
-     */
-    fun getSegmentForTime(targetTimeMicros: Long): VideoSegment? {
-        val segmentStart = (targetTimeMicros / segmentSizeMicros) * segmentSizeMicros
-        return segments[segmentStart]
+    fun clear() {
+        cache.evictAll()
     }
     
-    /**
-     * Check if buffer is ready for drag seeking around target time
-     */
-    fun isReadyForDrag(targetTimeMicros: Long): Boolean {
-        if (!isBufferReady) return false
-        
-        val bufferStart = currentCenterTimeMicros - (windowSizeSeconds / 2 * segmentSizeMicros)
-        val bufferEnd = currentCenterTimeMicros + (windowSizeSeconds / 2 * segmentSizeMicros)
-        
-        return targetTimeMicros in bufferStart..bufferEnd
-    }
-    
-    /**
-     * Handle position change - buffer follows or rebuilds as needed
-     */
-    suspend fun onPositionChanged(newPositionMicros: Long) {
-        if (!isBufferReady) return
-        
-        val distanceFromCenter = abs(newPositionMicros - currentCenterTimeMicros)
-        
-        when {
-            // Small movement - slide window gradually
-            distanceFromCenter < 2_000_000L -> { // < 2 seconds
-                slideWindowTo(newPositionMicros)
-            }
-            // Medium jump - recenter window
-            distanceFromCenter < 10_000_000L -> { // < 10 seconds
-                recenterWindow(newPositionMicros)
-            }
-            // Big jump - complete rebuild
-            else -> {
-                rebuildBufferAround(newPositionMicros)
-            }
-        }
-    }
-    
-    /**
-     * Get buffer status for UI feedback
-     */
-    fun getBufferStatus(): String {
-        if (!isBufferReady) return "🔄 Initializing..."
-        val loadedSegments = segments.count { it.value.isLoaded }
-        return "✅ Ready (${loadedSegments}/$windowSizeSeconds segments)"
-    }
-    
-    /**
-     * Cleanup resources
-     */
-    fun cleanup() {
-        maintenanceJob?.cancel()
-        segments.clear()
-        isBufferReady = false
-    }
-    
-    // ==================== PRIVATE IMPLEMENTATION ====================
-    
-    private suspend fun rebuildBufferAround(centerTimeMicros: Long) {
-        segments.clear()
-        
-        val startTime = centerTimeMicros - (windowSizeSeconds / 2 * segmentSizeMicros)
-        val endTime = centerTimeMicros + (windowSizeSeconds / 2 * segmentSizeMicros)
-        
-        // Load all segments in the window
-        for (segmentTime in startTime..endTime step segmentSizeMicros) {
-            if (segmentTime >= 0) {
-                loadSegment(segmentTime)
-            }
-        }
-        
-        currentCenterTimeMicros = centerTimeMicros
-    }
-    
-    private suspend fun recenterWindow(newCenterMicros: Long) {
-        val oldCenter = currentCenterTimeMicros
-        currentCenterTimeMicros = newCenterMicros
-        
-        // Remove segments that are now outside window
-        val windowStart = newCenterMicros - (windowSizeSeconds / 2 * segmentSizeMicros)
-        val windowEnd = newCenterMicros + (windowSizeSeconds / 2 * segmentSizeMicros)
-        
-        segments.keys.removeAll { it < windowStart || it > windowEnd }
-        
-        // Load missing segments for new window
-        for (segmentTime in windowStart..windowEnd step segmentSizeMicros) {
-            if (segmentTime >= 0 && !segments.containsKey(segmentTime)) {
-                loadSegment(segmentTime)
-            }
-        }
-    }
-    
-    private suspend fun slideWindowTo(newPositionMicros: Long) {
-        val direction = (newPositionMicros - currentCenterTimeMicros).compareTo(0)
-        currentCenterTimeMicros = newPositionMicros
-        
-        if (direction > 0) {
-            // Moving forward - remove oldest segment, load new future segment
-            slideWindowForward()
-        } else if (direction < 0) {
-            // Moving backward - remove newest segment, load new past segment  
-            slideWindowBackward()
-        }
-    }
-    
-    private suspend fun slideWindowForward() {
-        val windowStart = currentCenterTimeMicros - (windowSizeSeconds / 2 * segmentSizeMicros)
-        val windowEnd = currentCenterTimeMicros + (windowSizeSeconds / 2 * segmentSizeMicros)
-        
-        // Remove one segment from beginning if it's now outside window
-        segments.keys.firstOrNull()?.let { firstKey ->
-            if (firstKey < windowStart) {
-                segments.remove(firstKey)
-            }
-        }
-        
-        // Add one segment at the end
-        val newSegmentTime = windowEnd
-        if (!segments.containsKey(newSegmentTime)) {
-            loadSegment(newSegmentTime)
-        }
-    }
-    
-    private suspend fun slideWindowBackward() {
-        val windowStart = currentCenterTimeMicros - (windowSizeSeconds / 2 * segmentSizeMicros)
-        val windowEnd = currentCenterTimeMicros + (windowSizeSeconds / 2 * segmentSizeMicros)
-        
-        // Remove one segment from end if it's now outside window
-        segments.keys.lastOrNull()?.let { lastKey ->
-            if (lastKey > windowEnd) {
-                segments.remove(lastKey)
-            }
-        }
-        
-        // Add one segment at the beginning
-        val newSegmentTime = windowStart
-        if (!segments.containsKey(newSegmentTime) && newSegmentTime >= 0) {
-            loadSegment(newSegmentTime)
-        }
-    }
-    
-    private suspend fun loadSegment(segmentStartMicros: Long) {
-        val segmentData = extractVideoChunk(segmentStartMicros, segmentSizeMicros)
-        segmentData?.let { data ->
-            segments[segmentStartMicros] = VideoSegment(segmentStartMicros, data)
-        }
-    }
-    
-    private suspend fun extractVideoChunk(startTimeMicros: Long, durationMicros: Long): ByteBuffer? {
-        return withContext(Dispatchers.IO) {
-            try {
-                val extractor = MediaExtractor()
-                extractor.setDataSource(currentVideoPath)
-                
-                // Select video track
-                val videoTrackIndex = selectVideoTrack(extractor)
-                if (videoTrackIndex == -1) {
-                    extractor.release()
-                    return@withContext null
-                }
-                
-                extractor.selectTrack(videoTrackIndex)
-                extractor.seekTo(startTimeMicros, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
-                
-                val outputStream = ByteArrayOutputStream()
-                val buffer = ByteArray(64 * 1024) // 64KB buffer
-                val endTime = startTimeMicros + durationMicros
-                var currentTime = startTimeMicros
-                var samplesRead = 0
-                
-                // Read compressed video data until we have enough or reach end
-                while (currentTime < endTime && samplesRead < 300) { // Max 300 samples (~10 seconds)
-                    val sampleSize = extractor.readSampleData(buffer, 0)
-                    if (sampleSize < 0) break
-                    
-                    outputStream.write(buffer, 0, sampleSize)
-                    currentTime = extractor.sampleTime
-                    extractor.advance()
-                    samplesRead++
-                }
-                
-                extractor.release()
-                
-                // Convert ByteArray to ByteBuffer
-                val byteArray = outputStream.toByteArray()
-                ByteBuffer.wrap(byteArray)
-            } catch (e: Exception) {
-                e.printStackTrace()
-                null
-            }
-        }
-    }
-    
-    private fun selectVideoTrack(extractor: MediaExtractor): Int {
-        for (i in 0 until extractor.trackCount) {
-            val format = extractor.getTrackFormat(i)
-            val mime = format.getString(MediaFormat.KEY_MIME)
-            if (mime?.startsWith("video/") == true) {
-                return i
-            }
-        }
-        return -1
+    fun getNearestFrame(timestamp: Long): CachedFrame? {
+        // Simple nearest frame lookup
+        val keys = cache.snapshot().keys.sorted()
+        return keys.minByOrNull { abs(it - timestamp) }?.let { cache.get(it) }
     }
 }
-
-// ============================================================================
-// ENHANCED PLAYER OVERLAY WITH COMPRESSED VIDEO BUFFER
-// ============================================================================
 
 @Composable
 fun PlayerOverlay(
@@ -370,10 +124,10 @@ fun PlayerOverlay(
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
-    // Compressed video buffer states
-    var bufferStatus by remember { mutableStateOf("🔄 Initializing...") }
-    var isUsingBufferPlayback by remember { mutableStateOf(false) }
-    var showBufferStatus by remember { mutableStateOf(false) }
+    // Simple frame cache for smooth scrubbing
+    val frameCache = remember { SimpleFrameCache() }
+    var currentScrubbingFrame by remember { mutableStateOf<SimpleFrameCache.CachedFrame?>(null) }
+    var showScrubbingPreview by remember { mutableStateOf(false) }
     
     var seekDirection by remember { mutableStateOf("") }
     var isSeekInProgress by remember { mutableStateOf(false) }
@@ -420,44 +174,6 @@ fun PlayerOverlay(
     var volumeFeedbackJob by remember { mutableStateOf<Job?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
-    
-    // Initialize compressed video buffer
-    val videoBuffer = remember {
-        CompressedVideoBuffer(context)
-    }
-    
-    // Initialize buffer when video loads
-    LaunchedEffect(fileName, currentPosition) {
-        val videoPath = getCurrentVideoPath(context)
-        if (videoPath.isNotEmpty()) {
-            val currentTimeMicros = (currentPosition * 1_000_000).toLong()
-            videoBuffer.initialize(videoPath, currentTimeMicros)
-        }
-    }
-    
-    // Update buffer status continuously
-    LaunchedEffect(Unit) {
-        while (isActive) {
-            bufferStatus = videoBuffer.getBufferStatus()
-            showBufferStatus = true
-            delay(2000) // Update every 2 seconds
-        }
-    }
-    
-    // Keep buffer synchronized with playback
-    LaunchedEffect(currentPosition) {
-        if (currentPosition > 0 && !isSeeking) {
-            val currentTimeMicros = (currentPosition * 1_000_000).toLong()
-            videoBuffer.onPositionChanged(currentTimeMicros)
-        }
-    }
-    
-    // Cleanup buffer
-    DisposableEffect(videoBuffer) {
-        onDispose {
-            videoBuffer.cleanup()
-        }
-    }
 
     fun performRealTimeSeek(targetPosition: Double) {
         if (isSeekInProgress) return
@@ -524,6 +240,7 @@ fun PlayerOverlay(
         hideSeekbarJob = coroutineScope.launch {
             delay(4000)
             showSeekbar = false
+            showScrubbingPreview = false
         }
     }
     
@@ -567,6 +284,7 @@ fun PlayerOverlay(
         }
         if (showSeekbar) {
             showSeekbar = false
+            showScrubbingPreview = false
         } else {
             showSeekbarWithTimeout()
         }
@@ -612,18 +330,10 @@ fun PlayerOverlay(
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
-        isUsingBufferPlayback = true
-        
-        // Check if buffer is ready for smooth seeking
-        val currentTimeMicros = (seekStartPosition * 1_000_000).toLong()
-        val isBufferReady = videoBuffer.isReadyForDrag(currentTimeMicros)
+        showScrubbingPreview = true
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
-        }
-        
-        if (!isBufferReady) {
-            showPlaybackFeedback("⏳ Buffer loading...")
         }
     }
     
@@ -654,21 +364,15 @@ fun PlayerOverlay(
         
         seekDirection = if (deltaX > 0) "+" else "-"
         
-        // Use compressed video buffer for instant seeking
+        // Use frame cache for smooth scrubbing
         val targetTimeMicros = (clampedPosition * 1_000_000).toLong()
-        val segment = videoBuffer.getSegmentForTime(targetTimeMicros)
+        currentScrubbingFrame = frameCache.getNearestFrame(targetTimeMicros)
         
-        if (segment != null) {
-            // Buffer has the segment - instant seek
-            seekTargetTime = formatTimeSimple(clampedPosition)
-            currentTime = formatTimeSimple(clampedPosition)
-            performRealTimeSeek(clampedPosition)
-        } else {
-            // Buffer doesn't have this segment - fallback to normal seek
-            seekTargetTime = formatTimeSimple(clampedPosition)
-            currentTime = formatTimeSimple(clampedPosition)
-            performRealTimeSeek(clampedPosition)
-        }
+        seekTargetTime = formatTimeSimple(clampedPosition)
+        currentTime = formatTimeSimple(clampedPosition)
+        
+        // Always update the actual video position for smooth continuous scrubbing
+        performRealTimeSeek(clampedPosition)
     }
     
     fun endHorizontalSeeking() {
@@ -687,11 +391,12 @@ fun PlayerOverlay(
             
             isSeeking = false
             showSeekTime = false
-            isUsingBufferPlayback = false
+            showScrubbingPreview = false
             seekStartX = 0f
             seekStartPosition = 0.0
             wasPlayingBeforeSeek = false
             seekDirection = ""
+            currentScrubbingFrame = null
             scheduleSeekbarHide()
         }
     }
@@ -758,7 +463,7 @@ fun PlayerOverlay(
     }
     
     LaunchedEffect(Unit) {
-        // MPV configuration...
+        // MPV configuration for smooth seeking
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
         MPVLib.setPropertyString("profile", "fast")
@@ -821,7 +526,7 @@ fun PlayerOverlay(
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
-            isUsingBufferPlayback = true
+            showScrubbingPreview = true
             
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
@@ -835,14 +540,14 @@ fun PlayerOverlay(
         
         val targetPosition = newPosition.toDouble()
         
-        // Use compressed video buffer
+        // Use frame cache for smooth scrubbing
         val targetTimeMicros = (targetPosition * 1_000_000).toLong()
-        val segment = videoBuffer.getSegmentForTime(targetTimeMicros)
+        currentScrubbingFrame = frameCache.getNearestFrame(targetTimeMicros)
         
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
         
-        // Always seek - buffer ensures instant response when available
+        // Always seek for smooth continuous scrubbing
         performRealTimeSeek(targetPosition)
     }
     
@@ -857,13 +562,30 @@ fun PlayerOverlay(
         
         isSeeking = false
         showSeekTime = false
-        isUsingBufferPlayback = false
+        showScrubbingPreview = false
         wasPlayingBeforeSeek = false
         seekDirection = ""
+        currentScrubbingFrame = null
         scheduleSeekbarHide()
     }
     
     Box(modifier = modifier.fillMaxSize()) {
+        // Scrubbing Preview Overlay
+        val currentFrameBitmap = currentScrubbingFrame?.bitmap
+        if (showScrubbingPreview && currentFrameBitmap != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.3f))
+            ) {
+                Image(
+                    bitmap = currentFrameBitmap.asImageBitmap(),
+                    contentDescription = "Scrubbing preview",
+                    modifier = Modifier.fillMaxSize().align(Alignment.Center)
+                )
+            }
+        }
+        
         // MAIN GESTURE AREA
         Box(modifier = Modifier.fillMaxSize()) {
             // TOP 5% - Ignore area
@@ -994,19 +716,6 @@ fun PlayerOverlay(
             )
         }
         
-        // BUFFER STATUS - Top Right
-        if (showBufferStatus) {
-            Text(
-                text = bufferStatus,
-                style = TextStyle(color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium),
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .offset(x = (-60).dp, y = 20.dp)
-                    .background(Color.DarkGray.copy(alpha = 0.8f))
-                    .padding(horizontal = 12.dp, vertical = 4.dp)
-            )
-        }
-        
         // FEEDBACK AREA
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
@@ -1039,6 +748,8 @@ fun PlayerOverlay(
         }
     }
 }
+
+// Keep the existing SimpleDraggableProgressBar and helper functions...
 
 @Composable
 fun SimpleDraggableProgressBar(
