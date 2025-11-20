@@ -63,13 +63,6 @@ fun PlayerOverlay(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    
-    // PREPROCESSING STATES
-    var isPreprocessing by remember { mutableStateOf(false) }
-    var preprocessingProgress by remember { mutableStateOf(0) }
-    var preprocessingStage by remember { mutableStateOf("") }
-    var keyframeInterval by remember { mutableStateOf(2.0) }
-    
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
     var seekTargetTime by remember { mutableStateOf("00:00") }
@@ -94,9 +87,10 @@ fun PlayerOverlay(
     // ADD: Seek direction for feedback
     var seekDirection by remember { mutableStateOf("") } // "+" or "-" or ""
     
-    // Simple throttle control
+    // REMOVED: lastSeekTime and seekDebounceMs
+    // ADD: Simple throttle control
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 50L // Small delay between seek commands
+    val seekThrottleMs = 0L // Small delay between seek commands
     
     // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
     var touchStartTime by remember { mutableStateOf(0L) }
@@ -105,15 +99,15 @@ fun PlayerOverlay(
     var isTouching by remember { mutableStateOf(false) }
     var isLongTap by remember { mutableStateOf(false) }
     var isHorizontalSwipe by remember { mutableStateOf(false) }
-    var isVerticalSwipe by remember { mutableStateOf(false) }
+    var isVerticalSwipe by remember { mutableStateOf(false) } // ADD: Vertical swipe state
     var longTapJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     // THRESHOLDS
     val longTapThreshold = 300L // ms
-    val horizontalSwipeThreshold = 30f // pixels
-    val verticalSwipeThreshold = 40f // pixels
-    val maxVerticalMovement = 50f // pixels
-    val maxHorizontalMovement = 50f // pixels
+    val horizontalSwipeThreshold = 30f // pixels - minimum horizontal movement to trigger seeking
+    val verticalSwipeThreshold = 40f // pixels - minimum vertical movement to trigger quick seek
+    val maxVerticalMovement = 50f // pixels - maximum vertical movement allowed for horizontal swipe
+    val maxHorizontalMovement = 50f // pixels - maximum horizontal movement allowed for vertical swipe
     
     // ADD: Quick seek amount in seconds
     val quickSeekAmount = 5
@@ -140,123 +134,27 @@ fun PlayerOverlay(
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
-
-    // KEYFRAME INTERVAL DETECTION (KEEP FOR ANALYSIS)
-    suspend fun detectKeyframeInterval(duration: Double): Double {
-        if (duration < 5) return 2.0
-        
-        preprocessingStage = "Analyzing keyframe pattern..."
-        val testPoints = listOf(0.1, 0.3, 0.5, 0.7)
-        val intervals = mutableListOf<Double>()
-        
-        for (i in 0 until testPoints.size - 1) {
-            val startTime = duration * testPoints[i]
-            val endTime = duration * testPoints[i + 1]
-            
-            // Seek to start and get actual keyframe position
-            MPVLib.command("seek", startTime.toString(), "absolute", "keyframes")
-            delay(30)
-            val startActual = MPVLib.getPropertyDouble("time-pos") ?: startTime
-            
-            // Seek to end and get actual keyframe position  
-            MPVLib.command("seek", endTime.toString(), "absolute", "keyframes")
-            delay(30)
-            val endActual = MPVLib.getPropertyDouble("time-pos") ?: endTime
-            
-            val interval = endActual - startActual
-            if (interval > 0.5 && interval < 30.0) {
-                intervals.add(interval)
-            }
-            
-            preprocessingProgress = 40 + (i * 15)
-        }
-        
-        return if (intervals.isNotEmpty()) intervals.average() else 2.0
-    }
-
-    // PREPROCESSING - SCAN THROUGH VIDEO TO WARM UP BUFFER
-    fun preprocessVideoFile() {
-        isPreprocessing = true
-        preprocessingProgress = 0
-        preprocessingStage = "Optimizing playback..."
-        
-        coroutineScope.launch {
-            // STEP 1: Initial configuration
-            preprocessingStage = "Configuring player..."
-            preprocessingProgress = 10
-            
-            // Mute during preprocessing
-            val wasMuted = MPVLib.getPropertyBoolean("mute") ?: false
-            if (!wasMuted) {
-                MPVLib.setPropertyBoolean("mute", true)
-            }
-            
-            delay(50)
-
-            // STEP 2: Detect keyframe interval (for analysis only)
-            preprocessingStage = "Analyzing video structure..."
-            preprocessingProgress = 20
-            
-            val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-            keyframeInterval = detectKeyframeInterval(duration)
-            
-            preprocessingStage = "Keyframes every ${"%.1f".format(keyframeInterval)}s - Warming up..."
-            preprocessingProgress = 60
-
-            // STEP 3: SCAN THROUGH VIDEO TO PRELOAD KEYFRAMES
-            if (duration > 10) {
-                val scanPoints = listOf(0.1, 0.25, 0.4, 0.55, 0.7, 0.85)
-                val progressPerPoint = 30 / scanPoints.size
-                
-                for ((index, point) in scanPoints.withIndex()) {
-                    val targetTime = duration * point
-                    MPVLib.command("seek", targetTime.toString(), "absolute", "keyframes")
-                    delay(40) // Short delay to let buffer load
-                    preprocessingProgress = 60 + (index * progressPerPoint)
-                }
-            }
-
-            // STEP 4: Return to start
-            preprocessingStage = "Finalizing..."
-            preprocessingProgress = 95
-            MPVLib.command("seek", "0", "absolute", "keyframes")
-            delay(50)
-
-            // STEP 5: Restore audio and complete
-            if (!wasMuted) {
-                MPVLib.setPropertyBoolean("mute", false)
-            }
-            
-            preprocessingProgress = 100
-            delay(50)
-            
-            isPreprocessing = false
-            
-            // Start playback
-            MPVLib.setPropertyBoolean("pause", false)
-        }
-    }
-
-    // ORIGINAL SMOOTH SEEKING - BACK TO BASICS
+    
+    // UPDATED: performRealTimeSeek with throttle
     fun performRealTimeSeek(targetPosition: Double) {
-        if (isSeekInProgress) return
+        if (isSeekInProgress) return // Skip if we're already processing a seek
         
         isSeekInProgress = true
-        // USE EXACT SEEKING FOR REAL-TIME FRAME UPDATES
         MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
         
+        // Reset after throttle period
         coroutineScope.launch {
             delay(seekThrottleMs)
             isSeekInProgress = false
         }
     }
     
-    // Function to get fresh position from MPV
+    // NEW: Function to get fresh position from MPV
     fun getFreshPosition(): Float {
         return (MPVLib.getPropertyDouble("time-pos") ?: 0.0).toFloat()
     }
     
-    // Quick seek function
+    // ADD: Quick seek function
     fun performQuickSeek(seconds: Int) {
         val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
@@ -371,9 +269,9 @@ fun PlayerOverlay(
         }
     }
     
-    // Check for swipe direction
+    // UPDATED: checkForHorizontalSwipe to also check for vertical swipes
     fun checkForSwipeDirection(currentX: Float, currentY: Float): String {
-        if (isHorizontalSwipe || isVerticalSwipe || isLongTap) return ""
+        if (isHorizontalSwipe || isVerticalSwipe || isLongTap) return "" // Already determined or long tap active
         
         val deltaX = kotlin.math.abs(currentX - touchStartX)
         val deltaY = kotlin.math.abs(currentY - touchStartY)
@@ -391,7 +289,6 @@ fun PlayerOverlay(
         return ""
     }
     
-    // Start horizontal seeking
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
@@ -400,13 +297,33 @@ fun PlayerOverlay(
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
+        // REMOVED: lastSeekTime = 0L
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
         }
     }
     
-    // ORIGINAL SMOOTH SEEKING - REAL-TIME FRAME UPDATES
+    // ADD: Start vertical swipe detection
+    fun startVerticalSwipe(startY: Float) {
+        isVerticalSwipe = true
+        cancelAutoHide()
+        // Determine direction based on initial movement
+        val currentY = startY
+        val deltaY = currentY - touchStartY
+        
+        if (deltaY < 0) {
+            // Swipe up - seek forward
+            seekDirection = "+"
+            performQuickSeek(quickSeekAmount)
+        } else {
+            // Swipe down - seek backward
+            seekDirection = "-"
+            performQuickSeek(-quickSeekAmount)
+        }
+    }
+    
+    // UPDATED: handleHorizontalSeeking without debouncing
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
@@ -417,15 +334,17 @@ fun PlayerOverlay(
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
+        // UPDATE: Set seek direction based on movement
         seekDirection = if (deltaX > 0) "+" else "-"
+        
+        // ALWAYS update UI instantly
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
         
-        // ORIGINAL SEEKING: Use exact for real-time frame updates
+        // Send seek command with throttle
         performRealTimeSeek(clampedPosition)
     }
     
-    // End horizontal seeking
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
@@ -443,30 +362,12 @@ fun PlayerOverlay(
             seekStartX = 0f
             seekStartPosition = 0.0
             wasPlayingBeforeSeek = false
-            seekDirection = ""
+            seekDirection = "" // Reset direction
             scheduleSeekbarHide()
         }
     }
     
-    // Start vertical swipe detection
-    fun startVerticalSwipe(startY: Float) {
-        isVerticalSwipe = true
-        cancelAutoHide()
-        val currentY = startY
-        val deltaY = currentY - touchStartY
-        
-        if (deltaY < 0) {
-            // Swipe up - seek forward
-            seekDirection = "+"
-            performQuickSeek(quickSeekAmount)
-        } else {
-            // Swipe down - seek backward
-            seekDirection = "-"
-            performQuickSeek(-quickSeekAmount)
-        }
-    }
-    
-    // End vertical swipe
+    // ADD: End vertical swipe
     fun endVerticalSwipe() {
         isVerticalSwipe = false
         scheduleSeekbarHide()
@@ -500,9 +401,7 @@ fun PlayerOverlay(
         isLongTap = false
     }
     
-    // Video initialization
     LaunchedEffect(Unit) {
-        // Load video file info first
         val intent = (context as? android.app.Activity)?.intent
         fileName = when {
             intent?.action == Intent.ACTION_SEND -> {
@@ -515,23 +414,14 @@ fun PlayerOverlay(
                 getBestAvailableFileName(context)
             }
         }
-        
         val title = MPVLib.getPropertyString("media-title") ?: "Video"
         videoTitle = title
-        
-        // START PREPROCESSING
-        preprocessVideoFile()
-        
-        // Show video info briefly (after preprocessing)
-        if (!isPreprocessing) {
-            showVideoInfo = 1
-            videoInfoJob?.cancel()
-            videoInfoJob = coroutineScope.launch {
-                delay(4000)
-                showVideoInfo = 0
-            }
+        showVideoInfo = 1
+        videoInfoJob?.cancel()
+        videoInfoJob = coroutineScope.launch {
+            delay(4000)
+            showVideoInfo = 0
         }
-        
         scheduleSeekbarHide()
     }
     
@@ -544,14 +434,13 @@ fun PlayerOverlay(
         }
     }
     
-    // MPV config for smooth playback
     LaunchedEffect(Unit) {
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
         MPVLib.setPropertyString("profile", "fast")
-        MPVLib.setPropertyString("vd-lavc-threads", "4")
+        MPVLib.setPropertyString("vd-lavc-threads", "8")
         MPVLib.setPropertyString("audio-channels", "auto")
-        MPVLib.setPropertyString("demuxer-lavf-threads", "2")
+        MPVLib.setPropertyString("demuxer-lavf-threads", "4")
         MPVLib.setPropertyString("cache-initial", "0.5")
         MPVLib.setPropertyString("video-sync", "display-resample")
         MPVLib.setPropertyString("untimed", "yes")
@@ -569,16 +458,8 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("audio-samplerate", "auto")
         MPVLib.setPropertyString("deband", "no")
         MPVLib.setPropertyString("video-aspect-override", "no")
-        
-        // SMOOTH SEEKING CONFIG
-        MPVLib.setPropertyString("demuxer-lavf-o", "seekable=1:fflags=+fastseek+genpts+sortdts")
-        MPVLib.setPropertyBoolean("correct-pts", true)
-        MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
-        MPVLib.setPropertyString("demuxer-thread", "yes")
-        MPVLib.setPropertyString("demuxer-mkv-subtitle-preroll", "yes")
     }
     
-    // Time updates
     LaunchedEffect(Unit) {
         var lastSeconds = -1
         while (isActive) {
@@ -610,14 +491,14 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // Progress bar drag handling
+    // UPDATED: handleProgressBarDrag with movement threshold and direction
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
-            
+            // REMOVED: lastSeekTime = 0L
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
             }
@@ -626,21 +507,21 @@ fun PlayerOverlay(
         val oldPosition = seekbarPosition
         seekbarPosition = newPosition
         
+        // UPDATE: Set seek direction based on movement
         seekDirection = if (newPosition > oldPosition) "+" else "-"
         
         val targetPosition = newPosition.toDouble()
         
+        // ALWAYS update UI instantly
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
         
-        // ORIGINAL SEEKING: Use exact for real-time frame updates
+        // Send seek command with throttle
         performRealTimeSeek(targetPosition)
     }
     
-    // Handle drag finished
     fun handleDragFinished() {
         isDragging = false
-        
         if (wasPlayingBeforeSeek) {
             coroutineScope.launch {
                 delay(100)
@@ -650,214 +531,174 @@ fun PlayerOverlay(
         isSeeking = false
         showSeekTime = false
         wasPlayingBeforeSeek = false
-        seekDirection = ""
+        seekDirection = "" // Reset direction
         scheduleSeekbarHide()
     }
     
     Box(modifier = modifier.fillMaxSize()) {
-        // PREPROCESSING OVERLAY
-        if (isPreprocessing) {
+        // MAIN GESTURE AREA - Full screen divided into areas
+        Box(modifier = Modifier.fillMaxSize()) {
+            // TOP 5% - Ignore area
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black)
-                    .align(Alignment.Center),
-                contentAlignment = Alignment.Center
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.05f)
+                    .align(Alignment.TopStart)
+            )
+            
+            // CENTER AREA - 95% height, divided into left/center/right
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.95f)
+                    .align(Alignment.BottomStart)
             ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Text(
-                        text = "$preprocessingProgress%",
-                        style = TextStyle(
-                            color = Color.White, 
-                            fontSize = 24.sp,
-                            fontWeight = FontWeight.Bold
+                // LEFT 5% - Video info toggle
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.05f)
+                        .fillMaxHeight()
+                        .align(Alignment.CenterStart)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { toggleVideoInfo() }
                         )
-                    )
-                    
-                    Text(
-                        text = preprocessingStage,
-                        style = TextStyle(
-                            color = Color.White, 
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Medium
-                        ),
-                        textAlign = TextAlign.Center
-                    )
-                    
-                    if (keyframeInterval > 0) {
-                        Text(
-                            text = "Keyframes every ${"%.1f".format(keyframeInterval)}s",
-                            style = TextStyle(
-                                color = Color.Yellow,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Normal
-                            ),
-                            textAlign = TextAlign.Center
+                )
+                
+                // CENTER 90% - All gestures (tap, long tap, horizontal swipe, vertical swipe)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
+                        .fillMaxHeight()
+                        .align(Alignment.Center)
+                        // USE SINGLE pointerInteropFilter FOR ALL GESTURES TO AVOID CONFLICTS
+                        .pointerInteropFilter { event ->
+                            when (event.action) {
+                                MotionEvent.ACTION_DOWN -> {
+                                    touchStartX = event.x
+                                    touchStartY = event.y
+                                    startLongTapDetection()
+                                    true
+                                }
+                                MotionEvent.ACTION_MOVE -> {
+                                    if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
+                                        // Check if this should become a horizontal or vertical swipe
+                                        when (checkForSwipeDirection(event.x, event.y)) {
+                                            "horizontal" -> {
+                                                startHorizontalSeeking(event.x)
+                                            }
+                                            "vertical" -> {
+                                                startVerticalSwipe(event.y)
+                                            }
+                                        }
+                                    } else if (isHorizontalSwipe) {
+                                        // Continue horizontal seeking
+                                        handleHorizontalSeeking(event.x)
+                                    }
+                                    // If it's a long tap or vertical swipe, ignore movement (allow slight finger movement during hold)
+                                    true
+                                }
+                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                    endTouch()
+                                    true
+                                }
+                                else -> false
+                            }
+                        }
+                )
+                
+                // RIGHT 5% - Video info toggle
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.05f)
+                        .fillMaxHeight()
+                        .align(Alignment.CenterEnd)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { toggleVideoInfo() }
+                        )
+                )
+            }
+        }
+        
+        // BOTTOM SEEK BAR AREA
+        if (showSeekbar) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(70.dp)
+                    .align(Alignment.BottomStart)
+                    .padding(horizontal = 60.dp)
+                    .offset(y = (3).dp) 
+            ) {
+                Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
+                        Row(modifier = Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "$currentTime / $totalTime",
+                                style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                                modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                    Box(modifier = Modifier.fillMaxWidth().height(48.dp)) { // CHANGED: Increased height for better touch area
+                        SimpleDraggableProgressBar(
+                            position = seekbarPosition,
+                            duration = seekbarDuration,
+                            onValueChange = { handleProgressBarDrag(it) },
+                            onValueChangeFinished = { handleDragFinished() },
+                            getFreshPosition = { getFreshPosition() },
+                            modifier = Modifier.fillMaxSize().height(48.dp) // CHANGED: Increased height
                         )
                     }
                 }
             }
         }
         
-        // MAIN UI
-        if (!isPreprocessing) {
-            // Gesture areas
-            Box(modifier = Modifier.fillMaxSize()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .fillMaxHeight(0.05f)
-                        .align(Alignment.TopStart)
+        // VIDEO INFO - Top Left
+        if (showVideoInfo != 0) {
+            Text(
+                text = displayText,
+                style = TextStyle(color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium),
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset(x = 60.dp, y = 20.dp)
+                    .background(Color.DarkGray.copy(alpha = 0.8f))
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+            )
+        }
+        
+        // FEEDBACK AREA
+        Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
+            when {
+                showVolumeFeedbackState -> Text(
+                    text = "Volume: ${(currentVolume.toFloat() / viewModel.maxVolume.toFloat() * 100).toInt()}%",
+                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
-                
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .fillMaxHeight(0.95f)
-                        .align(Alignment.BottomStart)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(0.05f)
-                            .fillMaxHeight()
-                            .align(Alignment.CenterStart)
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = { toggleVideoInfo() }
-                            )
-                    )
-                    
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(0.9f)
-                            .fillMaxHeight()
-                            .align(Alignment.Center)
-                            .pointerInteropFilter { event ->
-                                when (event.action) {
-                                    MotionEvent.ACTION_DOWN -> {
-                                        touchStartX = event.x
-                                        touchStartY = event.y
-                                        startLongTapDetection()
-                                        true
-                                    }
-                                    MotionEvent.ACTION_MOVE -> {
-                                        if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
-                                            when (checkForSwipeDirection(event.x, event.y)) {
-                                                "horizontal" -> {
-                                                    startHorizontalSeeking(event.x)
-                                                }
-                                                "vertical" -> {
-                                                    startVerticalSwipe(event.y)
-                                                }
-                                            }
-                                        } else if (isHorizontalSwipe) {
-                                            handleHorizontalSeeking(event.x)
-                                        }
-                                        true
-                                    }
-                                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                        endTouch()
-                                        true
-                                    }
-                                    else -> false
-                                }
-                            }
-                    )
-                    
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(0.05f)
-                            .fillMaxHeight()
-                            .align(Alignment.CenterEnd)
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = { toggleVideoInfo() }
-                            )
-                    )
-                }
-            }
-            
-            // SEEK BAR
-            if (showSeekbar) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(70.dp)
-                        .align(Alignment.BottomStart)
-                        .padding(horizontal = 60.dp)
-                        .offset(y = (3).dp) 
-                ) {
-                    Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
-                            Row(modifier = Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(
-                                    text = "$currentTime / $totalTime",
-                                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
-                                )
-                            }
-                        }
-                        Box(modifier = Modifier.fillMaxWidth().height(48.dp)) {
-                            SimpleDraggableProgressBar(
-                                position = seekbarPosition,
-                                duration = seekbarDuration,
-                                onValueChange = { handleProgressBarDrag(it) },
-                                onValueChangeFinished = { handleDragFinished() },
-                                getFreshPosition = { getFreshPosition() },
-                                modifier = Modifier.fillMaxSize().height(48.dp)
-                            )
-                        }
-                    }
-                }
-            }
-            
-            // VIDEO INFO
-            if (showVideoInfo != 0) {
-                Text(
-                    text = displayText,
-                    style = TextStyle(color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium),
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .offset(x = 60.dp, y = 20.dp)
-                        .background(Color.DarkGray.copy(alpha = 0.8f))
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                isSpeedingUp -> Text(
+                    text = "2X",
+                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
-            }
-            
-            // FEEDBACK AREA
-            Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
-                when {
-                    showVolumeFeedbackState -> Text(
-                        text = "Volume: ${(currentVolume.toFloat() / viewModel.maxVolume.toFloat() * 100).toInt()}%",
-                        style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                        modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
-                    )
-                    isSpeedingUp -> Text(
-                        text = "2X",
-                        style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                        modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
-                    )
-                    showQuickSeekFeedback -> Text(
-                        text = quickSeekFeedbackText,
-                        style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                        modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
-                    )
-                    showSeekTime -> Text(
-                        text = if (seekDirection.isNotEmpty()) "$seekTargetTime $seekDirection" else seekTargetTime,
-                        style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                        modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
-                    )
-                    showPlaybackFeedback -> Text(
-                        text = playbackFeedbackText,
-                        style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                        modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
-                    )
-                }
+                showQuickSeekFeedback -> Text( // ADD: Quick seek feedback
+                    text = quickSeekFeedbackText,
+                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+                showSeekTime -> Text(
+                    // UPDATED: Add direction indicator to seek time
+                    text = if (seekDirection.isNotEmpty()) "$seekTargetTime $seekDirection" else seekTargetTime,
+                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+                showPlaybackFeedback -> Text(
+                    text = playbackFeedbackText,
+                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                )
             }
         }
     }
@@ -877,47 +718,55 @@ fun SimpleDraggableProgressBar(
     var hasPassedThreshold by remember { mutableStateOf(false) }
     var thresholdStartX by remember { mutableStateOf(0f) }
     
+    // Convert 25dp to pixels for the movement threshold
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
-    Box(modifier = modifier.height(48.dp)) {
+    Box(modifier = modifier.height(48.dp)) { // CHANGED: Increased container height
+        // Progress bar background
         Box(modifier = Modifier
             .fillMaxWidth()
             .height(4.dp)
             .align(Alignment.CenterStart)
             .background(Color.Gray.copy(alpha = 0.6f)))
         
+        // Progress bar fill
         Box(modifier = Modifier
             .fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f)
             .height(4.dp)
             .align(Alignment.CenterStart)
             .background(Color.White))
         
+        // CHANGED: Increased touch area to full 48dp height
         Box(modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp)
+            .height(48.dp) // This makes the entire 48dp area draggable
             .align(Alignment.CenterStart)
             .pointerInput(Unit) {
                 detectDragGestures(
                     onDragStart = { offset ->
                         dragStartX = offset.x
+                        // GET FRESH POSITION IMMEDIATELY WHEN DRAG STARTS
                         dragStartPosition = getFreshPosition()
-                        hasPassedThreshold = false
-                        thresholdStartX = 0f
+                        hasPassedThreshold = false // Reset threshold flag
+                        thresholdStartX = 0f // Reset threshold start position
                     },
                     onDrag = { change, dragAmount ->
                         change.consume()
                         val currentX = change.position.x
                         val totalMovementX = abs(currentX - dragStartX)
                         
+                        // Check if we've passed the movement threshold
                         if (!hasPassedThreshold) {
                             if (totalMovementX > movementThresholdPx) {
                                 hasPassedThreshold = true
-                                thresholdStartX = currentX
+                                thresholdStartX = currentX // NEW: Store position where threshold was passed
                             } else {
+                                // Haven't passed threshold yet, don't seek
                                 return@detectDragGestures
                             }
                         }
                         
+                        // Calculate delta from the threshold start position, not the original drag start
                         val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
                         val deltaX = currentX - effectiveStartX
                         val deltaPosition = (deltaX / size.width) * duration
@@ -925,8 +774,8 @@ fun SimpleDraggableProgressBar(
                         onValueChange(newPosition)
                     },
                     onDragEnd = { 
-                        hasPassedThreshold = false
-                        thresholdStartX = 0f
+                        hasPassedThreshold = false // Reset for next drag
+                        thresholdStartX = 0f // Reset threshold start
                         onValueChangeFinished() 
                     }
                 )
