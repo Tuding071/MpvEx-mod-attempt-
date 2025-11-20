@@ -444,7 +444,7 @@ fun PlayerOverlay(
         if (!isSeeking) return
         
         val deltaX = currentX - seekStartX
-        val pixelsPerSecond = 4f / 0.016f
+        val pixelsPerSecond = 5f / 0.025f
         val timeDeltaSeconds = deltaX / pixelsPerSecond
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
@@ -467,7 +467,7 @@ fun PlayerOverlay(
             coroutineScope.launch {
                 // Wait for all queued seeks to complete
                 while (seekCommandQueue.isNotEmpty() || isSeekExecuting) {
-                    delay(8) // Small delay to check again
+                    delay(10) // Small delay to check again
                 }
                 
                 // Get final position and do one last seek
@@ -475,7 +475,7 @@ fun PlayerOverlay(
                 MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
                 
                 // Wait a bit more for final seek to apply
-                delay(16)
+                delay(20)
                 
                 // Then resume playback if needed
                 if (wasPlayingBeforeSeek) {
