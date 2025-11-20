@@ -56,6 +56,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import android.content.Intent
 import android.net.Uri
 import kotlin.math.abs
+import java.io.File
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.rotate
 
 @Composable
 fun PlayerOverlay(
@@ -90,7 +93,7 @@ fun PlayerOverlay(
     // REMOVED: lastSeekTime and seekDebounceMs
     // ADD: Simple throttle control
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 17L // Small delay between seek commands
+    val seekThrottleMs = 11L // Small delay between seek commands
     
     // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
     var touchStartTime by remember { mutableStateOf(0L) }
@@ -138,7 +141,399 @@ fun PlayerOverlay(
     var preprocessingProgress by remember { mutableStateOf(0) }
     var preprocessingText by remember { mutableStateOf("Preparing video...") }
     
+    // NEW: Video Conversion States
+    var showConversionPrompt by remember { mutableStateOf(false) }
+    var isConverting by remember { mutableStateOf(false) }
+    var conversionProgress by remember { mutableStateOf(0) }
+    var currentVideoPath by remember { mutableStateOf("") }
+    var currentVideoCodec by remember { mutableStateOf("") }
+    var conversionJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
+    
+    // NEW: Video Conversion Functions
+    fun shouldConvertToH264(): Boolean {
+        if (currentVideoPath.isEmpty()) return false
+        
+        val codec = MPVLib.getPropertyString("video-codec") ?: "unknown"
+        currentVideoCodec = codec
+        val shouldConvert = when (codec.lowercase()) {
+            "hevc", "h265", "av1", "vp9" -> true
+            else -> false
+        }
+        
+        // Only convert if not already H.264 and file exists
+        return shouldConvert && File(currentVideoPath).exists()
+    }
+    
+    fun startConversion() {
+        showConversionPrompt = false
+        isConverting = true
+        conversionProgress = 0
+        
+        conversionJob = coroutineScope.launch {
+            val success = convertVideoToH264(currentVideoPath) { progress ->
+                conversionProgress = progress
+            }
+            
+            if (success) {
+                // Reload the converted video
+                MPVLib.command("loadfile", currentVideoPath)
+                startNormalPreprocessing()
+            } else {
+                // Conversion failed, fall back to normal playback
+                showPlaybackFeedback("Conversion failed")
+                startNormalPreprocessing()
+            }
+            isConverting = false
+        }
+    }
+    
+    fun skipConversion() {
+        showConversionPrompt = false
+        startNormalPreprocessing()
+    }
+    
+    suspend fun convertVideoToH264(originalPath: String, onProgress: (Int) -> Unit): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                val tempPath = "$originalPath.tmp"
+                
+                // FFmpeg conversion command
+                val cmd = arrayOf(
+                    "ffmpeg", "-i", originalPath,
+                    "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                    "-c:a", "aac", "-b:a", "128k",
+                    "-y", // Overwrite output file
+                    tempPath
+                )
+                
+                // Execute conversion
+                val process = Runtime.getRuntime().exec(cmd)
+                
+                // Simulate progress (in real implementation, parse ffmpeg output)
+                var progress = 0
+                while (progress < 100 && process.isAlive) {
+                    delay(500)
+                    progress += 5
+                    if (progress > 95) progress = 95
+                    onProgress(progress)
+                }
+                
+                val exitCode = process.waitFor()
+                
+                if (exitCode == 0) {
+                    // Replace original file with converted one
+                    val originalFile = File(originalPath)
+                    val tempFile = File(tempPath)
+                    
+                    if (originalFile.delete() && tempFile.renameTo(originalFile)) {
+                        onProgress(100)
+                        delay(500)
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                false
+            }
+        }
+    }
+    
+    fun startNormalPreprocessing() {
+        preScanVideo().invokeOnCompletion {
+            // After preprocessing, initialize the rest
+            val intent = (context as? android.app.Activity)?.intent
+            fileName = when {
+                intent?.action == Intent.ACTION_SEND -> {
+                    getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context)
+                }
+                intent?.action == Intent.ACTION_VIEW -> {
+                    getFileNameFromUri(intent.data, context)
+                }
+                else -> {
+                    getBestAvailableFileName(context)
+                }
+            }
+            val title = MPVLib.getPropertyString("media-title") ?: "Video"
+            videoTitle = title
+            showVideoInfo = 1
+            videoInfoJob?.cancel()
+            videoInfoJob = coroutineScope.launch {
+                delay(4000)
+                showVideoInfo = 0
+            }
+            scheduleSeekbarHide()
+        }
+    }
+    
+    // NEW: Conversion Prompt Composable
+    @Composable
+    fun ConversionPromptOverlay() {
+        var offsetX by remember { mutableStateOf(0f) }
+        var decisionMade by remember { mutableStateOf(false) }
+        
+        val maxOffset = with(LocalDensity.current) { 200.dp.toPx() }
+        val threshold = with(LocalDensity.current) { 100.dp.toPx() }
+        
+        // Animate decision
+        val animatedOffset by animateFloatAsState(
+            targetValue = offsetX,
+            animationSpec = tween(duration = 300)
+        )
+        
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.95f))
+                .pointerInput(Unit) {
+                    if (decisionMade) return@pointerInput
+                    
+                    detectDragGestures(
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            offsetX = (offsetX + dragAmount.x).coerceIn(-maxOffset, maxOffset)
+                        },
+                        onDragEnd = {
+                            when {
+                                offsetX > threshold -> {
+                                    // Swipe right - Convert
+                                    decisionMade = true
+                                    startConversion()
+                                }
+                                offsetX < -threshold -> {
+                                    // Swipe left - Skip
+                                    decisionMade = true
+                                    skipConversion()
+                                }
+                                else -> offsetX = 0f // Return to center
+                            }
+                        }
+                    )
+                }
+        ) {
+            // Background indicators
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxHeight()
+                    .width(120.dp)
+                    .background(Color.Green.copy(alpha = 0.4f))
+            ) {
+                Text(
+                    text = "CONVERT",
+                    style = TextStyle(color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold),
+                    modifier = Modifier.align(Alignment.Center).rotate(90f)
+                )
+            }
+            
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .fillMaxHeight()
+                    .width(120.dp)
+                    .background(Color.Red.copy(alpha = 0.4f))
+                ) {
+                Text(
+                    text = "SKIP",
+                    style = TextStyle(color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold),
+                    modifier = Modifier.align(Alignment.Center).rotate(-90f)
+                )
+            }
+            
+            // Main prompt card
+            Column(
+                modifier = Modifier
+                    .offset(x = animatedOffset.dp)
+                    .align(Alignment.Center)
+                    .width(320.dp)
+                    .background(Color.DarkGray, RoundedCornerShape(20.dp))
+                    .padding(28.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(20.dp)
+            ) {
+                Text(
+                    text = "Convert Video Format?",
+                    style = TextStyle(color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold),
+                    textAlign = TextAlign.Center
+                )
+                
+                Text(
+                    text = "\"${videoTitle.take(40)}${if (videoTitle.length > 40) "..." else ""}\"",
+                    style = TextStyle(color = Color.Yellow, fontSize = 16.sp, fontWeight = FontWeight.Medium),
+                    textAlign = TextAlign.Center,
+                    maxLines = 2
+                )
+                
+                // Codec information
+                Box(
+                    modifier = Modifier
+                        .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                        .padding(12.dp)
+                ) {
+                    Text(
+                        text = "Current Format: $currentVideoCodec",
+                        style = TextStyle(color = Color.White, fontSize = 14.sp),
+                        textAlign = TextAlign.Center
+                    )
+                }
+                
+                Text(
+                    text = "Convert to H.264 for better compatibility and smoother playback?",
+                    style = TextStyle(color = Color.White.copy(alpha = 0.9f), fontSize = 15.sp),
+                    textAlign = TextAlign.Center
+                )
+                
+                Text(
+                    text = "• Better device compatibility\n• Smoother seeking\n• Lower battery usage",
+                    style = TextStyle(color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp),
+                    textAlign = TextAlign.Start
+                )
+                
+                // Warning about file replacement
+                Text(
+                    text = "⚠️ Original file will be replaced",
+                    style = TextStyle(color = Color.Yellow.copy(alpha = 0.8f), fontSize = 12.sp),
+                    textAlign = TextAlign.Center
+                )
+                
+                // Swipe instructions
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("← Swipe Left", style = TextStyle(color = Color.Red, fontSize = 14.sp, fontWeight = FontWeight.Bold))
+                        Text("Play Original", style = TextStyle(color = Color.White, fontSize = 12.sp))
+                    }
+                    
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("Swipe Right →", style = TextStyle(color = Color.Green, fontSize = 14.sp, fontWeight = FontWeight.Bold))
+                        Text("Convert to H.264", style = TextStyle(color = Color.White, fontSize = 12.sp))
+                    }
+                }
+                
+                // Drag feedback
+                if (abs(offsetX) > 20f) {
+                    val progress = (abs(offsetX) / threshold).coerceIn(0f, 1f)
+                    val percentage = (progress * 100).toInt()
+                    
+                    Text(
+                        text = if (offsetX > 0) 
+                            "Converting... $percentage%" 
+                        else 
+                            "Skipping... $percentage%",
+                        style = TextStyle(
+                            color = if (offsetX > 0) Color.Green else Color.Red,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    )
+                }
+            }
+        }
+    }
+    
+    // NEW: Conversion Progress Composable
+    @Composable
+    fun ConversionProgressOverlay() {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.95f))
+        ) {
+            Column(
+                modifier = Modifier.align(Alignment.Center),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(24.dp)
+            ) {
+                // Animated progress circle
+                Box(
+                    modifier = Modifier
+                        .size(100.dp)
+                        .background(Color.DarkGray.copy(alpha = 0.8f), RoundedCornerShape(50.dp))
+                ) {
+                    Text(
+                        text = "$conversionProgress%",
+                        style = TextStyle(
+                            color = Color.White,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold
+                        ),
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
+                
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "Converting to H.264",
+                        style = TextStyle(
+                            color = Color.White,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    )
+                    
+                    Text(
+                        text = "This may take a few minutes...",
+                        style = TextStyle(
+                            color = Color.White.copy(alpha = 0.8f),
+                            fontSize = 14.sp
+                        ),
+                        textAlign = TextAlign.Center
+                    )
+                }
+                
+                // Progress bar
+                Box(
+                    modifier = Modifier
+                        .width(280.dp)
+                        .height(8.dp)
+                        .background(Color.Gray.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(conversionProgress / 100f)
+                            .height(8.dp)
+                            .background(Color.Green, RoundedCornerShape(4.dp))
+                    )
+                }
+                
+                // Benefits list
+                Column(
+                    modifier = Modifier.width(280.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "• Better compatibility with all devices",
+                        style = TextStyle(color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+                    )
+                    Text(
+                        text = "• Smoother seeking and playback", 
+                        style = TextStyle(color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+                    )
+                    Text(
+                        text = "• Lower battery consumption",
+                        style = TextStyle(color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+                    )
+                }
+                
+                // Warning
+                Text(
+                    text = "Please don't close the app during conversion",
+                    style = TextStyle(
+                        color = Color.Yellow.copy(alpha = 0.8f),
+                        fontSize = 12.sp
+                    ),
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+    }
     
     // SOLUTION 1: Fast Pre-scan with UI
     fun preScanVideo(): kotlinx.coroutines.Job = coroutineScope.launch {
@@ -459,31 +854,23 @@ fun PlayerOverlay(
         isLongTap = false
     }
     
+    // UPDATED: LaunchedEffect to check for conversion first
     LaunchedEffect(Unit) {
-        // Start preprocessing first
-        preScanVideo().invokeOnCompletion {
-            // After preprocessing, initialize the rest
-            val intent = (context as? android.app.Activity)?.intent
-            fileName = when {
-                intent?.action == Intent.ACTION_SEND -> {
-                    getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context)
-                }
-                intent?.action == Intent.ACTION_VIEW -> {
-                    getFileNameFromUri(intent.data, context)
-                }
-                else -> {
-                    getBestAvailableFileName(context)
-                }
+        // Get current video path
+        currentVideoPath = MPVLib.getPropertyString("path") ?: ""
+        
+        if (currentVideoPath.isNotEmpty()) {
+            // Check if we need to ask about conversion
+            if (shouldConvertToH264()) {
+                // Show conversion prompt before anything else
+                showConversionPrompt = true
+            } else {
+                // Proceed with normal preprocessing
+                startNormalPreprocessing()
             }
-            val title = MPVLib.getPropertyString("media-title") ?: "Video"
-            videoTitle = title
-            showVideoInfo = 1
-            videoInfoJob?.cancel()
-            videoInfoJob = coroutineScope.launch {
-                delay(4000)
-                showVideoInfo = 0
-            }
-            scheduleSeekbarHide()
+        } else {
+            // No video path, just start normal flow
+            startNormalPreprocessing()
         }
     }
     
@@ -612,8 +999,16 @@ fun PlayerOverlay(
     }
     
     Box(modifier = modifier.fillMaxSize()) {
-        // PREPROCESSING OVERLAY - Show during video preparation
-        if (isPreprocessing) {
+        // 1. CONVERSION PROMPT (shows first if needed)
+        if (showConversionPrompt) {
+            ConversionPromptOverlay()
+        }
+        // 2. CONVERSION IN PROGRESS
+        else if (isConverting) {
+            ConversionProgressOverlay()
+        }
+        // 3. PREPROCESSING OVERLAY - Show during video preparation
+        else if (isPreprocessing) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -667,7 +1062,7 @@ fun PlayerOverlay(
         }
         
         // MAIN GESTURE AREA - Full screen divided into areas (only show after preprocessing)
-        if (!isPreprocessing) {
+        if (!isPreprocessing && !showConversionPrompt && !isConverting) {
             Box(modifier = Modifier.fillMaxSize()) {
                 // TOP 5% - Ignore area
                 Box(
