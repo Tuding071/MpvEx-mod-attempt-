@@ -1063,7 +1063,6 @@ fun PlayerOverlay(
         
         // MAIN GESTURE AREA - Full screen divided into areas (only show after preprocessing)
         if (!isPreprocessing && !showConversionPrompt && !isConverting) {
-            // ... (rest of your existing UI code remains exactly the same)
             Box(modifier = Modifier.fillMaxSize()) {
                 // TOP 5% - Ignore area
                 Box(
@@ -1232,7 +1231,7 @@ fun PlayerOverlay(
     }
 }
 
-// ... (keep the existing SimpleDraggableProgressBar and helper functions exactly the same)
+// FIXED: SimpleDraggableProgressBar with correct parameter name
 @Composable
 fun SimpleDraggableProgressBar(
     position: Float,
