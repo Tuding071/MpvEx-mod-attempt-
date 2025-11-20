@@ -68,6 +68,7 @@ import kotlinx.coroutines.withContext
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.ImageBitmap
 import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
 
 // ============================================================================
 // COMPRESSED VIDEO SLIDING WINDOW SYSTEM
@@ -75,7 +76,7 @@ import java.io.ByteArrayOutputStream
 
 data class VideoSegment(
     val startTimeMicros: Long, // Start time of this 1-second segment
-    val compressedData: ByteArray, // Compressed video data for this segment
+    val compressedData: ByteBuffer, // Compressed video data for this segment
     val durationMicros: Long = 1_000_000L, // 1 second
     val isLoaded: Boolean = true
 ) {
@@ -123,9 +124,6 @@ class CompressedVideoBuffer(
         
         // Load initial 20-second window
         rebuildBufferAround(centerTimeMicros)
-        
-        // Start maintenance coroutine
-        startMaintenance()
         
         isBufferReady = true
     }
@@ -179,7 +177,8 @@ class CompressedVideoBuffer(
      */
     fun getBufferStatus(): String {
         if (!isBufferReady) return "🔄 Initializing..."
-        return "✅ Ready (${segments.size}/$windowSizeSeconds segments)"
+        val loadedSegments = segments.count { it.value.isLoaded }
+        return "✅ Ready (${loadedSegments}/$windowSizeSeconds segments)"
     }
     
     /**
@@ -283,7 +282,7 @@ class CompressedVideoBuffer(
         }
     }
     
-    private suspend fun extractVideoChunk(startTimeMicros: Long, durationMicros: Long): ByteArray? {
+    private suspend fun extractVideoChunk(startTimeMicros: Long, durationMicros: Long): ByteBuffer? {
         return withContext(Dispatchers.IO) {
             try {
                 val extractor = MediaExtractor()
@@ -317,7 +316,10 @@ class CompressedVideoBuffer(
                 }
                 
                 extractor.release()
-                outputStream.toByteArray()
+                
+                // Convert ByteArray to ByteBuffer
+                val byteArray = outputStream.toByteArray()
+                ByteBuffer.wrap(byteArray)
             } catch (e: Exception) {
                 e.printStackTrace()
                 null
@@ -334,11 +336,6 @@ class CompressedVideoBuffer(
             }
         }
         return -1
-    }
-    
-    private fun startMaintenance() {
-        maintenanceJob?.cancel()
-        // Maintenance is now handled by onPositionChanged calls
     }
 }
 
@@ -1042,8 +1039,6 @@ fun PlayerOverlay(
         }
     }
 }
-
-// Keep the existing SimpleDraggableProgressBar and helper functions...
 
 @Composable
 fun SimpleDraggableProgressBar(
