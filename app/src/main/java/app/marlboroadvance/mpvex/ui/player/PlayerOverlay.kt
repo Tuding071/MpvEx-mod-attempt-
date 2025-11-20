@@ -59,6 +59,7 @@ import kotlin.math.abs
 import java.io.File
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.rotate
+import kotlinx.coroutines.withContext
 
 @Composable
 fun PlayerOverlay(
@@ -149,21 +150,21 @@ fun PlayerOverlay(
     var currentVideoCodec by remember { mutableStateOf("") }
     var conversionJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
+    // Track converted videos
+    val convertedVideos = remember { mutableSetOf<String>() }
+    
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // NEW: Video Conversion Functions
-    fun shouldConvertToH264(): Boolean {
+    // NEW: Video Conversion Functions - SIMPLIFIED
+    fun shouldConvertVideo(): Boolean {
         if (currentVideoPath.isEmpty()) return false
+        if (!File(currentVideoPath).exists()) return false
         
-        val codec = MPVLib.getPropertyString("video-codec") ?: "unknown"
-        currentVideoCodec = codec
-        val shouldConvert = when (codec.lowercase()) {
-            "hevc", "h265", "av1", "vp9" -> true
-            else -> false
-        }
+        // Check if already converted in this session
+        if (convertedVideos.contains(currentVideoPath)) return false
         
-        // Only convert if not already H.264 and file exists
-        return shouldConvert && File(currentVideoPath).exists()
+        // Always ask for conversion if not converted yet
+        return true
     }
     
     fun startConversion() {
@@ -177,6 +178,8 @@ fun PlayerOverlay(
             }
             
             if (success) {
+                // Mark as converted
+                convertedVideos.add(currentVideoPath)
                 // Reload the converted video
                 MPVLib.command("loadfile", currentVideoPath)
                 startNormalPreprocessing()
@@ -191,6 +194,8 @@ fun PlayerOverlay(
     
     fun skipConversion() {
         showConversionPrompt = false
+        // Mark as skipped (so we don't ask again for this video in current session)
+        convertedVideos.add(currentVideoPath)
         startNormalPreprocessing()
     }
     
@@ -199,7 +204,7 @@ fun PlayerOverlay(
             try {
                 val tempPath = "$originalPath.tmp"
                 
-                // FFmpeg conversion command
+                // FFmpeg conversion command - convert ANY video to H.264
                 val cmd = arrayOf(
                     "ffmpeg", "-i", originalPath,
                     "-c:v", "libx264", "-preset", "medium", "-crf", "23",
@@ -337,7 +342,7 @@ fun PlayerOverlay(
                     .fillMaxHeight()
                     .width(120.dp)
                     .background(Color.Red.copy(alpha = 0.4f))
-                ) {
+            ) {
                 Text(
                     text = "SKIP",
                     style = TextStyle(color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold),
@@ -357,7 +362,7 @@ fun PlayerOverlay(
                 verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
                 Text(
-                    text = "Convert Video Format?",
+                    text = "Convert to H.264?",
                     style = TextStyle(color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold),
                     textAlign = TextAlign.Center
                 )
@@ -369,34 +374,21 @@ fun PlayerOverlay(
                     maxLines = 2
                 )
                 
-                // Codec information
-                Box(
-                    modifier = Modifier
-                        .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
-                        .padding(12.dp)
-                ) {
-                    Text(
-                        text = "Current Format: $currentVideoCodec",
-                        style = TextStyle(color = Color.White, fontSize = 14.sp),
-                        textAlign = TextAlign.Center
-                    )
-                }
-                
                 Text(
-                    text = "Convert to H.264 for better compatibility and smoother playback?",
+                    text = "Convert this video to H.264 for universal compatibility?",
                     style = TextStyle(color = Color.White.copy(alpha = 0.9f), fontSize = 15.sp),
                     textAlign = TextAlign.Center
                 )
                 
                 Text(
-                    text = "• Better device compatibility\n• Smoother seeking\n• Lower battery usage",
+                    text = "• Universal device support\n• Smoother playback\n• Better battery life\n• Future-proof format",
                     style = TextStyle(color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp),
                     textAlign = TextAlign.Start
                 )
                 
                 // Warning about file replacement
                 Text(
-                    text = "⚠️ Original file will be replaced",
+                    text = "⚠️ Original file will be replaced with H.264 version",
                     style = TextStyle(color = Color.Yellow.copy(alpha = 0.8f), fontSize = 12.sp),
                     textAlign = TextAlign.Center
                 )
@@ -509,7 +501,7 @@ fun PlayerOverlay(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "• Better compatibility with all devices",
+                        text = "• Universal compatibility with all devices",
                         style = TextStyle(color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
                     )
                     Text(
@@ -517,7 +509,7 @@ fun PlayerOverlay(
                         style = TextStyle(color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
                     )
                     Text(
-                        text = "• Lower battery consumption",
+                        text = "• Better battery efficiency",
                         style = TextStyle(color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
                     )
                 }
@@ -861,7 +853,7 @@ fun PlayerOverlay(
         
         if (currentVideoPath.isNotEmpty()) {
             // Check if we need to ask about conversion
-            if (shouldConvertToH264()) {
+            if (shouldConvertVideo()) {
                 // Show conversion prompt before anything else
                 showConversionPrompt = true
             } else {
@@ -1063,6 +1055,7 @@ fun PlayerOverlay(
         
         // MAIN GESTURE AREA - Full screen divided into areas (only show after preprocessing)
         if (!isPreprocessing && !showConversionPrompt && !isConverting) {
+            // ... (rest of your existing UI code remains exactly the same)
             Box(modifier = Modifier.fillMaxSize()) {
                 // TOP 5% - Ignore area
                 Box(
@@ -1231,6 +1224,7 @@ fun PlayerOverlay(
     }
 }
 
+// ... (keep the existing SimpleDraggableProgressBar and helper functions exactly the same)
 @Composable
 fun SimpleDraggableProgressBar(
     position: Float,
