@@ -1066,7 +1066,6 @@ fun PlayerOverlay(
         
         // MAIN GESTURE AREA - Full screen divided into areas (only show after preprocessing)
         if (!isPreprocessing && !showConversionPrompt && !isConverting) {
-            // ... (rest of your existing UI code)
             Box(modifier = Modifier.fillMaxSize()) {
                 // TOP 5% - Ignore area
                 Box(
@@ -1173,14 +1172,15 @@ fun PlayerOverlay(
                                 )
                             }
                         }
-                        Box(modifier = Modifier.fillMaxWidth().height(48.dp)) { // CHANGED: Increased height for better touch area
+                        Box(modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                            // FIXED: Use the correct parameter name
                             SimpleDraggableProgressBar(
                                 position = seekbarPosition,
                                 duration = seekbarDuration,
                                 onValueChange = { handleProgressBarDrag(it) },
                                 onValueChangeFinished = { handleDragFinished() },
                                 getFreshPosition = { getFreshPosition() },
-                                modifier = Modifier.fillMaxSize().height(48.dp) // CHANGED: Increased height
+                                modifier = Modifier.fillMaxSize().height(48.dp)
                             )
                         }
                     }
@@ -1315,7 +1315,6 @@ fun SimpleDraggableProgressBar(
     }
 }
 
-// ... (keep the helper functions at the bottom)
 private fun formatTimeSimple(seconds: Double): String {
     val totalSeconds = seconds.toInt()
     val hours = totalSeconds / 3600
