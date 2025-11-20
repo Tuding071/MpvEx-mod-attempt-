@@ -64,14 +64,11 @@ fun PlayerOverlay(
 ) {
     val context = LocalContext.current
     
-    // ENHANCED PREPROCESSING STATES
+    // PREPROCESSING STATES
     var isPreprocessing by remember { mutableStateOf(false) }
     var preprocessingProgress by remember { mutableStateOf(0) }
     var preprocessingStage by remember { mutableStateOf("") }
-    var isStreamPrepared by remember { mutableStateOf(false) }
-    var detectedSegments by remember { mutableStateOf(0) }
-    var requiresEnhancedProcessing by remember { mutableStateOf(false) }
-    var keyframeInterval by remember { mutableStateOf(2.0) } // NEW: Keyframe interval detection
+    var keyframeInterval by remember { mutableStateOf(2.0) }
     
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
@@ -97,10 +94,9 @@ fun PlayerOverlay(
     // ADD: Seek direction for feedback
     var seekDirection by remember { mutableStateOf("") } // "+" or "-" or ""
     
-    // REMOVED: lastSeekTime and seekDebounceMs
-    // ADD: Simple throttle control
+    // Simple throttle control
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 0L // Small delay between seek commands
+    val seekThrottleMs = 50L // Small delay between seek commands
     
     // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
     var touchStartTime by remember { mutableStateOf(0L) }
@@ -109,15 +105,15 @@ fun PlayerOverlay(
     var isTouching by remember { mutableStateOf(false) }
     var isLongTap by remember { mutableStateOf(false) }
     var isHorizontalSwipe by remember { mutableStateOf(false) }
-    var isVerticalSwipe by remember { mutableStateOf(false) } // ADD: Vertical swipe state
+    var isVerticalSwipe by remember { mutableStateOf(false) }
     var longTapJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     // THRESHOLDS
     val longTapThreshold = 300L // ms
-    val horizontalSwipeThreshold = 30f // pixels - minimum horizontal movement to trigger seeking
-    val verticalSwipeThreshold = 40f // pixels - minimum vertical movement to trigger quick seek
-    val maxVerticalMovement = 50f // pixels - maximum vertical movement allowed for horizontal swipe
-    val maxHorizontalMovement = 50f // pixels - maximum horizontal movement allowed for vertical swipe
+    val horizontalSwipeThreshold = 30f // pixels
+    val verticalSwipeThreshold = 40f // pixels
+    val maxVerticalMovement = 50f // pixels
+    val maxHorizontalMovement = 50f // pixels
     
     // ADD: Quick seek amount in seconds
     val quickSeekAmount = 5
@@ -145,10 +141,11 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
 
-    // NEW: Detect keyframe interval
+    // KEYFRAME INTERVAL DETECTION (KEEP FOR ANALYSIS)
     suspend fun detectKeyframeInterval(duration: Double): Double {
-        if (duration < 5) return 2.0 // Too short to analyze
+        if (duration < 5) return 2.0
         
+        preprocessingStage = "Analyzing keyframe pattern..."
         val testPoints = listOf(0.1, 0.3, 0.5, 0.7)
         val intervals = mutableListOf<Double>()
         
@@ -158,84 +155,33 @@ fun PlayerOverlay(
             
             // Seek to start and get actual keyframe position
             MPVLib.command("seek", startTime.toString(), "absolute", "keyframes")
-            delay(50)
+            delay(30)
             val startActual = MPVLib.getPropertyDouble("time-pos") ?: startTime
             
             // Seek to end and get actual keyframe position  
             MPVLib.command("seek", endTime.toString(), "absolute", "keyframes")
-            delay(50)
+            delay(30)
             val endActual = MPVLib.getPropertyDouble("time-pos") ?: endTime
             
             val interval = endActual - startActual
-            if (interval > 0.5 && interval < 30.0) { // Reasonable bounds
+            if (interval > 0.5 && interval < 30.0) {
                 intervals.add(interval)
             }
+            
+            preprocessingProgress = 40 + (i * 15)
         }
         
-        // Return average interval, or default if no good data
         return if (intervals.isNotEmpty()) intervals.average() else 2.0
     }
 
-    // NEW: Enhanced scanning for segmented files
-    suspend fun performEnhancedSegmentScanning(duration: Double) {
-        if (duration > 10) {
-            // Comprehensive scan for segmented files
-            val scanPoints = listOf(0.05, 0.10, 0.20, 0.35, 0.50, 0.65, 0.80, 0.95)
-            val progressPerPoint = 50 / scanPoints.size
-            var segmentsFound = 0
-            
-            for ((index, point) in scanPoints.withIndex()) {
-                val targetTime = duration * point
-                MPVLib.command("seek", targetTime.toString(), "absolute", "keyframes")
-                delay(100) // Longer delay for problematic files
-                
-                // Check if seek was successful
-                val actualPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-                if (abs(actualPos - targetTime) > 2.0) {
-                    segmentsFound++
-                }
-                
-                preprocessingProgress = 30 + (index + 1) * progressPerPoint
-            }
-            
-            detectedSegments = segmentsFound
-            preprocessingStage = "Found $segmentsFound segments - Optimizing..."
-        } else {
-            // Short video - quick scan
-            MPVLib.command("seek", (duration * 0.3).toString(), "absolute", "keyframes")
-            preprocessingProgress = 50
-            delay(80)
-            
-            MPVLib.command("seek", (duration * 0.7).toString(), "absolute", "keyframes")
-            preprocessingProgress = 70
-            delay(80)
-        }
-    }
-
-    // NEW: Smart two-stage seeking using detected keyframe interval
-    fun seekToPreviousKeyframeThenExact(targetPosition: Double) {
-        // Calculate where the previous keyframe should be
-        val estimatedKeyframePosition = targetPosition - keyframeInterval
-        
-        // Seek to estimated previous keyframe (clamped to 0)
-        val seekStartPosition = estimatedKeyframePosition.coerceAtLeast(0.0)
-        MPVLib.command("seek", seekStartPosition.toString(), "absolute", "keyframes")
-        
-        // Then seek exactly to target
-        coroutineScope.launch {
-            delay(16) // One frame at 60fps
-            MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
-        }
-    }
-
-    // ENHANCED: Smart preprocessing with keyframe detection
+    // PREPROCESSING - SCAN THROUGH VIDEO TO WARM UP BUFFER
     fun preprocessVideoFile() {
         isPreprocessing = true
         preprocessingProgress = 0
-        preprocessingStage = "Analyzing video structure..."
+        preprocessingStage = "Optimizing playback..."
         
         coroutineScope.launch {
-            // STEP 1: Initial MPV configuration
+            // STEP 1: Initial configuration
             preprocessingStage = "Configuring player..."
             preprocessingProgress = 10
             
@@ -245,47 +191,36 @@ fun PlayerOverlay(
                 MPVLib.setPropertyBoolean("mute", true)
             }
             
-            // Enhanced configuration for smooth seeking
-            MPVLib.setPropertyString("demuxer-mkv-subtitle-preroll", "yes")
-            MPVLib.setPropertyString("demuxer-seekable-cache", "yes") 
-            MPVLib.setPropertyString("demuxer-thread", "yes")
-            MPVLib.setPropertyBoolean("correct-pts", true)
-            MPVLib.setPropertyString("demuxer-lavf-o", "seekable=1:fflags=+fastseek+genpts")
-            MPVLib.setPropertyString("video-sync", "display-resample")
-            MPVLib.setPropertyString("hr-seek", "absolute")
-            MPVLib.setPropertyString("hr-seek-framedrop", "no")
+            delay(50)
 
-            delay(100)
-
-            // STEP 2: Detect keyframe interval
-            preprocessingStage = "Detecting keyframe pattern..."
-            preprocessingProgress = 40
+            // STEP 2: Detect keyframe interval (for analysis only)
+            preprocessingStage = "Analyzing video structure..."
+            preprocessingProgress = 20
             
             val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
             keyframeInterval = detectKeyframeInterval(duration)
             
-            preprocessingStage = "Keyframes every ${"%.1f".format(keyframeInterval)}s - Optimizing..."
+            preprocessingStage = "Keyframes every ${"%.1f".format(keyframeInterval)}s - Warming up..."
             preprocessingProgress = 60
 
-            // STEP 3: Quick scan for normal files
-            preprocessingStage = "Final scan..."
-            preprocessingProgress = 80
-            
-            // Light scan for normal files
-            if (duration > 30) {
-                MPVLib.command("seek", (duration * 0.2).toString(), "absolute", "keyframes")
-                delay(50)
-                MPVLib.command("seek", (duration * 0.8).toString(), "absolute", "keyframes")
-                delay(50)
+            // STEP 3: SCAN THROUGH VIDEO TO PRELOAD KEYFRAMES
+            if (duration > 10) {
+                val scanPoints = listOf(0.1, 0.25, 0.4, 0.55, 0.7, 0.85)
+                val progressPerPoint = 30 / scanPoints.size
+                
+                for ((index, point) in scanPoints.withIndex()) {
+                    val targetTime = duration * point
+                    MPVLib.command("seek", targetTime.toString(), "absolute", "keyframes")
+                    delay(40) // Short delay to let buffer load
+                    preprocessingProgress = 60 + (index * progressPerPoint)
+                }
             }
 
-            // STEP 4: Final preparation
-            preprocessingStage = "Finalizing playback..."
-            preprocessingProgress = 90
-            
-            // Return to start and final config
+            // STEP 4: Return to start
+            preprocessingStage = "Finalizing..."
+            preprocessingProgress = 95
             MPVLib.command("seek", "0", "absolute", "keyframes")
-            delay(100)
+            delay(50)
 
             // STEP 5: Restore audio and complete
             if (!wasMuted) {
@@ -296,33 +231,32 @@ fun PlayerOverlay(
             delay(50)
             
             isPreprocessing = false
-            isStreamPrepared = true
             
             // Start playback
             MPVLib.setPropertyBoolean("pause", false)
         }
     }
 
-    // UPDATED: performRealTimeSeek with throttle
+    // ORIGINAL SMOOTH SEEKING - BACK TO BASICS
     fun performRealTimeSeek(targetPosition: Double) {
-        if (isSeekInProgress) return // Skip if we're already processing a seek
+        if (isSeekInProgress) return
         
         isSeekInProgress = true
+        // USE EXACT SEEKING FOR REAL-TIME FRAME UPDATES
         MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
         
-        // Reset after throttle period
         coroutineScope.launch {
             delay(seekThrottleMs)
             isSeekInProgress = false
         }
     }
     
-    // NEW: Function to get fresh position from MPV
+    // Function to get fresh position from MPV
     fun getFreshPosition(): Float {
         return (MPVLib.getPropertyDouble("time-pos") ?: 0.0).toFloat()
     }
     
-    // ADD: Quick seek function
+    // Quick seek function
     fun performQuickSeek(seconds: Int) {
         val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
@@ -437,9 +371,9 @@ fun PlayerOverlay(
         }
     }
     
-    // UPDATED: checkForHorizontalSwipe to also check for vertical swipes
+    // Check for swipe direction
     fun checkForSwipeDirection(currentX: Float, currentY: Float): String {
-        if (isHorizontalSwipe || isVerticalSwipe || isLongTap) return "" // Already determined or long tap active
+        if (isHorizontalSwipe || isVerticalSwipe || isLongTap) return ""
         
         val deltaX = kotlin.math.abs(currentX - touchStartX)
         val deltaY = kotlin.math.abs(currentY - touchStartY)
@@ -457,7 +391,7 @@ fun PlayerOverlay(
         return ""
     }
     
-    // UPDATED: startHorizontalSeeking - MOTION BLUR REMOVED
+    // Start horizontal seeking
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
@@ -472,7 +406,7 @@ fun PlayerOverlay(
         }
     }
     
-    // UPDATED: handleHorizontalSeeking with smart two-stage seeking
+    // ORIGINAL SMOOTH SEEKING - REAL-TIME FRAME UPDATES
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
@@ -487,11 +421,11 @@ fun PlayerOverlay(
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
         
-        // SMART TWO-STAGE SEEKING: Previous keyframe first, then exact
-        seekToPreviousKeyframeThenExact(clampedPosition)
+        // ORIGINAL SEEKING: Use exact for real-time frame updates
+        performRealTimeSeek(clampedPosition)
     }
     
-    // UPDATED: endHorizontalSeeking - MOTION BLUR REMOVED
+    // End horizontal seeking
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
@@ -509,16 +443,15 @@ fun PlayerOverlay(
             seekStartX = 0f
             seekStartPosition = 0.0
             wasPlayingBeforeSeek = false
-            seekDirection = "" // Reset direction
+            seekDirection = ""
             scheduleSeekbarHide()
         }
     }
     
-    // ADD: Start vertical swipe detection
+    // Start vertical swipe detection
     fun startVerticalSwipe(startY: Float) {
         isVerticalSwipe = true
         cancelAutoHide()
-        // Determine direction based on initial movement
         val currentY = startY
         val deltaY = currentY - touchStartY
         
@@ -533,7 +466,7 @@ fun PlayerOverlay(
         }
     }
     
-    // ADD: End vertical swipe
+    // End vertical swipe
     fun endVerticalSwipe() {
         isVerticalSwipe = false
         scheduleSeekbarHide()
@@ -567,7 +500,7 @@ fun PlayerOverlay(
         isLongTap = false
     }
     
-    // MODIFIED: Enhanced LaunchedEffect for video initialization
+    // Video initialization
     LaunchedEffect(Unit) {
         // Load video file info first
         val intent = (context as? android.app.Activity)?.intent
@@ -586,7 +519,7 @@ fun PlayerOverlay(
         val title = MPVLib.getPropertyString("media-title") ?: "Video"
         videoTitle = title
         
-        // START ENHANCED PREPROCESSING
+        // START PREPROCESSING
         preprocessVideoFile()
         
         // Show video info briefly (after preprocessing)
@@ -611,12 +544,12 @@ fun PlayerOverlay(
         }
     }
     
-    // MODIFIED: Enhanced MPV config for smooth seeking
+    // MPV config for smooth playback
     LaunchedEffect(Unit) {
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
         MPVLib.setPropertyString("profile", "fast")
-        MPVLib.setPropertyString("vd-lavc-threads", "4") // Realistic thread count
+        MPVLib.setPropertyString("vd-lavc-threads", "4")
         MPVLib.setPropertyString("audio-channels", "auto")
         MPVLib.setPropertyString("demuxer-lavf-threads", "2")
         MPVLib.setPropertyString("cache-initial", "0.5")
@@ -637,7 +570,7 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("deband", "no")
         MPVLib.setPropertyString("video-aspect-override", "no")
         
-        // ENHANCED CONFIG FOR SMOOTH SEEKING
+        // SMOOTH SEEKING CONFIG
         MPVLib.setPropertyString("demuxer-lavf-o", "seekable=1:fflags=+fastseek+genpts+sortdts")
         MPVLib.setPropertyBoolean("correct-pts", true)
         MPVLib.setPropertyString("demuxer-seekable-cache", "yes")
@@ -645,6 +578,7 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("demuxer-mkv-subtitle-preroll", "yes")
     }
     
+    // Time updates
     LaunchedEffect(Unit) {
         var lastSeconds = -1
         while (isActive) {
@@ -676,7 +610,7 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // UPDATED: handleProgressBarDrag with smart seeking
+    // Progress bar drag handling
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
@@ -692,20 +626,18 @@ fun PlayerOverlay(
         val oldPosition = seekbarPosition
         seekbarPosition = newPosition
         
-        // UPDATE: Set seek direction based on movement
         seekDirection = if (newPosition > oldPosition) "+" else "-"
         
         val targetPosition = newPosition.toDouble()
         
-        // ALWAYS update UI instantly
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
         
-        // SMART TWO-STAGE SEEKING for progress bar too
-        seekToPreviousKeyframeThenExact(targetPosition)
+        // ORIGINAL SEEKING: Use exact for real-time frame updates
+        performRealTimeSeek(targetPosition)
     }
     
-    // UPDATED: handleDragFinished - MOTION BLUR REMOVED
+    // Handle drag finished
     fun handleDragFinished() {
         isDragging = false
         
@@ -718,12 +650,12 @@ fun PlayerOverlay(
         isSeeking = false
         showSeekTime = false
         wasPlayingBeforeSeek = false
-        seekDirection = "" // Reset direction
+        seekDirection = ""
         scheduleSeekbarHide()
     }
     
     Box(modifier = modifier.fillMaxSize()) {
-        // ENHANCED PREPROCESSING OVERLAY
+        // PREPROCESSING OVERLAY
         if (isPreprocessing) {
             Box(
                 modifier = Modifier
@@ -736,7 +668,6 @@ fun PlayerOverlay(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    // PROGRESS PERCENTAGE
                     Text(
                         text = "$preprocessingProgress%",
                         style = TextStyle(
@@ -746,7 +677,6 @@ fun PlayerOverlay(
                         )
                     )
                     
-                    // PROCESSING STAGE
                     Text(
                         text = preprocessingStage,
                         style = TextStyle(
@@ -757,7 +687,6 @@ fun PlayerOverlay(
                         textAlign = TextAlign.Center
                     )
                     
-                    // KEYFRAME INFO
                     if (keyframeInterval > 0) {
                         Text(
                             text = "Keyframes every ${"%.1f".format(keyframeInterval)}s",
@@ -773,11 +702,10 @@ fun PlayerOverlay(
             }
         }
         
-        // MAIN UI - Only show when not preprocessing
+        // MAIN UI
         if (!isPreprocessing) {
-            // MAIN GESTURE AREA - Full screen divided into areas
+            // Gesture areas
             Box(modifier = Modifier.fillMaxSize()) {
-                // TOP 5% - Ignore area
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -785,14 +713,12 @@ fun PlayerOverlay(
                         .align(Alignment.TopStart)
                 )
                 
-                // CENTER AREA - 95% height, divided into left/center/right
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .fillMaxHeight(0.95f)
                         .align(Alignment.BottomStart)
                 ) {
-                    // LEFT 5% - Video info toggle
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(0.05f)
@@ -805,13 +731,11 @@ fun PlayerOverlay(
                             )
                     )
                     
-                    // CENTER 90% - All gestures (tap, long tap, horizontal swipe, vertical swipe)
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(0.9f)
                             .fillMaxHeight()
                             .align(Alignment.Center)
-                            // USE SINGLE pointerInteropFilter FOR ALL GESTURES TO AVOID CONFLICTS
                             .pointerInteropFilter { event ->
                                 when (event.action) {
                                     MotionEvent.ACTION_DOWN -> {
@@ -822,7 +746,6 @@ fun PlayerOverlay(
                                     }
                                     MotionEvent.ACTION_MOVE -> {
                                         if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
-                                            // Check if this should become a horizontal or vertical swipe
                                             when (checkForSwipeDirection(event.x, event.y)) {
                                                 "horizontal" -> {
                                                     startHorizontalSeeking(event.x)
@@ -832,10 +755,8 @@ fun PlayerOverlay(
                                                 }
                                             }
                                         } else if (isHorizontalSwipe) {
-                                            // Continue horizontal seeking
                                             handleHorizontalSeeking(event.x)
                                         }
-                                        // If it's a long tap or vertical swipe, ignore movement (allow slight finger movement during hold)
                                         true
                                     }
                                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -847,7 +768,6 @@ fun PlayerOverlay(
                             }
                     )
                     
-                    // RIGHT 5% - Video info toggle
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(0.05f)
@@ -862,7 +782,7 @@ fun PlayerOverlay(
                 }
             }
             
-            // BOTTOM SEEK BAR AREA
+            // SEEK BAR
             if (showSeekbar) {
                 Box(
                     modifier = Modifier
@@ -896,7 +816,7 @@ fun PlayerOverlay(
                 }
             }
             
-            // VIDEO INFO - Top Left
+            // VIDEO INFO
             if (showVideoInfo != 0) {
                 Text(
                     text = displayText,
@@ -957,25 +877,21 @@ fun SimpleDraggableProgressBar(
     var hasPassedThreshold by remember { mutableStateOf(false) }
     var thresholdStartX by remember { mutableStateOf(0f) }
     
-    // Convert 25dp to pixels for the movement threshold
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
     Box(modifier = modifier.height(48.dp)) {
-        // Progress bar background
         Box(modifier = Modifier
             .fillMaxWidth()
             .height(4.dp)
             .align(Alignment.CenterStart)
             .background(Color.Gray.copy(alpha = 0.6f)))
         
-        // Progress bar fill
         Box(modifier = Modifier
             .fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f)
             .height(4.dp)
             .align(Alignment.CenterStart)
             .background(Color.White))
         
-        // CHANGED: Increased touch area to full 48dp height
         Box(modifier = Modifier
             .fillMaxWidth()
             .height(48.dp)
@@ -984,28 +900,24 @@ fun SimpleDraggableProgressBar(
                 detectDragGestures(
                     onDragStart = { offset ->
                         dragStartX = offset.x
-                        // GET FRESH POSITION IMMEDIATELY WHEN DRAG STARTS
                         dragStartPosition = getFreshPosition()
-                        hasPassedThreshold = false // Reset threshold flag
-                        thresholdStartX = 0f // Reset threshold start position
+                        hasPassedThreshold = false
+                        thresholdStartX = 0f
                     },
                     onDrag = { change, dragAmount ->
                         change.consume()
                         val currentX = change.position.x
                         val totalMovementX = abs(currentX - dragStartX)
                         
-                        // Check if we've passed the movement threshold
                         if (!hasPassedThreshold) {
                             if (totalMovementX > movementThresholdPx) {
                                 hasPassedThreshold = true
-                                thresholdStartX = currentX // NEW: Store position where threshold was passed
+                                thresholdStartX = currentX
                             } else {
-                                // Haven't passed threshold yet, don't seek
                                 return@detectDragGestures
                             }
                         }
                         
-                        // Calculate delta from the threshold start position, not the original drag start
                         val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
                         val deltaX = currentX - effectiveStartX
                         val deltaPosition = (deltaX / size.width) * duration
@@ -1013,8 +925,8 @@ fun SimpleDraggableProgressBar(
                         onValueChange(newPosition)
                     },
                     onDragEnd = { 
-                        hasPassedThreshold = false // Reset for next drag
-                        thresholdStartX = 0f // Reset threshold start
+                        hasPassedThreshold = false
+                        thresholdStartX = 0f
                         onValueChangeFinished() 
                     }
                 )
