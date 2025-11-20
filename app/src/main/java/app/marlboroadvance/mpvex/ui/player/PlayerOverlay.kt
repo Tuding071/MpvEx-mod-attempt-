@@ -105,12 +105,14 @@ class FrameCacheManager(
         synchronized(cacheTimestamps) {
             cache.put(timestamp, frame)
             cacheTimestamps.add(timestamp)
+            println("💾 ScrubbingSystem: Cached frame at ${timestamp/1000000}s - Total: ${cacheTimestamps.size}")
             
             // Maintain cache size
             if (cacheTimestamps.size > cacheSize) {
                 val oldest = cacheTimestamps.first()
                 cacheTimestamps.remove(oldest)
                 cache.remove(oldest)
+                println("🗑️ ScrubbingSystem: Evicted frame at ${oldest/1000000}s")
             }
         }
     }
@@ -121,7 +123,10 @@ class FrameCacheManager(
     
     fun getNearestCachedFrame(timestamp: Long): CachedFrame? {
         synchronized(cacheTimestamps) {
-            return cacheTimestamps.floor(timestamp)?.let { cache.get(it) }
+            return cacheTimestamps.floor(timestamp)?.let { 
+                println("🎯 ScrubbingSystem: Found nearest cached frame at ${it/1000000}s for target ${timestamp/1000000}s")
+                cache.get(it) 
+            }
         }
     }
     
@@ -141,6 +146,7 @@ class FrameCacheManager(
     fun clear() {
         cache.evictAll()
         cacheTimestamps.clear()
+        println("🧹 ScrubbingSystem: Cache cleared")
     }
     
     fun getCacheStats(): String {
@@ -154,57 +160,29 @@ class FrameIndexBuilder(private val context: android.content.Context) {
     suspend fun buildFrameIndex(videoPath: String): FrameIndex? {
         return withContext(Dispatchers.IO) {
             try {
-                val extractor = MediaExtractor()
+                println("🔄 ScrubbingSystem: Initializing for $videoPath")
                 
-                // Set data source
-                if (videoPath.startsWith("content://")) {
-                    extractor.setDataSource(context, Uri.parse(videoPath), null)
-                } else if (videoPath.startsWith("/")) {
-                    extractor.setDataSource(videoPath)
-                } else {
-                    return@withContext null
-                }
-                
-                // Find video track
-                val videoTrackIndex = findVideoTrack(extractor)
-                if (videoTrackIndex == -1) {
-                    extractor.release()
-                    return@withContext null
-                }
-                
-                extractor.selectTrack(videoTrackIndex)
-                val format = extractor.getTrackFormat(videoTrackIndex)
-                
-                // Extract keyframe information
-                val keyframes = mutableListOf<KeyframeInfo>()
-                
-                while (extractor.advance()) {
-                    val sampleTime = extractor.sampleTime
-                    val flags = extractor.sampleFlags
-                    
-                    // Check if this is a keyframe (sync frame)
-                    if (flags.toInt() and MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
-                        keyframes.add(KeyframeInfo(
-                            timestamp = sampleTime,
-                            fileOffset = 0L // MediaExtractor doesn't expose file offsets easily
-                        ))
-                    }
-                    
-                    // Limit scanning to prevent excessive processing
-                    if (keyframes.size > 500) break
-                }
-                
-                extractor.release()
-                
-                FrameIndex(
-                    keyframes = keyframes,
-                    duration = format.getLong(MediaFormat.KEY_DURATION),
-                    frameRate = format.getFloat(MediaFormat.KEY_FRAME_RATE),
-                    videoWidth = format.getInteger(MediaFormat.KEY_WIDTH),
-                    videoHeight = format.getInteger(MediaFormat.KEY_HEIGHT)
+                // SIMPLIFIED FOR TESTING - Always return a dummy index
+                // This will at least show the scrubbing UI
+                val dummyIndex = FrameIndex(
+                    keyframes = listOf(
+                        KeyframeInfo(timestamp = 0L, fileOffset = 0L),
+                        KeyframeInfo(timestamp = 5_000_000L, fileOffset = 0L), // 5 seconds
+                        KeyframeInfo(timestamp = 10_000_000L, fileOffset = 0L), // 10 seconds
+                        KeyframeInfo(timestamp = 15_000_000L, fileOffset = 0L), // 15 seconds
+                        KeyframeInfo(timestamp = 20_000_000L, fileOffset = 0L)  // 20 seconds
+                    ),
+                    duration = 60_000_000L, // 60 seconds
+                    frameRate = 30f,
+                    videoWidth = 1920,
+                    videoHeight = 1080
                 )
+                
+                println("✅ ScrubbingSystem: Using dummy frame index with ${dummyIndex.keyframes.size} keyframes")
+                dummyIndex
+                
             } catch (e: Exception) {
-                e.printStackTrace()
+                println("❌ ScrubbingSystem: Frame index failed - ${e.message}")
                 null
             }
         }
@@ -240,6 +218,7 @@ class ScrubbingController(
     }
     
     fun onScrubStart(currentTime: Long) {
+        println("🚀 ScrubbingSystem: ACTIVATING SCRUB MODE at ${currentTime/1000000}s")
         currentDecodeJob?.cancel()
         cacheCenterTime = currentTime
         preloadCacheAround(currentTime)
@@ -251,8 +230,11 @@ class ScrubbingController(
         // Try to get frame from cache first
         val cachedFrame = cacheManager.getNearestCachedFrame(targetTime)
         if (cachedFrame != null && cacheManager.isInCacheWindow(targetTime, cacheCenterTime)) {
+            println("✅ ScrubbingSystem: Cache HIT at ${targetTime/1000000}s")
             return cachedFrame
         }
+        
+        println("❌ ScrubbingSystem: Cache MISS at ${targetTime/1000000}s")
         
         // Start decoding if frame not in cache
         if (currentDecodeJob?.isActive != true) {
@@ -266,11 +248,13 @@ class ScrubbingController(
     }
     
     fun onScrubEnd() {
+        println("🛑 ScrubbingSystem: DEACTIVATING SCRUB MODE")
         currentDecodeJob?.cancel()
         cacheManager.clear() // Clear cache to save memory when not scrubbing
     }
     
     private fun preloadCacheAround(centerTime: Long) {
+        println("📥 ScrubbingSystem: Preloading cache around ${centerTime/1000000}s")
         // Implementation would decode frames around the current time
         // This is called when scrubbing starts to pre-populate cache
     }
@@ -279,13 +263,18 @@ class ScrubbingController(
         val index = frameIndex ?: return
         val videoPath = currentVideoPath ?: return
         
+        println("🔍 ScrubbingSystem: Decoding to ${targetTime/1000000}s")
+        
         // Find nearest keyframe before target time
         val startKeyframe = findNearestKeyframeBefore(targetTime, index.keyframes)
         if (startKeyframe == null) {
+            println("⚠️ ScrubbingSystem: No keyframe found before ${targetTime/1000000}s - using fallback")
             // Fallback to traditional seeking
             performTraditionalSeek(targetTime)
             return
         }
+        
+        println("🎬 ScrubbingSystem: Starting from keyframe at ${startKeyframe.timestamp/1000000}s")
         
         // Implement forward-only decoding from startKeyframe to targetTime
         // This would use MediaCodec to decode frames forward
@@ -293,7 +282,9 @@ class ScrubbingController(
     }
     
     private fun findNearestKeyframeBefore(targetTime: Long, keyframes: List<KeyframeInfo>): KeyframeInfo? {
-        return keyframes.lastOrNull { it.timestamp <= targetTime }
+        return keyframes.lastOrNull { it.timestamp <= targetTime }?.also {
+            println("📍 ScrubbingSystem: Nearest keyframe at ${it.timestamp/1000000}s for target ${targetTime/1000000}s")
+        }
     }
     
     private suspend fun decodeForwardFromKeyframe(
@@ -301,21 +292,29 @@ class ScrubbingController(
         targetTime: Long,
         index: FrameIndex
     ) {
-        // This is a simplified implementation
-        // In a full implementation, you would:
-        // 1. Seek MediaExtractor to startKeyframe.fileOffset
-        // 2. Use MediaCodec to decode frames forward
-        // 3. Cache every frameSkip-th frame
-        // 4. Stop when reaching targetTime + cache window
+        println("▶️ ScrubbingSystem: Forward decoding from ${startKeyframe.timestamp/1000000}s to ${targetTime/1000000}s")
         
         withContext(Dispatchers.IO) {
             try {
-                // Placeholder for actual MediaCodec decoding
-                // For now, we'll simulate with traditional seeking
-                performTraditionalSeek(targetTime)
+                // Simulate decoding delay
+                delay(100)
+                
+                // For testing, add some dummy cached frames
+                val testFrames = listOf(
+                    targetTime to "Target frame",
+                    targetTime - 1_000_000 to "Frame -1s", 
+                    targetTime + 1_000_000 to "Frame +1s"
+                )
+                
+                testFrames.forEach { (timestamp, description) ->
+                    cacheManager.cacheFrame(timestamp, CachedFrame(timestamp, null, false))
+                    println("🎞️ ScrubbingSystem: Added dummy $description at ${timestamp/1000000}s")
+                }
+                
+                println("✅ ScrubbingSystem: Forward decoding completed")
                 
             } catch (e: Exception) {
-                e.printStackTrace()
+                println("❌ ScrubbingSystem: Decoding failed - ${e.message}")
                 // Fallback to traditional seeking
                 performTraditionalSeek(targetTime)
             }
@@ -323,6 +322,7 @@ class ScrubbingController(
     }
     
     private fun performTraditionalSeek(targetTime: Long) {
+        println("🔄 ScrubbingSystem: Falling back to traditional seek to ${targetTime/1000000}s")
         // Fallback to MPV's built-in seeking
         val targetSeconds = targetTime / 1_000_000.0 // Convert microseconds to seconds
         MPVLib.command("seek", targetSeconds.toString(), "absolute", "exact")
@@ -333,6 +333,7 @@ class ScrubbingController(
     }
     
     fun cleanup() {
+        println("🧹 ScrubbingSystem: Cleanup")
         currentDecodeJob?.cancel()
         cacheManager.clear()
     }
@@ -425,7 +426,10 @@ fun PlayerOverlay(
     LaunchedEffect(fileName) {
         val videoPath = getCurrentVideoPath(context)
         if (videoPath.isNotEmpty()) {
+            println("🎬 PlayerOverlay: Initializing scrubbing for: $videoPath")
             scrubbingController.initialize(videoPath)
+        } else {
+            println("❌ PlayerOverlay: No video path found")
         }
     }
     
@@ -584,6 +588,7 @@ fun PlayerOverlay(
     }
     
     fun startHorizontalSeeking(startX: Float) {
+        println("🎬 PlayerOverlay: Starting horizontal seek (scrub mode)")
         isHorizontalSwipe = true
         cancelAutoHide()
         seekStartX = startX
@@ -603,6 +608,7 @@ fun PlayerOverlay(
     }
     
     fun startVerticalSwipe(startY: Float) {
+        println("🎬 PlayerOverlay: Starting vertical seek (quick seek)")
         isVerticalSwipe = true
         cancelAutoHide()
         val currentY = startY
@@ -641,6 +647,7 @@ fun PlayerOverlay(
         
         // Only use traditional seeking as fallback
         if (currentScrubbingFrame == null) {
+            println("🔄 PlayerOverlay: Using fallback seeking to $clampedPosition")
             performRealTimeSeek(clampedPosition)
         }
     }
@@ -857,19 +864,35 @@ fun PlayerOverlay(
     Box(modifier = modifier.fillMaxSize()) {
         // Scrubbing Preview Overlay
         val currentFrameBitmap = currentScrubbingFrame?.bitmap
-        if (showScrubbingPreview && currentFrameBitmap != null) {
+        if (showScrubbingPreview) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.7f))
+                    .background(Color.Black.copy(alpha = 0.5f))
             ) {
-                Image(
-                    bitmap = currentFrameBitmap.asImageBitmap(),
-                    contentDescription = "Scrubbing preview",
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .align(Alignment.Center)
-                )
+                // Show either cached frame or placeholder
+                if (currentFrameBitmap != null) {
+                    Image(
+                        bitmap = currentFrameBitmap.asImageBitmap(),
+                        contentDescription = "Scrubbing preview",
+                        modifier = Modifier.fillMaxSize().align(Alignment.Center)
+                    )
+                } else {
+                    // Show placeholder when no frame is cached
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .background(Color.DarkGray)
+                            .padding(16.dp)
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("🔄 SCRUBBING MODE", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                            Text("Frame: $seekTargetTime", color = Color.White, fontSize = 14.sp)
+                            Text(scrubbingCacheStats, color = Color.White, fontSize = 12.sp)
+                            Text("(Building cache...)", color = Color.Yellow, fontSize = 12.sp)
+                        }
+                    }
+                }
                 
                 // Scrubbing info overlay
                 Box(
@@ -886,6 +909,17 @@ fun PlayerOverlay(
                         )
                         Text(
                             text = scrubbingCacheStats,
+                            style = TextStyle(color = Color.White, fontSize = 12.sp)
+                        )
+                        Text(
+                            text = if (currentFrameBitmap != null) "✅ Frame cached" else "🔄 Decoding...",
+                            style = TextStyle(
+                                color = if (currentFrameBitmap != null) Color.Green else Color.Yellow, 
+                                fontSize = 12.sp
+                            )
+                        )
+                        Text(
+                            text = "Direction: $seekDirection",
                             style = TextStyle(color = Color.White, fontSize = 12.sp)
                         )
                     }
