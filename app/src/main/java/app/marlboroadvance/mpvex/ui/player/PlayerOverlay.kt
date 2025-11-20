@@ -28,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -176,21 +177,21 @@ class FrameIndexBuilder(private val context: android.content.Context) {
                 
                 // Extract keyframe information
                 val keyframes = mutableListOf<KeyframeInfo>()
-                var sampleTime: Long
                 
                 while (extractor.advance()) {
-                    sampleTime = extractor.sampleTime
+                    val sampleTime = extractor.sampleTime
                     val flags = extractor.sampleFlags
                     
+                    // Check if this is a keyframe (sync frame)
                     if (flags.toInt() and MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
                         keyframes.add(KeyframeInfo(
                             timestamp = sampleTime,
-                            fileOffset = extractor.sampleOffset
+                            fileOffset = 0L // MediaExtractor doesn't expose file offsets easily
                         ))
                     }
                     
-                    // Limit to prevent excessive scanning on long videos
-                    if (keyframes.size > 1000) break
+                    // Limit scanning to prevent excessive processing
+                    if (keyframes.size > 500) break
                 }
                 
                 extractor.release()
@@ -429,13 +430,9 @@ fun PlayerOverlay(
     }
     
     // Cleanup scrubbing controller
-    LaunchedEffect(Unit) {
-        try {
-            awaitDispose {
-                scrubbingController.cleanup()
-            }
-        } catch (e: Exception) {
-            // Handle cleanup error
+    DisposableEffect(scrubbingController) {
+        onDispose {
+            scrubbingController.cleanup()
         }
     }
 
@@ -859,14 +856,15 @@ fun PlayerOverlay(
     
     Box(modifier = modifier.fillMaxSize()) {
         // Scrubbing Preview Overlay
-        if (showScrubbingPreview && currentScrubbingFrame?.bitmap != null) {
+        val currentFrameBitmap = currentScrubbingFrame?.bitmap
+        if (showScrubbingPreview && currentFrameBitmap != null) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.7f))
             ) {
                 Image(
-                    bitmap = currentScrubbingFrame.bitmap.asImageBitmap(),
+                    bitmap = currentFrameBitmap.asImageBitmap(),
                     contentDescription = "Scrubbing preview",
                     modifier = Modifier
                         .fillMaxSize()
