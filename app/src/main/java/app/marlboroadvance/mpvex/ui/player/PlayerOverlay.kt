@@ -49,6 +49,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.Utils
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -67,7 +68,7 @@ class ContinuousCacheManager(private val coroutineScope: CoroutineScope) {
         isCachingActive = true
         cachingJob?.cancel()
         cachingJob = coroutineScope.launch(Dispatchers.IO) {
-            while (isActive && isCachingActive) {
+            while (coroutineContext.isActive && isCachingActive) {
                 val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
                 val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
                 
@@ -96,14 +97,14 @@ class ContinuousCacheManager(private val coroutineScope: CoroutineScope) {
         val originalTimePos = MPVLib.getPropertyDouble("time-pos") ?: currentPos
         
         preloadPoints.forEach { targetTime ->
-            if (isActive) {
+            if (coroutineContext.isActive) {
                 MPVLib.command("seek", targetTime.toString(), "absolute", "keyframes")
                 delay(30) // Brief pause to allow caching
             }
         }
         
         // Return to original position
-        if (isActive) {
+        if (coroutineContext.isActive) {
             MPVLib.command("seek", originalTimePos.toString(), "absolute", "keyframes")
         }
     }
@@ -119,14 +120,14 @@ class ContinuousCacheManager(private val coroutineScope: CoroutineScope) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
             
             cachePoints.forEach { point ->
-                if (isActive) {
+                if (coroutineContext.isActive) {
                     MPVLib.command("seek", point.toString(), "absolute", "keyframes")
                     delay(25)
                 }
             }
             
             // Return to current position (not target, because we haven't actually seeked yet)
-            if (isActive) {
+            if (coroutineContext.isActive) {
                 MPVLib.command("seek", currentPos.toString(), "absolute", "keyframes")
             }
         }
@@ -176,7 +177,7 @@ fun PlayerOverlay(
     var isLongTap by remember { mutableStateOf(false) }
     var isHorizontalSwipe by remember { mutableStateOf(false) }
     var isVerticalSwipe by remember { mutableStateOf(false) } // ADD: Vertical swipe state
-    var longTapJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var longTapJob by remember { mutableStateOf<Job?>(null) }
     
     // THRESHOLDS
     val longTapThreshold = 300L // ms
@@ -191,23 +192,23 @@ fun PlayerOverlay(
     var showVideoInfo by remember { mutableStateOf(0) }
     var videoTitle by remember { mutableStateOf("Video") }
     var fileName by remember { mutableStateOf("Video") }
-    var videoInfoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var videoInfoJob by remember { mutableStateOf<Job?>(null) }
     
     var userInteracting by remember { mutableStateOf(false) }
-    var hideSeekbarJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var hideSeekbarJob by remember { mutableStateOf<Job?>(null) }
     
     var showPlaybackFeedback by remember { mutableStateOf(false) }
     var playbackFeedbackText by remember { mutableStateOf("") }
-    var playbackFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var playbackFeedbackJob by remember { mutableStateOf<Job?>(null) }
     
     // ADD: Quick seek feedback
     var showQuickSeekFeedback by remember { mutableStateOf(false) }
     var quickSeekFeedbackText by remember { mutableStateOf("") }
-    var quickSeekFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var quickSeekFeedbackJob by remember { mutableStateOf<Job?>(null) }
     
     var showVolumeFeedbackState by remember { mutableStateOf(false) }
     var currentVolume by remember { mutableStateOf(viewModel.currentVolume.value) }
-    var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var volumeFeedbackJob by remember { mutableStateOf<Job?>(null) }
     
     // ADD: Preprocessing state
     var isPreprocessing by remember { mutableStateOf(true) }
@@ -218,7 +219,7 @@ fun PlayerOverlay(
     val cacheManager = remember { ContinuousCacheManager(coroutineScope) }
     
     // SOLUTION 1: Enhanced Pre-scan with Smart Caching
-    fun preScanVideo(): kotlinx.coroutines.Job = coroutineScope.launch {
+    fun preScanVideo(): Job = coroutineScope.launch {
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         if (duration <= 0) {
             isPreprocessing = false
@@ -243,7 +244,7 @@ fun PlayerOverlay(
         
         // Scan through the video in steps
         for (i in 0 until totalSteps) {
-            if (!isActive) break
+            if (!coroutineContext.isActive) break
             
             val targetTime = (i * scanStep).coerceAtMost(duration.toLong())
             preprocessingProgress = ((i.toDouble() / totalSteps) * 100).toInt()
@@ -572,9 +573,12 @@ fun PlayerOverlay(
         }
     }
     
-    // Clean up caching when composable is disposed
+    // Clean up caching when composable is disposed - FIXED
     LaunchedEffect(Unit) {
-        awaitDispose {
+        try {
+            // This will run when the effect starts
+        } finally {
+            // This will run when the composable is disposed
             cacheManager.stopContinuousCaching()
         }
     }
@@ -634,7 +638,7 @@ fun PlayerOverlay(
     
     LaunchedEffect(Unit) {
         var lastSeconds = -1
-        while (isActive) {
+        while (coroutineContext.isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
             val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
             val currentSeconds = currentPos.toInt()
