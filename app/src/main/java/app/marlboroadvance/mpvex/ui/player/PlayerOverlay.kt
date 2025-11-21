@@ -24,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,7 +69,7 @@ class ContinuousCacheManager(private val coroutineScope: CoroutineScope) {
         isCachingActive = true
         cachingJob?.cancel()
         cachingJob = coroutineScope.launch(Dispatchers.IO) {
-            while (isActive && isCachingActive) {
+            while (this.isActive && isCachingActive) {
                 val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
                 val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
                 
@@ -97,14 +98,14 @@ class ContinuousCacheManager(private val coroutineScope: CoroutineScope) {
         val originalTimePos = MPVLib.getPropertyDouble("time-pos") ?: currentPos
         
         preloadPoints.forEach { targetTime ->
-            if (isActive) {
+            if (this.isActive) {
                 MPVLib.command("seek", targetTime.toString(), "absolute", "keyframes")
                 delay(30) // Brief pause to allow caching
             }
         }
         
         // Return to original position
-        if (isActive) {
+        if (this.isActive) {
             MPVLib.command("seek", originalTimePos.toString(), "absolute", "keyframes")
         }
     }
@@ -120,14 +121,14 @@ class ContinuousCacheManager(private val coroutineScope: CoroutineScope) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
             
             cachePoints.forEach { point ->
-                if (isActive) {
+                if (this.isActive) {
                     MPVLib.command("seek", point.toString(), "absolute", "keyframes")
                     delay(25)
                 }
             }
             
             // Return to current position (not target, because we haven't actually seeked yet)
-            if (isActive) {
+            if (this.isActive) {
                 MPVLib.command("seek", currentPos.toString(), "absolute", "keyframes")
             }
         }
