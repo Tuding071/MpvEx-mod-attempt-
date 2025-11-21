@@ -68,7 +68,7 @@ class ContinuousCacheManager(private val coroutineScope: CoroutineScope) {
         isCachingActive = true
         cachingJob?.cancel()
         cachingJob = coroutineScope.launch(Dispatchers.IO) {
-            while (coroutineContext.isActive && isCachingActive) {
+            while (isActive && isCachingActive) {
                 val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
                 val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
                 
@@ -97,14 +97,14 @@ class ContinuousCacheManager(private val coroutineScope: CoroutineScope) {
         val originalTimePos = MPVLib.getPropertyDouble("time-pos") ?: currentPos
         
         preloadPoints.forEach { targetTime ->
-            if (coroutineContext.isActive) {
+            if (isActive) {
                 MPVLib.command("seek", targetTime.toString(), "absolute", "keyframes")
                 delay(30) // Brief pause to allow caching
             }
         }
         
         // Return to original position
-        if (coroutineContext.isActive) {
+        if (isActive) {
             MPVLib.command("seek", originalTimePos.toString(), "absolute", "keyframes")
         }
     }
@@ -120,14 +120,14 @@ class ContinuousCacheManager(private val coroutineScope: CoroutineScope) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
             
             cachePoints.forEach { point ->
-                if (coroutineContext.isActive) {
+                if (isActive) {
                     MPVLib.command("seek", point.toString(), "absolute", "keyframes")
                     delay(25)
                 }
             }
             
             // Return to current position (not target, because we haven't actually seeked yet)
-            if (coroutineContext.isActive) {
+            if (isActive) {
                 MPVLib.command("seek", currentPos.toString(), "absolute", "keyframes")
             }
         }
@@ -244,7 +244,7 @@ fun PlayerOverlay(
         
         // Scan through the video in steps
         for (i in 0 until totalSteps) {
-            if (!coroutineContext.isActive) break
+            if (!isActive) break
             
             val targetTime = (i * scanStep).coerceAtMost(duration.toLong())
             preprocessingProgress = ((i.toDouble() / totalSteps) * 100).toInt()
@@ -573,12 +573,9 @@ fun PlayerOverlay(
         }
     }
     
-    // Clean up caching when composable is disposed - FIXED
-    LaunchedEffect(Unit) {
-        try {
-            // This will run when the effect starts
-        } finally {
-            // This will run when the composable is disposed
+    // Clean up caching when composable is disposed
+    DisposableEffect(Unit) {
+        onDispose {
             cacheManager.stopContinuousCaching()
         }
     }
@@ -638,7 +635,7 @@ fun PlayerOverlay(
     
     LaunchedEffect(Unit) {
         var lastSeconds = -1
-        while (coroutineContext.isActive) {
+        while (isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
             val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
             val currentSeconds = currentPos.toInt()
