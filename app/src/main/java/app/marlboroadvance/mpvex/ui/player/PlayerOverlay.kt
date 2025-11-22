@@ -151,7 +151,7 @@ fun PlayerOverlay(
         }
     }
     
-    // IMPROVED: performRealTimeSeek with preloading only - NO FRAME STEPPING
+    // OPTIMIZED: performRealTimeSeek with preloading
     fun performRealTimeSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         
@@ -159,9 +159,7 @@ fun PlayerOverlay(
         preloadFramesAround(targetPosition)
         
         isSeekInProgress = true
-        
-        // Use more aggressive seeking for better responsiveness
-        MPVLib.command("seek", targetPosition.toString(), "absolute", "keyframes")
+        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
         
         coroutineScope.launch {
             delay(seekThrottleMs)
@@ -174,7 +172,7 @@ fun PlayerOverlay(
         return (MPVLib.getPropertyDouble("time-pos") ?: 0.0).toFloat()
     }
     
-    // ADD: Quick seek function
+    // OPTIMIZED: Quick seek function with preloading
     fun performQuickSeek(seconds: Int) {
         val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
@@ -346,7 +344,7 @@ fun PlayerOverlay(
         }
     }
     
-    // IMPROVED: handleHorizontalSeeking with predictive caching
+    // OPTIMIZED: handleHorizontalSeeking with predictive caching
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
@@ -459,7 +457,7 @@ fun PlayerOverlay(
         scheduleSeekbarHide()
     }
     
-    // IMPROVED: MPV Configuration for better performance
+    // OPTIMIZED: MPV Configuration for better performance
     LaunchedEffect(Unit) {
         // Hardware acceleration
         MPVLib.setPropertyString("hwdec", "no")
@@ -577,7 +575,7 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // IMPROVED: handleProgressBarDrag with predictive caching
+    // OPTIMIZED: handleProgressBarDrag with predictive caching
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
@@ -843,7 +841,6 @@ fun SimpleDraggableProgressBar(
                         dragStartPosition = getFreshPosition()
                         hasPassedThreshold = false
                         thresholdStartX = 0f
-                        // REMOVED: All frame stepping
                     },
                     onDrag = { change, dragAmount ->
                         change.consume()
@@ -854,7 +851,6 @@ fun SimpleDraggableProgressBar(
                             if (totalMovementX > movementThresholdPx) {
                                 hasPassedThreshold = true
                                 thresholdStartX = currentX
-                                // REMOVED: All frame stepping
                             } else {
                                 return@detectDragGestures
                             }
@@ -865,8 +861,6 @@ fun SimpleDraggableProgressBar(
                         val deltaPosition = (deltaX / size.width) * duration
                         val newPosition = (dragStartPosition + deltaPosition).coerceIn(0f, duration)
                         onValueChange(newPosition)
-                        
-                        // REMOVED: All frame stepping during drag
                     },
                     onDragEnd = { 
                         hasPassedThreshold = false
