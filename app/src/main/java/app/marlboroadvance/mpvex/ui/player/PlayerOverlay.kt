@@ -87,14 +87,10 @@ fun PlayerOverlay(
     // ADD: Seek direction for feedback
     var seekDirection by remember { mutableStateOf("") } // "+" or "-" or ""
     
-    // IMPROVED: Smart throttle control
+    // REMOVED: lastSeekTime and seekDebounceMs
+    // ADD: Simple throttle control
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 0L
-    
-    // ADD: Predictive caching state
-    var predictedSeekPosition by remember { mutableStateOf(0.0) }
-    var isPredictionActive by remember { mutableStateOf(false) }
-    val predictionScope = remember { CoroutineScope(Dispatchers.IO) }
+    val seekThrottleMs = 0L // Small delay between seek commands
     
     // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
     var touchStartTime by remember { mutableStateOf(0L) }
@@ -139,28 +135,14 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // NEW: Function to preload frames around target position
-    fun preloadFramesAround(position: Double) {
-        predictionScope.launch {
-            val preloadSeconds = 2.0 // Preload 2 seconds around target
-            val startPos = (position - preloadSeconds).coerceAtLeast(0.0)
-            val endPos = position + preloadSeconds
-            
-            // Trigger demuxer to cache this range
-            MPVLib.command("demuxer-cache-duration", "$startPos-$endPos")
-        }
-    }
-    
-    // OPTIMIZED: performRealTimeSeek with preloading
+    // UPDATED: performRealTimeSeek with throttle
     fun performRealTimeSeek(targetPosition: Double) {
-        if (isSeekInProgress) return
-        
-        // Preload frames around target
-        preloadFramesAround(targetPosition)
+        if (isSeekInProgress) return // Skip if we're already processing a seek
         
         isSeekInProgress = true
         MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
         
+        // Reset after throttle period
         coroutineScope.launch {
             delay(seekThrottleMs)
             isSeekInProgress = false
@@ -172,7 +154,7 @@ fun PlayerOverlay(
         return (MPVLib.getPropertyDouble("time-pos") ?: 0.0).toFloat()
     }
     
-    // OPTIMIZED: Quick seek function with preloading
+    // ADD: Quick seek function
     fun performQuickSeek(seconds: Int) {
         val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
@@ -186,9 +168,6 @@ fun PlayerOverlay(
             delay(1000)
             showQuickSeekFeedback = false
         }
-        
-        // Preload around new position
-        preloadFramesAround(newPosition)
         
         // Perform seek
         MPVLib.command("seek", seconds.toString(), "relative", "exact")
@@ -318,7 +297,7 @@ fun PlayerOverlay(
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
-        isPredictionActive = false // Reset prediction
+        // REMOVED: lastSeekTime = 0L
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
@@ -344,7 +323,7 @@ fun PlayerOverlay(
         }
     }
     
-    // OPTIMIZED: handleHorizontalSeeking with predictive caching
+    // UPDATED: handleHorizontalSeeking without debouncing
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
@@ -354,15 +333,6 @@ fun PlayerOverlay(
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
-        
-        // PREDICTIVE: Preload when moving in consistent direction
-        if (abs(deltaX) > 50f) { // Only predict after significant movement
-            predictedSeekPosition = clampedPosition
-            if (!isPredictionActive) {
-                isPredictionActive = true
-                preloadFramesAround(clampedPosition)
-            }
-        }
         
         // UPDATE: Set seek direction based on movement
         seekDirection = if (deltaX > 0) "+" else "-"
@@ -393,7 +363,6 @@ fun PlayerOverlay(
             seekStartPosition = 0.0
             wasPlayingBeforeSeek = false
             seekDirection = "" // Reset direction
-            isPredictionActive = false // Reset prediction
             scheduleSeekbarHide()
         }
     }
@@ -430,7 +399,6 @@ fun PlayerOverlay(
         isHorizontalSwipe = false
         isVerticalSwipe = false
         isLongTap = false
-        isPredictionActive = false
     }
     
     LaunchedEffect(Unit) {
@@ -457,84 +425,6 @@ fun PlayerOverlay(
         scheduleSeekbarHide()
     }
     
-    // OPTIMIZED: MPV Configuration for better performance
-    LaunchedEffect(Unit) {
-        // Hardware acceleration
-        MPVLib.setPropertyString("hwdec", "no")
-        MPVLib.setPropertyString("gpu-context", "gpu")
-        MPVLib.setPropertyString("gpu-api", "opengl")
-        
-        // Better seeking configuration
-        MPVLib.setPropertyString("hr-seek", "yes")
-        MPVLib.setPropertyString("hr-seek-demuxer-offset", "0")
-        MPVLib.setPropertyString("video-sync", "display-resample-vdrop")
-        MPVLib.setPropertyString("video-timing-offset", "0")
-        
-        // Optimize demuxer and cache
-        MPVLib.setPropertyString("demuxer-lavf-o", "fflags=+nobuffer+fastseek")
-        MPVLib.setPropertyString("demuxer-readahead-secs", "10")
-        MPVLib.setPropertyString("cache-pause", "yes")
-        MPVLib.setPropertyString("cache-secs", "30") // Increase cache
-        MPVLib.setPropertyString("cache-pause-wait", "5")
-        
-        // Video output optimization
-        MPVLib.setPropertyString("vd-lavc-fast", "yes")
-        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
-        MPVLib.setPropertyString("vd-lavc-skipidct", "all")
-        MPVLib.setPropertyString("vd-lavc-assemble", "yes")
-        
-        // Thread optimization
-        MPVLib.setPropertyString("vd-lavc-threads", "4")
-        MPVLib.setPropertyString("demuxer-lavf-threads", "4")
-        
-        // Lower-level optimizations
-        MPVLib.setPropertyString("video-latency-hacks", "yes")
-        MPVLib.setPropertyString("opengl-glfinish", "yes")
-        MPVLib.setPropertyString("opengl-waitvsync", "no")
-        MPVLib.setPropertyString("display-fps", "60")
-        MPVLib.setPropertyString("override-display-fps", "60")
-        
-        // Decoder frame queue optimization
-        MPVLib.setPropertyString("video-frame-queue", "3")
-        MPVLib.setPropertyString("demuxer-max-bytes", "50M")
-        MPVLib.setPropertyString("demuxer-max-back-bytes", "25M")
-        
-        // Audio-video sync optimization for seeking
-        MPVLib.setPropertyString("audio-pitch-correction", "no")
-        MPVLib.setPropertyString("correct-pts", "yes")
-        
-        // Additional performance flags
-        MPVLib.setPropertyString("profile", "fast")
-        MPVLib.setPropertyString("audio-channels", "auto")
-        MPVLib.setPropertyString("cache-initial", "0.5")
-        MPVLib.setPropertyString("untimed", "yes")
-        MPVLib.setPropertyString("hr-seek-framedrop", "no")
-        MPVLib.setPropertyString("gpu-dumb-mode", "yes")
-        MPVLib.setPropertyString("opengl-pbo", "yes")
-        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1")
-        MPVLib.setPropertyString("network-timeout", "30")
-        MPVLib.setPropertyString("audio-client-name", "MPVEx-Optimized")
-        MPVLib.setPropertyString("audio-samplerate", "auto")
-        MPVLib.setPropertyString("deband", "no")
-        MPVLib.setPropertyString("video-aspect-override", "no")
-    }
-    
-    // ADD: Continuous background preloading
-    LaunchedEffect(Unit) {
-        launch(Dispatchers.IO) {
-            while (isActive) {
-                val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-                // Preload 5 seconds ahead continuously when not seeking
-                if (!isSeeking && !isDragging) {
-                    val preloadStart = currentPos
-                    val preloadEnd = currentPos + 5.0
-                    MPVLib.command("demuxer-cache-duration", "$preloadStart-$preloadEnd")
-                }
-                delay(500) // Update every 500ms
-            }
-        }
-    }
-    
     // Backup speed control
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
@@ -542,6 +432,32 @@ fun PlayerOverlay(
         } else {
             MPVLib.setPropertyDouble("speed", 1.0)
         }
+    }
+    
+    LaunchedEffect(Unit) {
+        MPVLib.setPropertyString("hwdec", "no")
+        MPVLib.setPropertyString("vo", "gpu")
+        MPVLib.setPropertyString("profile", "fast")
+        MPVLib.setPropertyString("vd-lavc-threads", "16")
+        MPVLib.setPropertyString("audio-channels", "auto")
+        MPVLib.setPropertyString("demuxer-lavf-threads", "4")
+        MPVLib.setPropertyString("cache-initial", "0.5")
+        MPVLib.setPropertyString("video-sync", "display-resample")
+        MPVLib.setPropertyString("untimed", "yes")
+        MPVLib.setPropertyString("hr-seek", "yes")
+        MPVLib.setPropertyString("hr-seek-framedrop", "no")
+        MPVLib.setPropertyString("vd-lavc-fast", "yes")
+        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
+        MPVLib.setPropertyString("vd-lavc-skipidct", "all")
+        MPVLib.setPropertyString("vd-lavc-assemble", "yes")
+        MPVLib.setPropertyString("gpu-dumb-mode", "yes")
+        MPVLib.setPropertyString("opengl-pbo", "yes")
+        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1")
+        MPVLib.setPropertyString("network-timeout", "30")
+        MPVLib.setPropertyString("audio-client-name", "MPVEx-Software-4Core")
+        MPVLib.setPropertyString("audio-samplerate", "auto")
+        MPVLib.setPropertyString("deband", "no")
+        MPVLib.setPropertyString("video-aspect-override", "no")
     }
     
     LaunchedEffect(Unit) {
@@ -575,14 +491,14 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // OPTIMIZED: handleProgressBarDrag with predictive caching
+    // UPDATED: handleProgressBarDrag with movement threshold and direction
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
-            isPredictionActive = false
+            // REMOVED: lastSeekTime = 0L
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
             }
@@ -590,15 +506,6 @@ fun PlayerOverlay(
         isDragging = true
         val oldPosition = seekbarPosition
         seekbarPosition = newPosition
-        
-        // PREDICTIVE: Preload around new position during significant drag
-        if (abs(newPosition - oldPosition) > 5f) { // Only predict after significant movement
-            predictedSeekPosition = newPosition.toDouble()
-            if (!isPredictionActive) {
-                isPredictionActive = true
-                preloadFramesAround(newPosition.toDouble())
-            }
-        }
         
         // UPDATE: Set seek direction based on movement
         seekDirection = if (newPosition > oldPosition) "+" else "-"
@@ -625,7 +532,6 @@ fun PlayerOverlay(
         showSeekTime = false
         wasPlayingBeforeSeek = false
         seekDirection = "" // Reset direction
-        isPredictionActive = false // Reset prediction
         scheduleSeekbarHide()
     }
     
@@ -815,7 +721,7 @@ fun SimpleDraggableProgressBar(
     // Convert 25dp to pixels for the movement threshold
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
-    Box(modifier = modifier.height(48.dp)) {
+    Box(modifier = modifier.height(48.dp)) { // CHANGED: Increased container height
         // Progress bar background
         Box(modifier = Modifier
             .fillMaxWidth()
@@ -830,32 +736,37 @@ fun SimpleDraggableProgressBar(
             .align(Alignment.CenterStart)
             .background(Color.White))
         
+        // CHANGED: Increased touch area to full 48dp height
         Box(modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp)
+            .height(48.dp) // This makes the entire 48dp area draggable
             .align(Alignment.CenterStart)
             .pointerInput(Unit) {
                 detectDragGestures(
                     onDragStart = { offset ->
                         dragStartX = offset.x
+                        // GET FRESH POSITION IMMEDIATELY WHEN DRAG STARTS
                         dragStartPosition = getFreshPosition()
-                        hasPassedThreshold = false
-                        thresholdStartX = 0f
+                        hasPassedThreshold = false // Reset threshold flag
+                        thresholdStartX = 0f // Reset threshold start position
                     },
                     onDrag = { change, dragAmount ->
                         change.consume()
                         val currentX = change.position.x
                         val totalMovementX = abs(currentX - dragStartX)
                         
+                        // Check if we've passed the movement threshold
                         if (!hasPassedThreshold) {
                             if (totalMovementX > movementThresholdPx) {
                                 hasPassedThreshold = true
-                                thresholdStartX = currentX
+                                thresholdStartX = currentX // NEW: Store position where threshold was passed
                             } else {
+                                // Haven't passed threshold yet, don't seek
                                 return@detectDragGestures
                             }
                         }
                         
+                        // Calculate delta from the threshold start position, not the original drag start
                         val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
                         val deltaX = currentX - effectiveStartX
                         val deltaPosition = (deltaX / size.width) * duration
@@ -863,8 +774,8 @@ fun SimpleDraggableProgressBar(
                         onValueChange(newPosition)
                     },
                     onDragEnd = { 
-                        hasPassedThreshold = false
-                        thresholdStartX = 0f
+                        hasPassedThreshold = false // Reset for next drag
+                        thresholdStartX = 0f // Reset threshold start
                         onValueChangeFinished() 
                     }
                 )
