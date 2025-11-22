@@ -458,6 +458,8 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("audio-samplerate", "auto")
         MPVLib.setPropertyString("deband", "no")
         MPVLib.setPropertyString("video-aspect-override", "no")
+        MPVLib.setPropertyString("demuxer-lavf-o", "fflags=+nobuffer+fastseek")
+        MPVLib.setPropertyString("cache-secs", "31")
     }
     
     LaunchedEffect(Unit) {
