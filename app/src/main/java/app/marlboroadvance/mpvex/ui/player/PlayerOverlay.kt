@@ -495,7 +495,7 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("vd-lavc-assemble", "yes")
         
         // Thread optimization
-        MPVLib.setPropertyString("vd-lavc-threads", "4")
+        MPVLib.setPropertyString("vd-lavc-threads", "8")
         MPVLib.setPropertyString("demuxer-lavf-threads", "4")
         
         // Lower-level optimizations
