@@ -151,6 +151,13 @@ fun PlayerOverlay(
         }
     }
     
+    // NEW: Function to force frame display (without back-step)
+    fun forceFrameDisplay() {
+        coroutineScope.launch {
+            MPVLib.command("frame-step") // Only step forward, no back-step
+        }
+    }
+    
     // IMPROVED: performRealTimeSeek with preloading and better throttling
     fun performRealTimeSeek(targetPosition: Double) {
         if (isSeekInProgress) return
@@ -163,10 +170,10 @@ fun PlayerOverlay(
         // Use more aggressive seeking for better responsiveness
         MPVLib.command("seek", targetPosition.toString(), "absolute", "keyframes")
         
-        // Force frame display after seek
+        // Force frame display after seek (without back-step)
         coroutineScope.launch {
             delay(seekThrottleMs)
-            MPVLib.command("frame-step")
+            forceFrameDisplay()
             isSeekInProgress = false
         }
     }
@@ -488,7 +495,7 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("vd-lavc-assemble", "yes")
         
         // Thread optimization
-        MPVLib.setPropertyString("vd-lavc-threads", "8")
+        MPVLib.setPropertyString("vd-lavc-threads", "4")
         MPVLib.setPropertyString("demuxer-lavf-threads", "4")
         
         // Lower-level optimizations
@@ -819,18 +826,16 @@ fun SimpleDraggableProgressBar(
     // Convert 25dp to pixels for the movement threshold
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
-    // ADD: Frame force refresh
+    // UPDATED: Only force frame step forward, no back-step
     val forceRefreshScope = remember { CoroutineScope(Dispatchers.IO) }
     
-    fun forceFrameRefresh() {
+    fun forceFrameDisplay() {
         forceRefreshScope.launch {
-            MPVLib.command("frame-step")
-            delay(8) // Half frame delay
-            MPVLib.command("frame-back-step")
+            MPVLib.command("frame-step") // Only step forward, no back-step
         }
     }
     
-    Box(modifier = modifier.height(48.dp)) { // CHANGED: Increased container height
+    Box(modifier = modifier.height(48.dp)) {
         // Progress bar background
         Box(modifier = Modifier
             .fillMaxWidth()
@@ -845,56 +850,51 @@ fun SimpleDraggableProgressBar(
             .align(Alignment.CenterStart)
             .background(Color.White))
         
-        // CHANGED: Increased touch area to full 48dp height
         Box(modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp) // This makes the entire 48dp area draggable
+            .height(48.dp)
             .align(Alignment.CenterStart)
             .pointerInput(Unit) {
                 detectDragGestures(
                     onDragStart = { offset ->
                         dragStartX = offset.x
-                        // GET FRESH POSITION IMMEDIATELY WHEN DRAG STARTS
                         dragStartPosition = getFreshPosition()
-                        hasPassedThreshold = false // Reset threshold flag
-                        thresholdStartX = 0f // Reset threshold start position
+                        hasPassedThreshold = false
+                        thresholdStartX = 0f
                         
-                        // Force initial frame
-                        forceFrameRefresh()
+                        // UPDATED: Only force frame display without back-step
+                        forceFrameDisplay()
                     },
                     onDrag = { change, dragAmount ->
                         change.consume()
                         val currentX = change.position.x
                         val totalMovementX = abs(currentX - dragStartX)
                         
-                        // Check if we've passed the movement threshold
                         if (!hasPassedThreshold) {
                             if (totalMovementX > movementThresholdPx) {
                                 hasPassedThreshold = true
-                                thresholdStartX = currentX // NEW: Store position where threshold was passed
-                                // Force frame when threshold passed
-                                forceFrameRefresh()
+                                thresholdStartX = currentX
+                                // UPDATED: Only force frame display without back-step
+                                forceFrameDisplay()
                             } else {
-                                // Haven't passed threshold yet, don't seek
                                 return@detectDragGestures
                             }
                         }
                         
-                        // Calculate delta from the threshold start position, not the original drag start
                         val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
                         val deltaX = currentX - effectiveStartX
                         val deltaPosition = (deltaX / size.width) * duration
                         val newPosition = (dragStartPosition + deltaPosition).coerceIn(0f, duration)
                         onValueChange(newPosition)
                         
-                        // Force frame periodically during drag
-                        if (totalMovementX % 20f < 10f) { // Every 100px movement
-                            forceFrameRefresh()
+                        // UPDATED: Only force frame display periodically without back-step
+                        if (totalMovementX % 20f < 10f) {
+                            forceFrameDisplay()
                         }
                     },
                     onDragEnd = { 
-                        hasPassedThreshold = false // Reset for next drag
-                        thresholdStartX = 0f // Reset threshold start
+                        hasPassedThreshold = false
+                        thresholdStartX = 0f
                         onValueChangeFinished() 
                     }
                 )
