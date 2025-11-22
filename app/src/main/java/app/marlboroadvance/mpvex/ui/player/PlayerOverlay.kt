@@ -89,7 +89,7 @@ fun PlayerOverlay(
     
     // IMPROVED: Smart throttle control
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 0L // Reduced to ~1 frame at 60fps
+    val seekThrottleMs = 0L
     
     // ADD: Predictive caching state
     var predictedSeekPosition by remember { mutableStateOf(0.0) }
@@ -151,14 +151,7 @@ fun PlayerOverlay(
         }
     }
     
-    // NEW: Function to force frame display (without back-step)
-    fun forceFrameDisplay() {
-        coroutineScope.launch {
-            MPVLib.command("frame-step") // Only step forward, no back-step
-        }
-    }
-    
-    // IMPROVED: performRealTimeSeek with preloading and better throttling
+    // IMPROVED: performRealTimeSeek with preloading only - NO FRAME STEPPING
     fun performRealTimeSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         
@@ -170,10 +163,8 @@ fun PlayerOverlay(
         // Use more aggressive seeking for better responsiveness
         MPVLib.command("seek", targetPosition.toString(), "absolute", "keyframes")
         
-        // Force frame display after seek (without back-step)
         coroutineScope.launch {
             delay(seekThrottleMs)
-            forceFrameDisplay()
             isSeekInProgress = false
         }
     }
@@ -495,7 +486,7 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("vd-lavc-assemble", "yes")
         
         // Thread optimization
-        MPVLib.setPropertyString("vd-lavc-threads", "8")
+        MPVLib.setPropertyString("vd-lavc-threads", "4")
         MPVLib.setPropertyString("demuxer-lavf-threads", "4")
         
         // Lower-level optimizations
@@ -826,15 +817,6 @@ fun SimpleDraggableProgressBar(
     // Convert 25dp to pixels for the movement threshold
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
-    // UPDATED: Only force frame step forward, no back-step
-    val forceRefreshScope = remember { CoroutineScope(Dispatchers.IO) }
-    
-    fun forceFrameDisplay() {
-        forceRefreshScope.launch {
-            MPVLib.command("frame-step") // Only step forward, no back-step
-        }
-    }
-    
     Box(modifier = modifier.height(48.dp)) {
         // Progress bar background
         Box(modifier = Modifier
@@ -861,9 +843,7 @@ fun SimpleDraggableProgressBar(
                         dragStartPosition = getFreshPosition()
                         hasPassedThreshold = false
                         thresholdStartX = 0f
-                        
-                        // UPDATED: Only force frame display without back-step
-                        forceFrameDisplay()
+                        // REMOVED: All frame stepping
                     },
                     onDrag = { change, dragAmount ->
                         change.consume()
@@ -874,8 +854,7 @@ fun SimpleDraggableProgressBar(
                             if (totalMovementX > movementThresholdPx) {
                                 hasPassedThreshold = true
                                 thresholdStartX = currentX
-                                // UPDATED: Only force frame display without back-step
-                                forceFrameDisplay()
+                                // REMOVED: All frame stepping
                             } else {
                                 return@detectDragGestures
                             }
@@ -887,10 +866,7 @@ fun SimpleDraggableProgressBar(
                         val newPosition = (dragStartPosition + deltaPosition).coerceIn(0f, duration)
                         onValueChange(newPosition)
                         
-                        // UPDATED: Only force frame display periodically without back-step
-                        if (totalMovementX % 20f < 10f) {
-                            forceFrameDisplay()
-                        }
+                        // REMOVED: All frame stepping during drag
                     },
                     onDragEnd = { 
                         hasPassedThreshold = false
