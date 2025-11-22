@@ -89,7 +89,7 @@ fun PlayerOverlay(
     
     // IMPROVED: Smart throttle control
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 16L // Reduced to ~1 frame at 60fps
+    val seekThrottleMs = 0L // Reduced to ~1 frame at 60fps
     
     // ADD: Predictive caching state
     var predictedSeekPosition by remember { mutableStateOf(0.0) }
@@ -464,8 +464,8 @@ fun PlayerOverlay(
     // IMPROVED: MPV Configuration for better performance
     LaunchedEffect(Unit) {
         // Hardware acceleration
-        MPVLib.setPropertyString("hwdec", "auto-safe")
-        MPVLib.setPropertyString("gpu-context", "android")
+        MPVLib.setPropertyString("hwdec", "no")
+        MPVLib.setPropertyString("gpu-context", "gpu")
         MPVLib.setPropertyString("gpu-api", "opengl")
         
         // Better seeking configuration
@@ -488,7 +488,7 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("vd-lavc-assemble", "yes")
         
         // Thread optimization
-        MPVLib.setPropertyString("vd-lavc-threads", "4")
+        MPVLib.setPropertyString("vd-lavc-threads", "8")
         MPVLib.setPropertyString("demuxer-lavf-threads", "4")
         
         // Lower-level optimizations
@@ -888,7 +888,7 @@ fun SimpleDraggableProgressBar(
                         onValueChange(newPosition)
                         
                         // Force frame periodically during drag
-                        if (totalMovementX % 100f < 10f) { // Every 100px movement
+                        if (totalMovementX % 20f < 10f) { // Every 100px movement
                             forceFrameRefresh()
                         }
                     },
