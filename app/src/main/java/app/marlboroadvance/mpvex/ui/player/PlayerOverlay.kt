@@ -65,6 +65,24 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
+// MPV Frame Grabber Interface
+class MPVFrameGrabber {
+    external fun captureFrameAtTime(timestamp: Double, width: Int, height: Int): FrameData?
+    
+    data class FrameData(
+        val bitmapData: ByteArray,
+        val width: Int,
+        val height: Int,
+        val format: Int
+    )
+    
+    companion object {
+        init {
+            System.loadLibrary("mpv")
+        }
+    }
+}
+
 // Data classes for preview system
 data class ScrubbingFrame(
     val timestamp: Double,
@@ -87,6 +105,9 @@ class PreviewManager {
     private val timelineThumbnails = ConcurrentHashMap<Int, TimelineThumbnail>()
     private val thumbnailMutex = Mutex()
     private var thumbnailDecoderJob: kotlinx.coroutines.Job? = null
+    
+    // Frame grabber
+    private val frameGrabber = MPVFrameGrabber()
     
     // Configuration
     private val scrubbingWindowSize = 20.0 // seconds total
@@ -178,10 +199,27 @@ class PreviewManager {
     }
     
     private fun decodeFrameAtTime(timestamp: Double, targetHeight: Int): Bitmap? {
-    return try {
-        // Create colored placeholder for testing instead of black
-        Bitmap.createBitmap(854, 480, Bitmap.Config.ARGB_8888).apply {
-            // Create colored placeholder based on timestamp
+        return try {
+            // Try MPV internal frame grabber first
+            val frameData = frameGrabber.captureFrameAtTime(timestamp, 854, targetHeight)
+            if (frameData != null) {
+                // Convert frame data to bitmap
+                Bitmap.createBitmap(frameData.width, frameData.height, Bitmap.Config.ARGB_8888).apply {
+                    copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(frameData.bitmapData))
+                }
+            } else {
+                // Fallback to placeholder if MPV grabber fails
+                createPlaceholderFrame(timestamp, targetHeight)
+            }
+        } catch (e: Exception) {
+            // Fallback to placeholder on error
+            createPlaceholderFrame(timestamp, targetHeight)
+        }
+    }
+    
+    private fun createPlaceholderFrame(timestamp: Double, targetHeight: Int): Bitmap {
+        val width = (targetHeight * 16 / 9)
+        return Bitmap.createBitmap(width, targetHeight, Bitmap.Config.ARGB_8888).apply {
             val colorValue = when ((timestamp.toInt() % 5)) {
                 0 -> Color.RED
                 1 -> Color.BLUE
@@ -190,14 +228,8 @@ class PreviewManager {
                 else -> Color.MAGENTA
             }
             eraseColor(colorValue)
-            
-            // For now, skip the canvas text to avoid complexity
-            // We'll add this back once the basic functionality works
         }
-    } catch (e: Exception) {
-        null
     }
-}
     
     fun clearScrubbingWindow() {
         scrubbingDecoderJob?.cancel()
