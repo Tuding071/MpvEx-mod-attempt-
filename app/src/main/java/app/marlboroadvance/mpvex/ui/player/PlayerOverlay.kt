@@ -1,7 +1,7 @@
 package app.marlboroadvance.mpvex.ui.player
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.view.MotionEvent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -32,7 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
@@ -150,7 +150,7 @@ class PreviewManager {
     
     // Timeline Thumbnail Methods
     suspend fun getTimelineThumbnail(second: Int): Bitmap? {
-        return timelineThumbnails[second]
+        return timelineThumbnails[second]?.bitmap
     }
     
     fun startTimelineThumbnailGeneration(duration: Double) {
@@ -183,7 +183,7 @@ class PreviewManager {
             // This would use MPV's internal APIs to capture frames at specific timestamps
             // For now, return a placeholder bitmap
             Bitmap.createBitmap(854, 480, Bitmap.Config.ARGB_8888).apply {
-                eraseColor(Color.Black.value)
+                eraseColor(Color.BLACK)
             }
         } catch (e: Exception) {
             null
@@ -289,6 +289,100 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
+    // Helper functions that were missing
+    fun scheduleSeekbarHide() {
+        if (userInteracting) return
+        hideSeekbarJob?.cancel()
+        hideSeekbarJob = coroutineScope.launch {
+            delay(4000)
+            showSeekbar = false
+        }
+    }
+    
+    fun cancelAutoHide() {
+        userInteracting = true
+        hideSeekbarJob?.cancel()
+        coroutineScope.launch {
+            delay(100)
+            userInteracting = false
+        }
+    }
+    
+    fun performQuickSeek(seconds: Int) {
+        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+        val newPosition = (currentPos + seconds).coerceIn(0.0, duration)
+        
+        // Show feedback
+        quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
+        showQuickSeekFeedback = true
+        quickSeekFeedbackJob?.cancel()
+        quickSeekFeedbackJob = coroutineScope.launch {
+            delay(1000)
+            showQuickSeekFeedback = false
+        }
+        
+        // Perform seek
+        MPVLib.command("seek", seconds.toString(), "relative", "exact")
+    }
+    
+    fun handleTap() {
+        val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
+        if (currentPaused) {
+            coroutineScope.launch {
+                val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+                MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
+                delay(100)
+                MPVLib.setPropertyBoolean("pause", false)
+            }
+            showPlaybackFeedback("Resume")
+        } else {
+            MPVLib.setPropertyBoolean("pause", true)
+            showPlaybackFeedback("Pause")
+        }
+        if (showSeekbar) {
+            showSeekbar = false
+        } else {
+            showSeekbarWithTimeout()
+        }
+        isPausing = !currentPaused
+    }
+    
+    fun showSeekbarWithTimeout() {
+        showSeekbar = true
+        scheduleSeekbarHide()
+    }
+    
+    fun showPlaybackFeedback(text: String) {
+        playbackFeedbackJob?.cancel()
+        showPlaybackFeedback = true
+        playbackFeedbackText = text
+        playbackFeedbackJob = coroutineScope.launch {
+            delay(1000)
+            showPlaybackFeedback = false
+        }
+    }
+    
+    fun toggleVideoInfo() {
+        showVideoInfo = if (showVideoInfo == 0) 1 else 0
+        if (showVideoInfo != 0) {
+            videoInfoJob?.cancel()
+            videoInfoJob = coroutineScope.launch {
+                delay(4000)
+                showVideoInfo = 0
+            }
+        }
+    }
+    
+    val showVolumeFeedback: (Int) -> Unit = { volume ->
+        volumeFeedbackJob?.cancel()
+        showVolumeFeedbackState = true
+        volumeFeedbackJob = coroutineScope.launch {
+            delay(1000)
+            showVolumeFeedbackState = false
+        }
+    }
+
     // NEW: Initialize preview system
     LaunchedEffect(videoDuration) {
         if (videoDuration > 1.0) {
@@ -367,7 +461,7 @@ fun PlayerOverlay(
         coroutineScope.launch {
             val thumbnail = previewManager.getTimelineThumbnail(timeSeconds)
             thumbnail?.let {
-                currentThumbnailBitmap = it.bitmap.asImageBitmap()
+                currentThumbnailBitmap = it.asImageBitmap()
             }
         }
     }
@@ -419,7 +513,7 @@ fun PlayerOverlay(
         MPVLib.command("seek", seekbarPosition.toString(), "absolute", "exact")
     }
     
-    private fun calculateThumbnailPosition(progress: Float): Float {
+    fun calculateThumbnailPosition(progress: Float): Float {
         // Calculate X position for thumbnail above seekbar
         val progressPercent = progress / seekbarDuration
         return progressPercent * LocalDensity.current.run { 300.dp.toPx() } // Adjust based on your seekbar width
@@ -523,99 +617,6 @@ fun PlayerOverlay(
         isHorizontalSwipe = false
         isVerticalSwipe = false
         isLongTap = false
-    }
-    
-    fun performQuickSeek(seconds: Int) {
-        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-        val newPosition = (currentPos + seconds).coerceIn(0.0, duration)
-        
-        // Show feedback
-        quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
-        showQuickSeekFeedback = true
-        quickSeekFeedbackJob?.cancel()
-        quickSeekFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showQuickSeekFeedback = false
-        }
-        
-        // Perform seek
-        MPVLib.command("seek", seconds.toString(), "relative", "exact")
-    }
-    
-    fun toggleVideoInfo() {
-        showVideoInfo = if (showVideoInfo == 0) 1 else 0
-        if (showVideoInfo != 0) {
-            videoInfoJob?.cancel()
-            videoInfoJob = coroutineScope.launch {
-                delay(4000)
-                showVideoInfo = 0
-            }
-        }
-    }
-    
-    val showVolumeFeedback: (Int) -> Unit = { volume ->
-        volumeFeedbackJob?.cancel()
-        showVolumeFeedbackState = true
-        volumeFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showVolumeFeedbackState = false
-        }
-    }
-    
-    fun scheduleSeekbarHide() {
-        if (userInteracting) return
-        hideSeekbarJob?.cancel()
-        hideSeekbarJob = coroutineScope.launch {
-            delay(4000)
-            showSeekbar = false
-        }
-    }
-    
-    fun cancelAutoHide() {
-        userInteracting = true
-        hideSeekbarJob?.cancel()
-        coroutineScope.launch {
-            delay(100)
-            userInteracting = false
-        }
-    }
-    
-    fun showSeekbarWithTimeout() {
-        showSeekbar = true
-        scheduleSeekbarHide()
-    }
-    
-    fun showPlaybackFeedback(text: String) {
-        playbackFeedbackJob?.cancel()
-        showPlaybackFeedback = true
-        playbackFeedbackText = text
-        playbackFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showPlaybackFeedback = false
-        }
-    }
-    
-    fun handleTap() {
-        val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
-        if (currentPaused) {
-            coroutineScope.launch {
-                val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-                MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
-                delay(100)
-                MPVLib.setPropertyBoolean("pause", false)
-            }
-            showPlaybackFeedback("Resume")
-        } else {
-            MPVLib.setPropertyBoolean("pause", true)
-            showPlaybackFeedback("Pause")
-        }
-        if (showSeekbar) {
-            showSeekbar = false
-        } else {
-            showSeekbarWithTimeout()
-        }
-        isPausing = !currentPaused
     }
     
     LaunchedEffect(Unit) {
@@ -782,8 +783,8 @@ fun PlayerOverlay(
                         Row(modifier = Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
                                 text = "$currentTime / $totalTime",
-                                style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                                modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                                style = TextStyle(color = ComposeColor.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                                modifier = Modifier.background(ComposeColor.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                             )
                         }
                     }
@@ -809,7 +810,7 @@ fun PlayerOverlay(
                 modifier = Modifier
                     .align(Alignment.Center)
                     .size(320.dp, 180.dp) // 480p aspect ratio
-                    .background(Color.Black.copy(alpha = 0.9f))
+                    .background(ComposeColor.Black.copy(alpha = 0.9f))
             ) {
                 Image(
                     bitmap = currentPreviewBitmap!!,
@@ -818,10 +819,10 @@ fun PlayerOverlay(
                 )
                 Text(
                     text = seekTargetTime,
-                    style = TextStyle(color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold),
+                    style = TextStyle(color = ComposeColor.White, fontSize = 16.sp, fontWeight = FontWeight.Bold),
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .background(Color.Black.copy(alpha = 0.7f))
+                        .background(ComposeColor.Black.copy(alpha = 0.7f))
                         .padding(8.dp)
                 )
             }
@@ -836,7 +837,7 @@ fun PlayerOverlay(
                     .align(Alignment.BottomCenter)
                     .offset(y = (-80).dp, x = thumbnailOffset - 60.dp) // Position above seekbar
                     .size(120.dp, 68.dp) // 96p aspect ratio
-                    .background(Color.Black.copy(alpha = 0.9f))
+                    .background(ComposeColor.Black.copy(alpha = 0.9f))
             ) {
                 Image(
                     bitmap = currentThumbnailBitmap!!,
@@ -845,10 +846,10 @@ fun PlayerOverlay(
                 )
                 Text(
                     text = formatTimeSimple(thumbnailPreviewTime.toDouble()),
-                    style = TextStyle(color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium),
+                    style = TextStyle(color = ComposeColor.White, fontSize = 12.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .background(Color.Black.copy(alpha = 0.7f))
+                        .background(ComposeColor.Black.copy(alpha = 0.7f))
                         .padding(4.dp)
                 )
             }
@@ -858,11 +859,11 @@ fun PlayerOverlay(
         if (showVideoInfo != 0) {
             Text(
                 text = displayText,
-                style = TextStyle(color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium),
+                style = TextStyle(color = ComposeColor.White, fontSize = 15.sp, fontWeight = FontWeight.Medium),
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .offset(x = 60.dp, y = 20.dp)
-                    .background(Color.DarkGray.copy(alpha = 0.8f))
+                    .background(ComposeColor.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 6.dp)
             )
         }
@@ -872,28 +873,28 @@ fun PlayerOverlay(
             when {
                 showVolumeFeedbackState -> Text(
                     text = "Volume: ${(currentVolume.toFloat() / viewModel.maxVolume.toFloat() * 100).toInt()}%",
-                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                    style = TextStyle(color = ComposeColor.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                    modifier = Modifier.background(ComposeColor.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
                 isSpeedingUp -> Text(
                     text = "2X",
-                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                    style = TextStyle(color = ComposeColor.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                    modifier = Modifier.background(ComposeColor.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
                 showQuickSeekFeedback -> Text(
                     text = quickSeekFeedbackText,
-                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                    style = TextStyle(color = ComposeColor.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                    modifier = Modifier.background(ComposeColor.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
                 showSeekTime -> Text(
                     text = if (seekDirection.isNotEmpty()) "$seekTargetTime $seekDirection" else seekTargetTime,
-                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                    style = TextStyle(color = ComposeColor.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                    modifier = Modifier.background(ComposeColor.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
                 showPlaybackFeedback -> Text(
                     text = playbackFeedbackText,
-                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                    style = TextStyle(color = ComposeColor.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                    modifier = Modifier.background(ComposeColor.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
             }
         }
@@ -924,14 +925,14 @@ fun EnhancedDraggableProgressBar(
             .fillMaxWidth()
             .height(4.dp)
             .align(Alignment.CenterStart)
-            .background(Color.Gray.copy(alpha = 0.6f)))
+            .background(ComposeColor.Gray.copy(alpha = 0.6f)))
         
         // Progress bar fill
         Box(modifier = Modifier
             .fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f)
             .height(4.dp)
             .align(Alignment.CenterStart)
-            .background(Color.White))
+            .background(ComposeColor.White))
         
         // Enhanced drag area with thumbnail preview
         Box(modifier = Modifier
