@@ -178,31 +178,26 @@ class PreviewManager {
     }
     
     private fun decodeFrameAtTime(timestamp: Double, targetHeight: Int): Bitmap? {
-        return try {
-            // Create colored placeholder for testing instead of black
-            Bitmap.createBitmap(854, 480, Bitmap.Config.ARGB_8888).apply {
-                // Create colored placeholder based on timestamp
-                val color = when ((timestamp.toInt() % 5)) {
-                    0 -> Color.RED
-                    1 -> Color.BLUE
-                    2 -> Color.GREEN
-                    3 -> Color.YELLOW
-                    else -> Color.MAGENTA
-                }
-                eraseColor(color)
-                
-                // Add timestamp text for debugging
-                val canvas = android.graphics.Canvas(this)
-                val paint = android.graphics.Paint().apply {
-                    color = Color.WHITE
-                    textSize = 40f
-                }
-                canvas.drawText("${timestamp.toInt()}s", 50f, 50f, paint)
+    return try {
+        // Create colored placeholder for testing instead of black
+        Bitmap.createBitmap(854, 480, Bitmap.Config.ARGB_8888).apply {
+            // Create colored placeholder based on timestamp
+            val colorValue = when ((timestamp.toInt() % 5)) {
+                0 -> Color.RED
+                1 -> Color.BLUE
+                2 -> Color.GREEN
+                3 -> Color.YELLOW
+                else -> Color.MAGENTA
             }
-        } catch (e: Exception) {
-            null
+            eraseColor(colorValue)
+            
+            // For now, skip the canvas text to avoid complexity
+            // We'll add this back once the basic functionality works
         }
+    } catch (e: Exception) {
+        null
     }
+}
     
     fun clearScrubbingWindow() {
         scrubbingDecoderJob?.cancel()
