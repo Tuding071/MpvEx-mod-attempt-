@@ -288,8 +288,9 @@ fun PlayerOverlay(
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
+
+    // ===== HELPER FUNCTIONS - DEFINED FIRST =====
     
-    // Helper functions that were missing
     fun scheduleSeekbarHide() {
         if (userInteracting) return
         hideSeekbarJob?.cancel()
@@ -308,12 +309,26 @@ fun PlayerOverlay(
         }
     }
     
+    fun showSeekbarWithTimeout() {
+        showSeekbar = true
+        scheduleSeekbarHide()
+    }
+    
+    fun showPlaybackFeedback(text: String) {
+        playbackFeedbackJob?.cancel()
+        showPlaybackFeedback = true
+        playbackFeedbackText = text
+        playbackFeedbackJob = coroutineScope.launch {
+            delay(1000)
+            showPlaybackFeedback = false
+        }
+    }
+    
     fun performQuickSeek(seconds: Int) {
         val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         val newPosition = (currentPos + seconds).coerceIn(0.0, duration)
         
-        // Show feedback
         quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
         showQuickSeekFeedback = true
         quickSeekFeedbackJob?.cancel()
@@ -322,7 +337,6 @@ fun PlayerOverlay(
             showQuickSeekFeedback = false
         }
         
-        // Perform seek
         MPVLib.command("seek", seconds.toString(), "relative", "exact")
     }
     
@@ -346,21 +360,6 @@ fun PlayerOverlay(
             showSeekbarWithTimeout()
         }
         isPausing = !currentPaused
-    }
-    
-    fun showSeekbarWithTimeout() {
-        showSeekbar = true
-        scheduleSeekbarHide()
-    }
-    
-    fun showPlaybackFeedback(text: String) {
-        playbackFeedbackJob?.cancel()
-        showPlaybackFeedback = true
-        playbackFeedbackText = text
-        playbackFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showPlaybackFeedback = false
-        }
     }
     
     fun toggleVideoInfo() {
@@ -390,296 +389,303 @@ fun PlayerOverlay(
             previewManager.startScrubbingWindowGeneration(currentPosition, videoDuration)
         }
     }
+    // ===== PREVIEW AND SCRUBBING FUNCTIONS =====
+
+// NEW: Scrubbing functions
+fun startScrubbing(startX: Float) {
+    isScrubbing = true
+    showScrubbingPreview = true
+    cancelAutoHide()
+    seekStartX = startX
+    seekStartPosition = currentPosition
+    wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
     
-    // NEW: Scrubbing functions
-    fun startScrubbing(startX: Float) {
-        isScrubbing = true
-        showScrubbingPreview = true
-        cancelAutoHide()
-        seekStartX = startX
-        seekStartPosition = currentPosition
-        wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
-        
-        if (wasPlayingBeforeSeek) {
-            MPVLib.setPropertyBoolean("pause", true)
+    if (wasPlayingBeforeSeek) {
+        MPVLib.setPropertyBoolean("pause", true)
+    }
+}
+
+fun handleScrubbing(currentX: Float) {
+    if (!isScrubbing) return
+    
+    val deltaX = currentX - seekStartX
+    val pixelsPerSecond = 4f / 0.016f
+    val timeDeltaSeconds = deltaX / pixelsPerSecond
+    val newPositionSeconds = seekStartPosition + timeDeltaSeconds
+    val clampedPosition = newPositionSeconds.coerceIn(0.0, videoDuration)
+    
+    scrubbingPreviewTime = clampedPosition
+    seekTargetTime = formatTimeSimple(clampedPosition)
+    seekDirection = if (deltaX > 0) "+" else "-"
+    
+    // Get preview frame from scrubbing window
+    coroutineScope.launch {
+        val frame = previewManager.getScrubbingFrame(clampedPosition)
+        frame?.let {
+            currentPreviewBitmap = it.asImageBitmap()
         }
     }
-    
-    fun handleScrubbing(currentX: Float) {
-        if (!isScrubbing) return
+}
+
+fun endScrubbing() {
+    if (isScrubbing) {
+        // Perform actual seek to final position
+        MPVLib.command("seek", scrubbingPreviewTime.toString(), "absolute", "exact")
         
-        val deltaX = currentX - seekStartX
-        val pixelsPerSecond = 4f / 0.016f
-        val timeDeltaSeconds = deltaX / pixelsPerSecond
-        val newPositionSeconds = seekStartPosition + timeDeltaSeconds
-        val clampedPosition = newPositionSeconds.coerceIn(0.0, videoDuration)
-        
-        scrubbingPreviewTime = clampedPosition
-        seekTargetTime = formatTimeSimple(clampedPosition)
-        seekDirection = if (deltaX > 0) "+" else "-"
-        
-        // Get preview frame from scrubbing window
-        coroutineScope.launch {
-            val frame = previewManager.getScrubbingFrame(clampedPosition)
-            frame?.let {
-                currentPreviewBitmap = it.asImageBitmap()
-            }
-        }
-    }
-    
-    fun endScrubbing() {
-        if (isScrubbing) {
-            // Perform actual seek to final position
-            MPVLib.command("seek", scrubbingPreviewTime.toString(), "absolute", "exact")
-            
-            if (wasPlayingBeforeSeek) {
-                coroutineScope.launch {
-                    delay(100)
-                    MPVLib.setPropertyBoolean("pause", false)
-                }
-            }
-            
-            // Reset scrubbing states
-            isScrubbing = false
-            showScrubbingPreview = false
-            currentPreviewBitmap = null
-            
-            // Regenerate scrubbing window around new position
-            previewManager.clearScrubbingWindow()
-            previewManager.startScrubbingWindowGeneration(scrubbingPreviewTime, videoDuration)
-            
-            scheduleSeekbarHide()
-        }
-    }
-    
-    // NEW: Thumbnail preview for seekbar
-    fun showThumbnailPreview(timeSeconds: Int, positionX: Float) {
-        thumbnailPreviewTime = timeSeconds
-        thumbnailPosition = positionX
-        showThumbnailPreview = true
-        
-        coroutineScope.launch {
-            val thumbnail = previewManager.getTimelineThumbnail(timeSeconds)
-            thumbnail?.let {
-                currentThumbnailBitmap = it.asImageBitmap()
-            }
-        }
-    }
-    
-    fun hideThumbnailPreview() {
-        showThumbnailPreview = false
-        currentThumbnailBitmap = null
-    }
-    
-    // UPDATED: Progress bar drag with thumbnail preview
-    fun handleProgressBarDrag(newPosition: Float) {
-        cancelAutoHide()
-        if (!isSeeking) {
-            isSeeking = true
-            wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
-            showSeekTime = true
-            if (wasPlayingBeforeSeek) {
-                MPVLib.setPropertyBoolean("pause", true)
-            }
-        }
-        isDragging = true
-        seekbarPosition = newPosition
-        
-        val targetPosition = newPosition.toDouble()
-        seekTargetTime = formatTimeSimple(targetPosition)
-        seekDirection = if (newPosition > currentPosition.toFloat()) "+" else "-"
-        
-        // Show thumbnail preview
-        val timeSeconds = (targetPosition).toInt()
-        showThumbnailPreview(timeSeconds, calculateThumbnailPosition(newPosition))
-    }
-    
-    fun handleDragFinished() {
-        isDragging = false
         if (wasPlayingBeforeSeek) {
             coroutineScope.launch {
                 delay(100)
                 MPVLib.setPropertyBoolean("pause", false)
             }
         }
-        isSeeking = false
-        showSeekTime = false
-        wasPlayingBeforeSeek = false
-        seekDirection = ""
-        hideThumbnailPreview()
-        scheduleSeekbarHide()
         
-        // Perform final seek
-        MPVLib.command("seek", seekbarPosition.toString(), "absolute", "exact")
-    }
-    
-    fun calculateThumbnailPosition(progress: Float): Float {
-        // Calculate X position for thumbnail above seekbar
-        val progressPercent = progress / seekbarDuration
-        return progressPercent * LocalDensity.current.run { 300.dp.toPx() } // Adjust based on your seekbar width
-    }
-    
-    // UPDATED: Gesture handler to use scrubbing instead of real-time seeking
-    fun checkForSwipeDirection(currentX: Float, currentY: Float): String {
-        if (isHorizontalSwipe || isVerticalSwipe || isLongTap) return ""
+        // Reset scrubbing states
+        isScrubbing = false
+        showScrubbingPreview = false
+        currentPreviewBitmap = null
         
-        val deltaX = kotlin.math.abs(currentX - touchStartX)
-        val deltaY = kotlin.math.abs(currentY - touchStartY)
+        // Regenerate scrubbing window around new position
+        previewManager.clearScrubbingWindow()
+        previewManager.startScrubbingWindowGeneration(scrubbingPreviewTime, videoDuration)
         
-        if (deltaX > horizontalSwipeThreshold && deltaX > deltaY && deltaY < maxVerticalMovement) {
-            return "horizontal"
-        }
-        
-        if (deltaY > verticalSwipeThreshold && deltaY > deltaX && deltaX < maxHorizontalMovement) {
-            return "vertical"
-        }
-        
-        return ""
-    }
-    
-    fun startHorizontalSeeking(startX: Float) {
-        // NOW USING SCRUBBING INSTEAD OF REAL-TIME SEEKING
-        startScrubbing(startX)
-        isHorizontalSwipe = true
-    }
-    
-    fun handleHorizontalSeeking(currentX: Float) {
-        // NOW USING SCRUBBING INSTEAD OF REAL-TIME SEEKING
-        handleScrubbing(currentX)
-    }
-    
-    fun endHorizontalSeeking() {
-        // NOW USING SCRUBBING INSTEAD OF REAL-TIME SEEKING
-        endScrubbing()
-        isHorizontalSwipe = false
-    }
-    
-    fun startLongTapDetection() {
-        isTouching = true
-        touchStartTime = System.currentTimeMillis()
-        longTapJob?.cancel()
-        longTapJob = coroutineScope.launch {
-            delay(longTapThreshold)
-            if (isTouching && !isHorizontalSwipe && !isVerticalSwipe) {
-                isLongTap = true
-                isSpeedingUp = true
-                MPVLib.setPropertyDouble("speed", 2.0)
-            }
-        }
-    }
-    
-    fun startVerticalSwipe(startY: Float) {
-        isVerticalSwipe = true
-        cancelAutoHide()
-        // Determine direction based on initial movement
-        val currentY = startY
-        val deltaY = currentY - touchStartY
-        
-        if (deltaY < 0) {
-            // Swipe up - seek forward
-            seekDirection = "+"
-            performQuickSeek(quickSeekAmount)
-        } else {
-            // Swipe down - seek backward
-            seekDirection = "-"
-            performQuickSeek(-quickSeekAmount)
-        }
-    }
-    
-    fun endVerticalSwipe() {
-        isVerticalSwipe = false
         scheduleSeekbarHide()
     }
+}
+
+// NEW: Thumbnail preview for seekbar
+fun showThumbnailPreview(timeSeconds: Int, positionX: Float) {
+    thumbnailPreviewTime = timeSeconds
+    thumbnailPosition = positionX
+    showThumbnailPreview = true
     
-    fun endTouch() {
-        val touchDuration = System.currentTimeMillis() - touchStartTime
-        isTouching = false
-        longTapJob?.cancel()
-        
-        if (isLongTap) {
-            // Long tap ended - reset speed
-            isLongTap = false
-            isSpeedingUp = false
-            MPVLib.setPropertyDouble("speed", 1.0)
-        } else if (isHorizontalSwipe) {
-            // Horizontal swipe ended
-            endHorizontalSeeking()
-            isHorizontalSwipe = false
-        } else if (isVerticalSwipe) {
-            // Vertical swipe ended
-            endVerticalSwipe()
-            isVerticalSwipe = false
-        } else if (touchDuration < 150) {
-            // Short tap (less than 150ms)
-            handleTap()
-        }
-        // Reset all gesture states
-        isHorizontalSwipe = false
-        isVerticalSwipe = false
-        isLongTap = false
-    }
-    
-    LaunchedEffect(Unit) {
-        val intent = (context as? android.app.Activity)?.intent
-        fileName = when {
-            intent?.action == Intent.ACTION_SEND -> {
-                getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context)
-            }
-            intent?.action == Intent.ACTION_VIEW -> {
-                getFileNameFromUri(intent.data, context)
-            }
-            else -> {
-                getBestAvailableFileName(context)
-            }
-        }
-        val title = MPVLib.getPropertyString("media-title") ?: "Video"
-        videoTitle = title
-        showVideoInfo = 1
-        videoInfoJob?.cancel()
-        videoInfoJob = coroutineScope.launch {
-            delay(4000)
-            showVideoInfo = 0
-        }
-        scheduleSeekbarHide()
-    }
-    
-    LaunchedEffect(viewModel.currentVolume) {
-        viewModel.currentVolume.collect { volume ->
-            currentVolume = volume
-            showVolumeFeedback(volume)
+    coroutineScope.launch {
+        val thumbnail = previewManager.getTimelineThumbnail(timeSeconds)
+        thumbnail?.let {
+            currentThumbnailBitmap = it.asImageBitmap()
         }
     }
+}
+
+fun hideThumbnailPreview() {
+    showThumbnailPreview = false
+    currentThumbnailBitmap = null
+}
+
+// UPDATED: Progress bar drag with thumbnail preview
+fun handleProgressBarDrag(newPosition: Float) {
+    cancelAutoHide()
+    if (!isSeeking) {
+        isSeeking = true
+        wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
+        showSeekTime = true
+        if (wasPlayingBeforeSeek) {
+            MPVLib.setPropertyBoolean("pause", true)
+        }
+    }
+    isDragging = true
+    seekbarPosition = newPosition
     
-    LaunchedEffect(Unit) {
-        var lastSeconds = -1
-        while (isActive) {
-            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-            val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
-            val currentSeconds = currentPos.toInt()
-            if (isSeeking || isScrubbing) {
-                currentTime = seekTargetTime
-                totalTime = formatTimeSimple(duration)
-            } else {
-                if (currentSeconds != lastSeconds) {
-                    currentTime = formatTimeSimple(currentPos)
-                    totalTime = formatTimeSimple(duration)
-                    lastSeconds = currentSeconds
-                }
-            }
-            if (!isDragging && !isScrubbing) {
-                seekbarPosition = currentPos.toFloat()
-                seekbarDuration = duration.toFloat()
-            }
-            currentPosition = currentPos
-            videoDuration = duration
+    val targetPosition = newPosition.toDouble()
+    seekTargetTime = formatTimeSimple(targetPosition)
+    seekDirection = if (newPosition > currentPosition.toFloat()) "+" else "-"
+    
+    // Show thumbnail preview
+    val timeSeconds = (targetPosition).toInt()
+    showThumbnailPreview(timeSeconds, calculateThumbnailPosition(newPosition))
+}
+
+fun handleDragFinished() {
+    isDragging = false
+    if (wasPlayingBeforeSeek) {
+        coroutineScope.launch {
             delay(100)
+            MPVLib.setPropertyBoolean("pause", false)
         }
     }
+    isSeeking = false
+    showSeekTime = false
+    wasPlayingBeforeSeek = false
+    seekDirection = ""
+    hideThumbnailPreview()
+    scheduleSeekbarHide()
     
-    val displayText = when (showVideoInfo) {
-        1 -> fileName
-        else -> ""
+    // Perform final seek
+    MPVLib.command("seek", seekbarPosition.toString(), "absolute", "exact")
+}
+
+@Composable
+fun calculateThumbnailPosition(progress: Float): Float {
+    // Calculate X position for thumbnail above seekbar
+    val progressPercent = progress / seekbarDuration
+    return progressPercent * LocalDensity.current.run { 300.dp.toPx() } // Adjust based on your seekbar width
+}
+
+// ===== GESTURE HANDLING FUNCTIONS =====
+
+// UPDATED: Gesture handler to use scrubbing instead of real-time seeking
+fun checkForSwipeDirection(currentX: Float, currentY: Float): String {
+    if (isHorizontalSwipe || isVerticalSwipe || isLongTap) return ""
+    
+    val deltaX = kotlin.math.abs(currentX - touchStartX)
+    val deltaY = kotlin.math.abs(currentY - touchStartY)
+    
+    if (deltaX > horizontalSwipeThreshold && deltaX > deltaY && deltaY < maxVerticalMovement) {
+        return "horizontal"
     }
+    
+    if (deltaY > verticalSwipeThreshold && deltaY > deltaX && deltaX < maxHorizontalMovement) {
+        return "vertical"
+    }
+    
+    return ""
+}
+
+fun startHorizontalSeeking(startX: Float) {
+    // NOW USING SCRUBBING INSTEAD OF REAL-TIME SEEKING
+    startScrubbing(startX)
+    isHorizontalSwipe = true
+}
+
+fun handleHorizontalSeeking(currentX: Float) {
+    // NOW USING SCRUBBING INSTEAD OF REAL-TIME SEEKING
+    handleScrubbing(currentX)
+}
+
+fun endHorizontalSeeking() {
+    // NOW USING SCRUBBING INSTEAD OF REAL-TIME SEEKING
+    endScrubbing()
+    isHorizontalSwipe = false
+}
+
+fun startLongTapDetection() {
+    isTouching = true
+    touchStartTime = System.currentTimeMillis()
+    longTapJob?.cancel()
+    longTapJob = coroutineScope.launch {
+        delay(longTapThreshold)
+        if (isTouching && !isHorizontalSwipe && !isVerticalSwipe) {
+            isLongTap = true
+            isSpeedingUp = true
+            MPVLib.setPropertyDouble("speed", 2.0)
+        }
+    }
+}
+
+fun startVerticalSwipe(startY: Float) {
+    isVerticalSwipe = true
+    cancelAutoHide()
+    // Determine direction based on initial movement
+    val currentY = startY
+    val deltaY = currentY - touchStartY
+    
+    if (deltaY < 0) {
+        // Swipe up - seek forward
+        seekDirection = "+"
+        performQuickSeek(quickSeekAmount)
+    } else {
+        // Swipe down - seek backward
+        seekDirection = "-"
+        performQuickSeek(-quickSeekAmount)
+    }
+}
+
+fun endVerticalSwipe() {
+    isVerticalSwipe = false
+    scheduleSeekbarHide()
+}
+
+fun endTouch() {
+    val touchDuration = System.currentTimeMillis() - touchStartTime
+    isTouching = false
+    longTapJob?.cancel()
+    
+    if (isLongTap) {
+        // Long tap ended - reset speed
+        isLongTap = false
+        isSpeedingUp = false
+        MPVLib.setPropertyDouble("speed", 1.0)
+    } else if (isHorizontalSwipe) {
+        // Horizontal swipe ended
+        endHorizontalSeeking()
+        isHorizontalSwipe = false
+    } else if (isVerticalSwipe) {
+        // Vertical swipe ended
+        endVerticalSwipe()
+        isVerticalSwipe = false
+    } else if (touchDuration < 150) {
+        // Short tap (less than 150ms)
+        handleTap()
+    }
+    // Reset all gesture states
+    isHorizontalSwipe = false
+    isVerticalSwipe = false
+    isLongTap = false
+}
+
+// ===== EFFECTS AND LIFECYCLE =====
+
+LaunchedEffect(Unit) {
+    val intent = (context as? android.app.Activity)?.intent
+    fileName = when {
+        intent?.action == Intent.ACTION_SEND -> {
+            getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context)
+        }
+        intent?.action == Intent.ACTION_VIEW -> {
+            getFileNameFromUri(intent.data, context)
+        }
+        else -> {
+            getBestAvailableFileName(context)
+        }
+    }
+    val title = MPVLib.getPropertyString("media-title") ?: "Video"
+    videoTitle = title
+    showVideoInfo = 1
+    videoInfoJob?.cancel()
+    videoInfoJob = coroutineScope.launch {
+        delay(4000)
+        showVideoInfo = 0
+    }
+    scheduleSeekbarHide()
+}
+
+LaunchedEffect(viewModel.currentVolume) {
+    viewModel.currentVolume.collect { volume ->
+        currentVolume = volume
+        showVolumeFeedback(volume)
+    }
+}
+
+LaunchedEffect(Unit) {
+    var lastSeconds = -1
+    while (isActive) {
+        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+        val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
+        val currentSeconds = currentPos.toInt()
+        if (isSeeking || isScrubbing) {
+            currentTime = seekTargetTime
+            totalTime = formatTimeSimple(duration)
+        } else {
+            if (currentSeconds != lastSeconds) {
+                currentTime = formatTimeSimple(currentPos)
+                totalTime = formatTimeSimple(duration)
+                lastSeconds = currentSeconds
+            }
+        }
+        if (!isDragging && !isScrubbing) {
+            seekbarPosition = currentPos.toFloat()
+            seekbarDuration = duration.toFloat()
+        }
+        currentPosition = currentPos
+        videoDuration = duration
+        delay(100)
+    }
+}
+
+val displayText = when (showVideoInfo) {
+    1 -> fileName
+    else -> ""
+}
+    // ===== UI LAYOUT =====
     
     Box(modifier = modifier.fillMaxSize()) {
         // MAIN GESTURE AREA - Full screen divided into areas
@@ -901,6 +907,8 @@ fun PlayerOverlay(
     }
 }
 
+// ===== ENHANCED PROGRESS BAR COMPONENT =====
+
 @Composable
 fun EnhancedDraggableProgressBar(
     position: Float,
@@ -986,6 +994,8 @@ fun EnhancedDraggableProgressBar(
         )
     }
 }
+
+// ===== UTILITY FUNCTIONS =====
 
 private fun formatTimeSimple(seconds: Double): String {
     val totalSeconds = seconds.toInt()
