@@ -389,6 +389,18 @@ fun PlayerOverlay(
             previewManager.startScrubbingWindowGeneration(currentPosition, videoDuration)
         }
     }
+
+
+
+
+
+
+
+
+
+    //PART 2
+
+
     // ===== PREVIEW AND SCRUBBING FUNCTIONS =====
 
 // NEW: Scrubbing functions
@@ -471,6 +483,14 @@ fun hideThumbnailPreview() {
     currentThumbnailBitmap = null
 }
 
+// FIXED: Calculate thumbnail position without @Composable
+fun calculateThumbnailPosition(progress: Float, duration: Float): Float {
+    // Calculate X position for thumbnail above seekbar
+    val progressPercent = progress / duration
+    // Use fixed pixel value - you can adjust this based on your seekbar width
+    return progressPercent * 300f // 300 pixels width for seekbar area
+}
+
 // UPDATED: Progress bar drag with thumbnail preview
 fun handleProgressBarDrag(newPosition: Float) {
     cancelAutoHide()
@@ -489,9 +509,9 @@ fun handleProgressBarDrag(newPosition: Float) {
     seekTargetTime = formatTimeSimple(targetPosition)
     seekDirection = if (newPosition > currentPosition.toFloat()) "+" else "-"
     
-    // Show thumbnail preview
+    // Show thumbnail preview - FIXED: Pass both parameters
     val timeSeconds = (targetPosition).toInt()
-    showThumbnailPreview(timeSeconds, calculateThumbnailPosition(newPosition))
+    showThumbnailPreview(timeSeconds, calculateThumbnailPosition(newPosition, seekbarDuration))
 }
 
 fun handleDragFinished() {
@@ -511,13 +531,6 @@ fun handleDragFinished() {
     
     // Perform final seek
     MPVLib.command("seek", seekbarPosition.toString(), "absolute", "exact")
-}
-
-@Composable
-fun calculateThumbnailPosition(progress: Float): Float {
-    // Calculate X position for thumbnail above seekbar
-    val progressPercent = progress / seekbarDuration
-    return progressPercent * LocalDensity.current.run { 300.dp.toPx() } // Adjust based on your seekbar width
 }
 
 // ===== GESTURE HANDLING FUNCTIONS =====
@@ -685,6 +698,11 @@ val displayText = when (showVideoInfo) {
     1 -> fileName
     else -> ""
 }
+
+
+
+//PART 3
+
     // ===== UI LAYOUT =====
     
     Box(modifier = modifier.fillMaxSize()) {
