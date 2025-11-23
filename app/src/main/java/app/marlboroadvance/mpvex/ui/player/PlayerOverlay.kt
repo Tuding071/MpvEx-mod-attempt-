@@ -458,8 +458,14 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("audio-samplerate", "auto")
         MPVLib.setPropertyString("deband", "no")
         MPVLib.setPropertyString("video-aspect-override", "no")
-        MPVLib.setPropertyString("demuxer-lavf-o", "fflags=+nobuffer+fastseek")
-        MPVLib.setPropertyString("cache-secs", "31")
+        MPVLib.setPropertyString("cache-secs", "20")
+        MPVLib.setPropertyString("cache-pause-initial", "no") // Don't pause while building cache
+        MPVLib.setPropertyString("cache-pause-wait", "0") // No waiting for cache
+        MPVLib.setPropertyString("demuxer-max-bytes", "100M") // Larger cache buffer
+        MPVLib.setPropertyString("demuxer-readahead-secs", "0") // Disable slow preloading
+        MPVLib.setPropertyString("demuxer-lavf-o", "fflags=+nobuffer+fastseek+flush_packets")
+        MPVLib.setPropertyString("demuxer-thread", "yes") // Multi-threaded demuxing
+        MPVLib.setPropertyString("demuxer-max-back-bytes", "50M") // Faster backward cache
     }
     
     LaunchedEffect(Unit) {
