@@ -55,7 +55,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.IO_PARALLELISM
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -117,10 +116,9 @@ object FFmpegCommands {
         width: Int,
         height: Int
     ): Array<String> {
-        val intervalMs = durationMs / frameCount
         return arrayOf(
             "-i", inputPath,
-            "-vf", "scale=$width:$height,fps=${frameCount/20}",
+            "-vf", "scale=$width:$height,fps=1",
             "-ss", "0",
             "-t", "${durationMs / 1000}",
             "-frames", "$frameCount",
@@ -206,7 +204,7 @@ class FFmpegScrubberEngine(private val context: Context) {
                     height
                 )
                 
-                val process = ProcessBuilder(arrayOf(ffmpegBinary!!.absolutePath) + command).start()
+                val process = ProcessBuilder(listOf(ffmpegBinary!!.absolutePath) + command.toList()).start()
                 val inputStream = process.inputStream
                 val bitmap = BitmapFactory.decodeStream(inputStream)
                 process.waitFor()
@@ -219,7 +217,7 @@ class FFmpegScrubberEngine(private val context: Context) {
     
     private suspend fun executeFFmpeg(command: Array<String>): Int {
         return withContext(Dispatchers.IO) {
-            val process = ProcessBuilder(arrayOf(ffmpegBinary!!.absolutePath) + command).start()
+            val process = ProcessBuilder(listOf(ffmpegBinary!!.absolutePath) + command.toList()).start()
             process.waitFor()
         }
     }
@@ -257,7 +255,7 @@ fun FramePreviewPopup(
             .offset(y = (-120).dp + animatedOffset)
             .width(200.dp)
             .wrapContentHeight(),
-        elevation = 8.dp
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
     ) {
         Column {
             Image(
@@ -286,6 +284,8 @@ fun FramePreviewPopup(
 fun VisualScrubber(
     viewModel: PlayerViewModel,
     videoPath: String,
+    currentPosition: Float,
+    videoDuration: Float,
     modifier: Modifier = Modifier
 ) {
     var frames by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
@@ -305,7 +305,7 @@ fun VisualScrubber(
             isLoading = true
             try {
                 scrubberEngine.initialize()
-                val durationMs = ((viewModel.videoDuration * 1000).toLong()).coerceAtMost(20000L)
+                val durationMs = ((videoDuration * 1000).toLong()).coerceAtMost(20000L)
                 frames = scrubberEngine.generateScrubberFrames(
                     videoPath = videoPath,
                     durationMs = durationMs,
@@ -329,10 +329,10 @@ fun VisualScrubber(
             // Visual scrubber with frames
             ScrubberFrameStrip(
                 frames = frames,
-                currentPosition = viewModel.currentPosition,
-                duration = viewModel.videoDuration,
+                currentPosition = currentPosition,
+                duration = videoDuration,
                 onSeek = { position ->
-                    viewModel.seekTo(position)
+                    viewModel.seekTo(position.toDouble())
                 },
                 onPreview = { position, show ->
                     showPreview = show
@@ -341,7 +341,7 @@ fun VisualScrubber(
                         coroutineScope.launch {
                             currentPreviewFrame = scrubberEngine.extractFrameAtTime(
                                 videoPath,
-                                (position * viewModel.videoDuration * 1000).toLong()
+                                (position * videoDuration * 1000).toLong()
                             )
                         }
                     }
@@ -350,11 +350,11 @@ fun VisualScrubber(
         } else {
             // Fallback to simple seek bar
             SimpleDraggableProgressBar(
-                position = viewModel.currentPosition,
-                duration = viewModel.videoDuration,
-                onValueChange = { viewModel.seekTo(it) },
+                position = currentPosition,
+                duration = videoDuration,
+                onValueChange = { viewModel.seekTo(it.toDouble()) },
                 onValueChangeFinished = { },
-                getFreshPosition = { viewModel.currentPosition },
+                getFreshPosition = { currentPosition },
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -364,7 +364,7 @@ fun VisualScrubber(
             FramePreviewPopup(
                 bitmap = currentPreviewFrame!!,
                 position = previewPosition,
-                duration = viewModel.videoDuration,
+                duration = videoDuration,
                 modifier = Modifier.align(Alignment.TopCenter)
             )
         }
@@ -383,6 +383,7 @@ fun ScrubberFrameStrip(
     val frameCount = frames.size
     val frameWidth = 80.dp
     val scrollState = rememberScrollState()
+    val density = LocalDensity.current
     
     Box(modifier = modifier.height(80.dp)) {
         // Frame strip
@@ -433,9 +434,10 @@ fun ScrubberFrameStrip(
         // Current position indicator
         if (duration > 0) {
             val indicatorPosition = (currentPosition / duration).coerceIn(0f, 1f)
+            val positionPx = with(density) { (indicatorPosition * size.width).toDp() - 1.dp }
             Box(
                 modifier = Modifier
-                    .offset(x = (indicatorPosition * size.width).toDp() - 1.dp)
+                    .offset(x = positionPx)
                     .width(2.dp)
                     .fillMaxHeight()
                     .background(Color.Red)
@@ -983,6 +985,8 @@ fun PlayerOverlay(
                 VisualScrubber(
                     viewModel = viewModel,
                     videoPath = currentVideoPath,
+                    currentPosition = currentPosition.toFloat(),
+                    videoDuration = videoDuration.toFloat(),
                     modifier = Modifier.fillMaxSize()
                 )
             }
@@ -1143,3 +1147,6 @@ private fun getBestAvailableFileName(context: Context): String {
     if (mpvPath != null && mpvPath.isNotBlank()) return mpvPath.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "Video" }
     return "Video"
 }
+
+// Add missing import for CardDefaults
+import androidx.compose.material3.CardDefaults
