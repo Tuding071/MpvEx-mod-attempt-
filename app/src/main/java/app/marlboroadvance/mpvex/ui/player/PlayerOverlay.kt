@@ -69,6 +69,7 @@ import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.withContext
+import androidx.compose.runtime.DisposableEffect
 
 // ===== FFMPEG INTEGRATION =====
 
