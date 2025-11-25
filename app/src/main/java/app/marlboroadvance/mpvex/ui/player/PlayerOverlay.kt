@@ -155,7 +155,8 @@ class FFmpegFrameDecoder(private val context: Context) {
                 
                 println("DEBUG: Executing FFmpeg: ${command.joinToString(" ")}")
                 
-                val process = ProcessBuilder(command).start()
+                // FIXED: Use *command to spread array
+                val process = ProcessBuilder(*command).start()
                 val exitCode = process.waitFor()
                 
                 if (exitCode == 0 && tempFile.exists() && tempFile.length() > 0) {
