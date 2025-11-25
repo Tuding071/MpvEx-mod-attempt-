@@ -70,6 +70,8 @@ import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.withContext
+import android.provider.MediaStore
+import android.database.Cursor
 
 // ===== FFMPEG INTEGRATION =====
 
@@ -119,26 +121,79 @@ class FFmpegBinaryManager(private val context: Context) {
     }
 }
 
-// FFmpeg Frame Decoder - IMPROVED VERSION
+// FFmpeg Frame Decoder - WITH URI TO PATH CONVERSION
 class FFmpegFrameDecoder(private val context: Context) {
     private val binaryManager = FFmpegBinaryManager(context)
     private var ffmpegBinary: File? = null
     private var currentVideoPath: String = ""
-    
+
     suspend fun initialize(videoPath: String) {
         ffmpegBinary = binaryManager.ensureFFmpegAvailable()
-        currentVideoPath = videoPath
-        println("DEBUG: FFmpeg initialized with video: $videoPath")
+        
+        // Convert URI to file path if needed
+        currentVideoPath = convertUriToFilePath(videoPath)
+        
+        println("DEBUG: FFmpeg initialized")
+        println("DEBUG: Original path: $videoPath")
+        println("DEBUG: Converted path: $currentVideoPath")
+        
+        val videoFile = File(currentVideoPath)
+        println("DEBUG: File exists: ${videoFile.exists()}")
+        println("DEBUG: File readable: ${videoFile.canRead()}")
+        if (videoFile.exists()) {
+            println("DEBUG: File size: ${videoFile.length()} bytes")
+        }
     }
-    
+
+    private fun convertUriToFilePath(uriString: String): String {
+        return try {
+            if (uriString.startsWith("content://")) {
+                val uri = Uri.parse(uriString)
+                getFilePathFromContentUri(uri) ?: uriString
+            } else if (uriString.startsWith("file://")) {
+                Uri.parse(uriString).path ?: uriString
+            } else {
+                uriString
+            }
+        } catch (e: Exception) {
+            println("DEBUG: URI conversion failed: ${e.message}")
+            uriString
+        }
+    }
+
+    private fun getFilePathFromContentUri(uri: Uri): String? {
+        return try {
+            var filePath: String? = null
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val columnIndex = cursor.getColumnIndex(MediaStore.Video.Media.DATA)
+                    if (columnIndex != -1) {
+                        filePath = cursor.getString(columnIndex)
+                    }
+                }
+            }
+            filePath
+        } catch (e: Exception) {
+            println("DEBUG: Content URI query failed: ${e.message}")
+            null
+        }
+    }
+
     suspend fun decodeFrameAtTime(timestamp: Double, targetHeight: Int): Bitmap? {
         return withContext(Dispatchers.IO) {
             if (ffmpegBinary == null || currentVideoPath.isEmpty()) {
                 println("DEBUG: FFmpeg not initialized properly")
-                return@withContext createPlaceholderBitmap(timestamp, targetHeight)
+                return@withContext createPlaceholderBitmap(timestamp, targetHeight, "NOT_INITIALIZED")
             }
-            
-            // Create temp output file instead of using pipe
+
+            // Check if file exists and is accessible
+            val videoFile = File(currentVideoPath)
+            if (!videoFile.exists() || !videoFile.canRead()) {
+                println("DEBUG: Video file not accessible: exists=${videoFile.exists()}, readable=${videoFile.canRead()}")
+                return@withContext createPlaceholderBitmap(timestamp, targetHeight, "FILE_NOT_ACCESSIBLE")
+            }
+
+            // Create temp output file
             val tempFile = File.createTempFile("frame_${timestamp.toInt()}", ".jpg", context.cacheDir)
             
             try {
@@ -148,37 +203,54 @@ class FFmpegFrameDecoder(private val context: Context) {
                     "-ss", "${timestamp}",
                     "-vf", "scale=${calculateWidth(targetHeight)}:${targetHeight}",
                     "-vframes", "1",
-                    "-q:v", "2", // Quality setting
-                    "-y", // Overwrite output file
+                    "-q:v", "2",
+                    "-y",
                     tempFile.absolutePath
                 )
                 
-                println("DEBUG: Executing FFmpeg: ${command.joinToString(" ")}")
+                println("DEBUG: Executing FFmpeg for frame at ${timestamp}s")
                 
-                // FIXED: Use *command to spread array
                 val process = ProcessBuilder(*command).start()
+                
+                // Capture error output for debugging
+                val errorReader = process.errorStream.bufferedReader()
+                val errors = errorReader.readText()
+                errorReader.close()
+                
                 val exitCode = process.waitFor()
                 
+                println("DEBUG: FFmpeg exit code: $exitCode")
+                if (errors.isNotEmpty()) {
+                    println("DEBUG: FFmpeg errors: $errors")
+                }
+                println("DEBUG: Temp file exists: ${tempFile.exists()}")
+                println("DEBUG: Temp file size: ${tempFile.length()}")
+
                 if (exitCode == 0 && tempFile.exists() && tempFile.length() > 0) {
                     val bitmap = BitmapFactory.decodeFile(tempFile.absolutePath)
-                    println("DEBUG: Successfully decoded frame at $timestamp seconds")
-                    bitmap
+                    if (bitmap != null) {
+                        println("DEBUG: SUCCESS - Real frame decoded at $timestamp seconds!")
+                        return@withContext bitmap
+                    } else {
+                        println("DEBUG: BitmapFactory failed to decode temp file")
+                        return@withContext createPlaceholderBitmap(timestamp, targetHeight, "DECODE_FAILED")
+                    }
                 } else {
-                    println("DEBUG: FFmpeg failed with exit code: $exitCode, file exists: ${tempFile.exists()}, size: ${tempFile.length()}")
-                    createPlaceholderBitmap(timestamp, targetHeight)
+                    println("DEBUG: FFmpeg failed - exit:$exitCode, exists:${tempFile.exists()}, size:${tempFile.length()}")
+                    return@withContext createPlaceholderBitmap(timestamp, targetHeight, "FFMPEG_FAILED:$exitCode")
                 }
             } catch (e: Exception) {
                 println("DEBUG: FFmpeg exception: ${e.message}")
-                createPlaceholderBitmap(timestamp, targetHeight)
+                e.printStackTrace()
+                return@withContext createPlaceholderBitmap(timestamp, targetHeight, "EXCEPTION:${e.message}")
             } finally {
-                // Clean up temp file
                 if (tempFile.exists()) {
                     tempFile.delete()
                 }
             }
         }
     }
-    
+
     private fun calculateWidth(targetHeight: Int): Int {
         return when (targetHeight) {
             480 -> 854
@@ -186,8 +258,8 @@ class FFmpegFrameDecoder(private val context: Context) {
             else -> (targetHeight * 16 / 9)
         }
     }
-    
-    private fun createPlaceholderBitmap(timestamp: Double, targetHeight: Int): Bitmap {
+
+    private fun createPlaceholderBitmap(timestamp: Double, targetHeight: Int, reason: String): Bitmap {
         val width = calculateWidth(targetHeight)
         return Bitmap.createBitmap(width, targetHeight, Bitmap.Config.ARGB_8888).apply {
             val colorValue = when ((timestamp.toInt() % 5)) {
@@ -199,17 +271,18 @@ class FFmpegFrameDecoder(private val context: Context) {
             }
             eraseColor(colorValue)
             
-            // Add debug text to placeholder
             val canvas = android.graphics.Canvas(this)
             val paint = android.graphics.Paint().apply {
                 color = Color.WHITE
-                textSize = 24f
+                textSize = 16f
                 textAlign = android.graphics.Paint.Align.CENTER
             }
-            canvas.drawText("FFmpeg: ${timestamp.toInt()}s", width / 2f, targetHeight / 2f, paint)
+            canvas.drawText("FFmpeg: ${timestamp.toInt()}s", width / 2f, targetHeight / 2f - 30, paint)
+            canvas.drawText("Reason: $reason", width / 2f, targetHeight / 2f, paint)
+            canvas.drawText("Path: ${currentVideoPath.take(30)}...", width / 2f, targetHeight / 2f + 30, paint)
         }
     }
-    
+
     suspend fun cleanup() {
         binaryManager.cleanup()
     }
@@ -805,23 +878,27 @@ fun PlayerOverlay(
             showVideoInfo = 0
         }
         
-        // Try multiple ways to get video path
-        currentVideoPath = MPVLib.getPropertyString("path") ?: ""
-        println("DEBUG: MPV path = '$currentVideoPath'")
+        // Enhanced video path detection
+        var detectedPath = MPVLib.getPropertyString("path") ?: ""
+        println("DEBUG: MPV path = '$detectedPath'")
         
-        if (currentVideoPath.isEmpty()) {
-            // Try alternative methods
-            currentVideoPath = intent?.dataString ?: ""
-            println("DEBUG: Intent data = '$currentVideoPath'")
+        if (detectedPath.isEmpty()) {
+            // Try intent data
+            val intentData = intent?.data
+            if (intentData != null) {
+                println("DEBUG: Intent URI: $intentData")
+                detectedPath = intentData.toString()
+            }
             
-            if (currentVideoPath.isEmpty()) {
-                // Try getting from working directory
-                currentVideoPath = MPVLib.getPropertyString("working-directory") ?: ""
-                println("DEBUG: Working directory = '$currentVideoPath'")
+            if (detectedPath.isEmpty()) {
+                detectedPath = MPVLib.getPropertyString("working-directory") ?: ""
+                println("DEBUG: Working directory = '$detectedPath'")
             }
         }
         
+        currentVideoPath = detectedPath
         println("DEBUG: Final video path = '$currentVideoPath'")
+        
         scheduleSeekbarHide()
     }
     
