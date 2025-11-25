@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -385,6 +386,9 @@ fun ScrubberFrameStrip(
     val scrollState = rememberScrollState()
     val density = LocalDensity.current
     
+    // Track preview position locally
+    var localPreviewPosition by remember { mutableStateOf(0f) }
+    
     Box(modifier = modifier.height(80.dp)) {
         // Frame strip
         Row(
@@ -399,7 +403,7 @@ fun ScrubberFrameStrip(
                     bitmap = bitmap.asImageBitmap(),
                     contentDescription = "Scrubber frame ${index + 1}",
                     modifier = Modifier
-                        .size(frameWidth, 60.dp)
+                        .size(width = frameWidth, height = 60.dp)
                         .clickable {
                             val position = (index.toFloat() / frameCount) * duration
                             onSeek(position)
@@ -417,15 +421,17 @@ fun ScrubberFrameStrip(
                     detectDragGestures(
                         onDragStart = { offset ->
                             val position = (offset.x / size.width).coerceIn(0f, 1f) * duration
+                            localPreviewPosition = position
                             onPreview(position, true)
                         },
                         onDrag = { change, _ ->
                             val position = (change.position.x / size.width).coerceIn(0f, 1f) * duration
+                            localPreviewPosition = position
                             onPreview(position, true)
                         },
                         onDragEnd = {
-                            onPreview(previewPosition, false)
-                            onSeek(previewPosition)
+                            onPreview(localPreviewPosition, false)
+                            onSeek(localPreviewPosition)
                         }
                     )
                 }
@@ -434,10 +440,11 @@ fun ScrubberFrameStrip(
         // Current position indicator
         if (duration > 0) {
             val indicatorPosition = (currentPosition / duration).coerceIn(0f, 1f)
-            val positionPx = with(density) { (indicatorPosition * size.width).toDp() - 1.dp }
+            val positionPx = indicatorPosition * size.width
+            val positionDp = with(density) { positionPx.toDp() - 1.dp }
             Box(
                 modifier = Modifier
-                    .offset(x = positionPx)
+                    .offset(x = positionDp)
                     .width(2.dp)
                     .fillMaxHeight()
                     .background(Color.Red)
@@ -1147,6 +1154,3 @@ private fun getBestAvailableFileName(context: Context): String {
     if (mpvPath != null && mpvPath.isNotBlank()) return mpvPath.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "Video" }
     return "Video"
 }
-
-// Add missing import for CardDefaults
-import androidx.compose.material3.CardDefaults
