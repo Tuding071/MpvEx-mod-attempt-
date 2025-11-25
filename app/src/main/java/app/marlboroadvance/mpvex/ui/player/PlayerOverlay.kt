@@ -28,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,7 +70,6 @@ import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.withContext
-import androidx.compose.runtime.DisposableEffect
 
 // ===== FFMPEG INTEGRATION =====
 
@@ -92,7 +92,9 @@ class FFmpegBinaryManager(private val context: Context) {
                         }
                     }
                     ffmpegFile.setExecutable(true)
+                    println("DEBUG: FFmpeg binary extracted to: ${ffmpegFile.absolutePath}")
                 } catch (e: Exception) {
+                    println("DEBUG: Failed to extract FFmpeg: ${e.message}")
                     throw IOException("Failed to extract FFmpeg from assets", e)
                 }
             }
@@ -101,6 +103,7 @@ class FFmpegBinaryManager(private val context: Context) {
                 ffmpegFile.setExecutable(true)
             }
             
+            println("DEBUG: FFmpeg binary ready: ${ffmpegFile.absolutePath}")
             ffmpegFile
         }
     }
@@ -110,32 +113,13 @@ class FFmpegBinaryManager(private val context: Context) {
             val ffmpegFile = File(context.cacheDir, FFMPEG_CACHE_NAME)
             if (ffmpegFile.exists()) {
                 ffmpegFile.delete()
+                println("DEBUG: FFmpeg binary cleaned up")
             }
         }
     }
 }
 
-// FFmpeg Command Builder
-object FFmpegCommands {
-    fun extractSingleFrame(
-        inputPath: String,
-        timestampMs: Long,
-        width: Int,
-        height: Int
-    ): Array<String> {
-        return arrayOf(
-            "-i", inputPath,
-            "-ss", "${timestampMs / 1000.0}",
-            "-vf", "scale=$width:$height",
-            "-vframes", "1",
-            "-f", "image2pipe",
-            "-c:v", "mjpeg",
-            "-"
-        )
-    }
-}
-
-// FFmpeg Frame Decoder
+// FFmpeg Frame Decoder - IMPROVED VERSION
 class FFmpegFrameDecoder(private val context: Context) {
     private val binaryManager = FFmpegBinaryManager(context)
     private var ffmpegBinary: File? = null
@@ -144,36 +128,57 @@ class FFmpegFrameDecoder(private val context: Context) {
     suspend fun initialize(videoPath: String) {
         ffmpegBinary = binaryManager.ensureFFmpegAvailable()
         currentVideoPath = videoPath
+        println("DEBUG: FFmpeg initialized with video: $videoPath")
     }
     
     suspend fun decodeFrameAtTime(timestamp: Double, targetHeight: Int): Bitmap? {
         return withContext(Dispatchers.IO) {
             if (ffmpegBinary == null || currentVideoPath.isEmpty()) {
+                println("DEBUG: FFmpeg not initialized properly")
                 return@withContext createPlaceholderBitmap(timestamp, targetHeight)
             }
             
+            // Create temp output file instead of using pipe
+            val tempFile = File.createTempFile("frame_${timestamp.toInt()}", ".jpg", context.cacheDir)
+            
             try {
-                val command = FFmpegCommands.extractSingleFrame(
-                    currentVideoPath,
-                    (timestamp * 1000).toLong(),
-                    calculateWidth(targetHeight),
-                    targetHeight
+                val command = arrayOf(
+                    ffmpegBinary!!.absolutePath,
+                    "-i", currentVideoPath,
+                    "-ss", "${timestamp}",
+                    "-vf", "scale=${calculateWidth(targetHeight)}:${targetHeight}",
+                    "-vframes", "1",
+                    "-q:v", "2", // Quality setting
+                    "-y", // Overwrite output file
+                    tempFile.absolutePath
                 )
                 
-                val process = ProcessBuilder(listOf(ffmpegBinary!!.absolutePath) + command.toList()).start()
-                val inputStream = process.inputStream
-                val bitmap = BitmapFactory.decodeStream(inputStream)
-                process.waitFor()
+                println("DEBUG: Executing FFmpeg: ${command.joinToString(" ")}")
                 
-                bitmap ?: createPlaceholderBitmap(timestamp, targetHeight)
+                val process = ProcessBuilder(command).start()
+                val exitCode = process.waitFor()
+                
+                if (exitCode == 0 && tempFile.exists() && tempFile.length() > 0) {
+                    val bitmap = BitmapFactory.decodeFile(tempFile.absolutePath)
+                    println("DEBUG: Successfully decoded frame at $timestamp seconds")
+                    bitmap
+                } else {
+                    println("DEBUG: FFmpeg failed with exit code: $exitCode, file exists: ${tempFile.exists()}, size: ${tempFile.length()}")
+                    createPlaceholderBitmap(timestamp, targetHeight)
+                }
             } catch (e: Exception) {
+                println("DEBUG: FFmpeg exception: ${e.message}")
                 createPlaceholderBitmap(timestamp, targetHeight)
+            } finally {
+                // Clean up temp file
+                if (tempFile.exists()) {
+                    tempFile.delete()
+                }
             }
         }
     }
     
     private fun calculateWidth(targetHeight: Int): Int {
-        // Standard 16:9 aspect ratio for 480p
         return when (targetHeight) {
             480 -> 854
             96 -> 171
@@ -192,6 +197,15 @@ class FFmpegFrameDecoder(private val context: Context) {
                 else -> Color.MAGENTA
             }
             eraseColor(colorValue)
+            
+            // Add debug text to placeholder
+            val canvas = android.graphics.Canvas(this)
+            val paint = android.graphics.Paint().apply {
+                color = Color.WHITE
+                textSize = 24f
+                textAlign = android.graphics.Paint.Align.CENTER
+            }
+            canvas.drawText("FFmpeg: ${timestamp.toInt()}s", width / 2f, targetHeight / 2f, paint)
         }
     }
     
@@ -249,6 +263,7 @@ class PreviewManager(private val context: Context) {
     suspend fun initialize(videoPath: String) {
         currentVideoPath = videoPath
         frameDecoder.initialize(videoPath)
+        println("DEBUG: PreviewManager initialized with video: $videoPath")
     }
     
     // Scrubbing Window Methods
@@ -266,6 +281,8 @@ class PreviewManager(private val context: Context) {
     }
     
     private suspend fun generateScrubbingWindow(centerTime: Double, duration: Double) {
+        println("DEBUG: Generating scrubbing window around: $centerTime, duration: $duration")
+        
         scrubbingMutex.withLock {
             scrubbingWindow.clear()
             currentWindowCenter = centerTime
@@ -274,25 +291,26 @@ class PreviewManager(private val context: Context) {
         val windowStart = (centerTime - scrubbingWindowSize / 2).coerceAtLeast(0.0)
         val windowEnd = (centerTime + scrubbingWindowSize / 2).coerceAtMost(duration)
         
+        println("DEBUG: Window: $windowStart to $windowEnd")
+        
         var currentTime = windowStart
         val timeStep = 1.0 / scrubbingFPS
+        var frameCount = 0
         
         while (currentTime <= windowEnd && scrubbingDecoderJob?.isActive == true) {
+            println("DEBUG: Decoding frame at: $currentTime")
             val frame = frameDecoder.decodeFrameAtTime(currentTime, 480)
             frame?.let {
                 scrubbingMutex.withLock {
                     scrubbingWindow.add(ScrubbingFrame(currentTime, it))
-                    // Keep only recent frames if window moves
-                    if (scrubbingWindow.size > (scrubbingWindowSize * scrubbingFPS).toInt()) {
-                        scrubbingWindow.removeAll { frame ->
-                            abs(frame.timestamp - currentWindowCenter) > scrubbingWindowSize / 2
-                        }
-                    }
+                    frameCount++
                 }
             }
             currentTime += timeStep
-            delay(16) // ~60fps decoding rate
+            delay(50) // Increased delay to avoid overwhelming the system
         }
+        
+        println("DEBUG: Generated $frameCount frames for scrubbing window")
     }
     
     // Timeline Thumbnail Methods
@@ -308,12 +326,15 @@ class PreviewManager(private val context: Context) {
     }
     
     private suspend fun generateTimelineThumbnails(durationSeconds: Int) {
+        println("DEBUG: Generating timeline thumbnails for $durationSeconds seconds")
+        
         for (second in 0..durationSeconds) {
             if (thumbnailDecoderJob?.isActive != true) break
             
             // Skip if already generated
             if (timelineThumbnails.containsKey(second)) continue
             
+            println("DEBUG: Generating thumbnail for second: $second")
             val thumbnail = frameDecoder.decodeFrameAtTime(second.toDouble(), 96)
             thumbnail?.let {
                 timelineThumbnails[second] = TimelineThumbnail(second, it)
@@ -322,6 +343,7 @@ class PreviewManager(private val context: Context) {
             // Low priority - delay between generations
             delay(100)
         }
+        println("DEBUG: Timeline thumbnail generation completed")
     }
     
     fun clearScrubbingWindow() {
@@ -337,6 +359,7 @@ class PreviewManager(private val context: Context) {
         CoroutineScope(Dispatchers.IO).launch {
             frameDecoder.cleanup()
         }
+        println("DEBUG: PreviewManager cleaned up")
     }
 }
 
@@ -431,16 +454,24 @@ fun PlayerOverlay(
 
     // ===== INITIALIZE FFMPEG WITH VIDEO PATH =====
     LaunchedEffect(currentVideoPath) {
+        println("DEBUG: Current video path = '$currentVideoPath'")
         if (currentVideoPath.isNotEmpty()) {
+            println("DEBUG: Initializing FFmpeg with video path")
             previewManager.initialize(currentVideoPath)
+        } else {
+            println("DEBUG: No video path available!")
         }
     }
 
     // NEW: Initialize preview system when we have video duration and path
     LaunchedEffect(videoDuration, currentVideoPath) {
+        println("DEBUG: Video duration = $videoDuration, path = '$currentVideoPath'")
         if (videoDuration > 1.0 && currentVideoPath.isNotEmpty()) {
+            println("DEBUG: Starting preview generation")
             previewManager.startTimelineThumbnailGeneration(videoDuration)
             previewManager.startScrubbingWindowGeneration(currentPosition, videoDuration)
+        } else {
+            println("DEBUG: Conditions not met for preview generation")
         }
     }
 
@@ -773,8 +804,23 @@ fun PlayerOverlay(
             showVideoInfo = 0
         }
         
-        // Get current video path for FFmpeg
+        // Try multiple ways to get video path
         currentVideoPath = MPVLib.getPropertyString("path") ?: ""
+        println("DEBUG: MPV path = '$currentVideoPath'")
+        
+        if (currentVideoPath.isEmpty()) {
+            // Try alternative methods
+            currentVideoPath = intent?.dataString ?: ""
+            println("DEBUG: Intent data = '$currentVideoPath'")
+            
+            if (currentVideoPath.isEmpty()) {
+                // Try getting from working directory
+                currentVideoPath = MPVLib.getPropertyString("working-directory") ?: ""
+                println("DEBUG: Working directory = '$currentVideoPath'")
+            }
+        }
+        
+        println("DEBUG: Final video path = '$currentVideoPath'")
         scheduleSeekbarHide()
     }
     
@@ -943,6 +989,29 @@ fun PlayerOverlay(
                     }
                 }
             }
+        }
+        
+        // DEBUG TEST BUTTON (Remove after testing)
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .offset(x = (-20).dp, y = 20.dp)
+                .background(ComposeColor.Red.copy(alpha = 0.7f))
+                .clickable {
+                    coroutineScope.launch {
+                        println("DEBUG: Manual FFmpeg test triggered")
+                        if (currentVideoPath.isNotEmpty()) {
+                            println("DEBUG: Testing FFmpeg with path: $currentVideoPath")
+                            val testFrame = FFmpegFrameDecoder(context).decodeFrameAtTime(10.0, 480)
+                            println("DEBUG: Test frame result: ${if (testFrame != null) "SUCCESS" else "FAILED"}")
+                        } else {
+                            println("DEBUG: No video path for test")
+                        }
+                    }
+                }
+                .padding(8.dp)
+        ) {
+            Text("TEST FFMPEG", color = ComposeColor.White, fontSize = 10.sp)
         }
         
         // SCRUBBING PREVIEW OVERLAY
