@@ -403,7 +403,8 @@ fun ScrubberFrameStrip(
                     bitmap = bitmap.asImageBitmap(),
                     contentDescription = "Scrubber frame ${index + 1}",
                     modifier = Modifier
-                        .size(width = frameWidth, height = 60.dp)
+                        .width(frameWidth)
+                        .height(60.dp)
                         .clickable {
                             val position = (index.toFloat() / frameCount) * duration
                             onSeek(position)
