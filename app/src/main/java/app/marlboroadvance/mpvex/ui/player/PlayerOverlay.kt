@@ -84,32 +84,31 @@ fun PlayerOverlay(
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
-    // ADD: Seek direction for feedback
+    // Seek direction for feedback
     var seekDirection by remember { mutableStateOf("") } // "+" or "-" or ""
     
-    // REMOVED: lastSeekTime and seekDebounceMs
-    // ADD: Simple throttle control
+    // Simple throttle control
     var isSeekInProgress by remember { mutableStateOf(false) }
     val seekThrottleMs = 50L // Small delay between seek commands
     
-    // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
+    // Gesture states
     var touchStartTime by remember { mutableStateOf(0L) }
     var touchStartX by remember { mutableStateOf(0f) }
     var touchStartY by remember { mutableStateOf(0f) }
     var isTouching by remember { mutableStateOf(false) }
     var isLongTap by remember { mutableStateOf(false) }
     var isHorizontalSwipe by remember { mutableStateOf(false) }
-    var isVerticalSwipe by remember { mutableStateOf(false) } // ADD: Vertical swipe state
+    var isVerticalSwipe by remember { mutableStateOf(false) }
     var longTapJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    // THRESHOLDS
+    // Thresholds
     val longTapThreshold = 300L // ms
-    val horizontalSwipeThreshold = 30f // pixels - minimum horizontal movement to trigger seeking
-    val verticalSwipeThreshold = 40f // pixels - minimum vertical movement to trigger quick seek
-    val maxVerticalMovement = 50f // pixels - maximum vertical movement allowed for horizontal swipe
-    val maxHorizontalMovement = 50f // pixels - maximum horizontal movement allowed for vertical swipe
+    val horizontalSwipeThreshold = 30f // pixels
+    val verticalSwipeThreshold = 40f // pixels
+    val maxVerticalMovement = 50f // pixels
+    val maxHorizontalMovement = 50f // pixels
     
-    // ADD: Quick seek amount in seconds
+    // Quick seek amount in seconds
     val quickSeekAmount = 5
     
     var showVideoInfo by remember { mutableStateOf(0) }
@@ -124,7 +123,7 @@ fun PlayerOverlay(
     var playbackFeedbackText by remember { mutableStateOf("") }
     var playbackFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    // ADD: Quick seek feedback
+    // Quick seek feedback
     var showQuickSeekFeedback by remember { mutableStateOf(false) }
     var quickSeekFeedbackText by remember { mutableStateOf("") }
     var quickSeekFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -133,28 +132,89 @@ fun PlayerOverlay(
     var currentVolume by remember { mutableStateOf(viewModel.currentVolume.value) }
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
+    // AUDIO PREVIEW SYSTEM - Enabled by default
+    var audioPreviewEnabled by remember { mutableStateOf(true) } // Enabled by default
+    var lastAudioPreviewTime by remember { mutableStateOf(0L) }
+    var audioPreviewJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val audioPreviewCooldownMs = 300L // Minimum 300ms between previews
+    val audioPreviewDurationMs = 250L // Play audio for 250ms
+    
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // UPDATED: performRealTimeSeek with throttle
+    // Function to play smart audio preview
+    fun playSmartAudioPreviewAt(position: Double) {
+        if (!audioPreviewEnabled) return
+        
+        val now = System.currentTimeMillis()
+        
+        // Check cooldown - prevent too frequent previews
+        if (now - lastAudioPreviewTime < audioPreviewCooldownMs) {
+            return // Skip this preview, too soon after last one
+        }
+        
+        // Cancel any ongoing preview
+        audioPreviewJob?.cancel()
+        
+        // Store current playback state
+        val wasPaused = MPVLib.getPropertyBoolean("pause") ?: true
+        val currentSpeed = MPVLib.getPropertyDouble("speed") ?: 1.0
+        
+        // Play audio preview
+        audioPreviewJob = coroutineScope.launch {
+            try {
+                // 1. Seek to exact position
+                MPVLib.command("seek", position.toString(), "absolute", "exact")
+                
+                // 2. Temporarily unpause and play at normal speed
+                MPVLib.setPropertyBoolean("pause", false)
+                MPVLib.setPropertyDouble("speed", 1.0)
+                
+                // 3. Play for short duration
+                delay(audioPreviewDurationMs)
+                
+                // 4. Restore original state
+                MPVLib.setPropertyBoolean("pause", wasPaused)
+                MPVLib.setPropertyDouble("speed", currentSpeed)
+                
+                // 5. If we were paused, seek back to exact frame
+                if (wasPaused) {
+                    delay(50) // Small delay for clean transition
+                    MPVLib.command("seek", position.toString(), "absolute", "exact")
+                }
+                
+            } catch (e: Exception) {
+                // Silently fail - audio preview is non-critical
+            }
+        }
+        
+        lastAudioPreviewTime = now
+    }
+    
+    // Clean up audio preview
+    fun cleanupAudioPreview() {
+        audioPreviewJob?.cancel()
+        audioPreviewJob = null
+    }
+    
+    // performRealTimeSeek with throttle
     fun performRealTimeSeek(targetPosition: Double) {
-        if (isSeekInProgress) return // Skip if we're already processing a seek
+        if (isSeekInProgress) return
         
         isSeekInProgress = true
         MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
         
-        // Reset after throttle period
         coroutineScope.launch {
             delay(seekThrottleMs)
             isSeekInProgress = false
         }
     }
     
-    // NEW: Function to get fresh position from MPV
+    // Function to get fresh position from MPV
     fun getFreshPosition(): Float {
         return (MPVLib.getPropertyDouble("time-pos") ?: 0.0).toFloat()
     }
     
-    // ADD: Quick seek function
+    // Quick seek function
     fun performQuickSeek(seconds: Int) {
         val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
@@ -269,9 +329,8 @@ fun PlayerOverlay(
         }
     }
     
-    // UPDATED: checkForHorizontalSwipe to also check for vertical swipes
     fun checkForSwipeDirection(currentX: Float, currentY: Float): String {
-        if (isHorizontalSwipe || isVerticalSwipe || isLongTap) return "" // Already determined or long tap active
+        if (isHorizontalSwipe || isVerticalSwipe || isLongTap) return ""
         
         val deltaX = kotlin.math.abs(currentX - touchStartX)
         val deltaY = kotlin.math.abs(currentY - touchStartY)
@@ -297,18 +356,15 @@ fun PlayerOverlay(
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
-        // REMOVED: lastSeekTime = 0L
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
         }
     }
     
-    // ADD: Start vertical swipe detection
     fun startVerticalSwipe(startY: Float) {
         isVerticalSwipe = true
         cancelAutoHide()
-        // Determine direction based on initial movement
         val currentY = startY
         val deltaY = currentY - touchStartY
         
@@ -323,7 +379,7 @@ fun PlayerOverlay(
         }
     }
     
-    // UPDATED: handleHorizontalSeeking without debouncing
+    // UPDATED: handleHorizontalSeeking with audio preview
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
@@ -334,14 +390,20 @@ fun PlayerOverlay(
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
-        // UPDATE: Set seek direction based on movement
-        seekDirection = if (deltaX > 0) "+" else "-"
+        // SMART AUDIO PREVIEW LOGIC:
+        val isSlowMovement = kotlin.math.abs(deltaX) < 50f // Pixels
+        val isHoldingStill = System.currentTimeMillis() - touchStartTime > 500L
         
-        // ALWAYS update UI instantly
+        if (audioPreviewEnabled && (isSlowMovement || isHoldingStill)) {
+            playSmartAudioPreviewAt(clampedPosition)
+        }
+        
+        // Update UI
+        seekDirection = if (deltaX > 0) "+" else "-"
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
         
-        // Send seek command with throttle
+        // Send seek command
         performRealTimeSeek(clampedPosition)
     }
     
@@ -349,6 +411,9 @@ fun PlayerOverlay(
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
             performRealTimeSeek(currentPos)
+            
+            // Clean up audio preview
+            cleanupAudioPreview()
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -362,12 +427,11 @@ fun PlayerOverlay(
             seekStartX = 0f
             seekStartPosition = 0.0
             wasPlayingBeforeSeek = false
-            seekDirection = "" // Reset direction
+            seekDirection = ""
             scheduleSeekbarHide()
         }
     }
     
-    // ADD: End vertical swipe
     fun endVerticalSwipe() {
         isVerticalSwipe = false
         scheduleSeekbarHide()
@@ -383,6 +447,7 @@ fun PlayerOverlay(
             isLongTap = false
             isSpeedingUp = false
             MPVLib.setPropertyDouble("speed", 1.0)
+            cleanupAudioPreview()
         } else if (isHorizontalSwipe) {
             // Horizontal swipe ended
             endHorizontalSeeking()
@@ -399,6 +464,58 @@ fun PlayerOverlay(
         isHorizontalSwipe = false
         isVerticalSwipe = false
         isLongTap = false
+    }
+    
+    // UPDATED: handleProgressBarDrag with audio preview
+    fun handleProgressBarDrag(newPosition: Float) {
+        cancelAutoHide()
+        if (!isSeeking) {
+            isSeeking = true
+            wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
+            showSeekTime = true
+            if (wasPlayingBeforeSeek) {
+                MPVLib.setPropertyBoolean("pause", true)
+            }
+        }
+        isDragging = true
+        val oldPosition = seekbarPosition
+        seekbarPosition = newPosition
+        
+        // Update seek direction
+        seekDirection = if (newPosition > oldPosition) "+" else "-"
+        
+        val targetPosition = newPosition.toDouble()
+        
+        // Progress bar audio preview - only on significant changes
+        val positionChange = kotlin.math.abs(newPosition - oldPosition)
+        if (audioPreviewEnabled && positionChange > 2.0f) { // More than 2 seconds change
+            playSmartAudioPreviewAt(targetPosition)
+        }
+        
+        // Update UI
+        seekTargetTime = formatTimeSimple(targetPosition)
+        currentTime = formatTimeSimple(targetPosition)
+        
+        // Send seek command
+        performRealTimeSeek(targetPosition)
+    }
+    
+    // UPDATED: handleDragFinished with audio cleanup
+    fun handleDragFinished() {
+        isDragging = false
+        cleanupAudioPreview()
+        
+        if (wasPlayingBeforeSeek) {
+            coroutineScope.launch {
+                delay(100)
+                MPVLib.setPropertyBoolean("pause", false)
+            }
+        }
+        isSeeking = false
+        showSeekTime = false
+        wasPlayingBeforeSeek = false
+        seekDirection = ""
+        scheduleSeekbarHide()
     }
     
     LaunchedEffect(Unit) {
@@ -491,50 +608,6 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // UPDATED: handleProgressBarDrag with movement threshold and direction
-    fun handleProgressBarDrag(newPosition: Float) {
-        cancelAutoHide()
-        if (!isSeeking) {
-            isSeeking = true
-            wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
-            showSeekTime = true
-            // REMOVED: lastSeekTime = 0L
-            if (wasPlayingBeforeSeek) {
-                MPVLib.setPropertyBoolean("pause", true)
-            }
-        }
-        isDragging = true
-        val oldPosition = seekbarPosition
-        seekbarPosition = newPosition
-        
-        // UPDATE: Set seek direction based on movement
-        seekDirection = if (newPosition > oldPosition) "+" else "-"
-        
-        val targetPosition = newPosition.toDouble()
-        
-        // ALWAYS update UI instantly
-        seekTargetTime = formatTimeSimple(targetPosition)
-        currentTime = formatTimeSimple(targetPosition)
-        
-        // Send seek command with throttle
-        performRealTimeSeek(targetPosition)
-    }
-    
-    fun handleDragFinished() {
-        isDragging = false
-        if (wasPlayingBeforeSeek) {
-            coroutineScope.launch {
-                delay(100)
-                MPVLib.setPropertyBoolean("pause", false)
-            }
-        }
-        isSeeking = false
-        showSeekTime = false
-        wasPlayingBeforeSeek = false
-        seekDirection = "" // Reset direction
-        scheduleSeekbarHide()
-    }
-    
     Box(modifier = modifier.fillMaxSize()) {
         // MAIN GESTURE AREA - Full screen divided into areas
         Box(modifier = Modifier.fillMaxSize()) {
@@ -572,7 +645,6 @@ fun PlayerOverlay(
                         .fillMaxWidth(0.9f)
                         .fillMaxHeight()
                         .align(Alignment.Center)
-                        // USE SINGLE pointerInteropFilter FOR ALL GESTURES TO AVOID CONFLICTS
                         .pointerInteropFilter { event ->
                             when (event.action) {
                                 MotionEvent.ACTION_DOWN -> {
@@ -583,7 +655,6 @@ fun PlayerOverlay(
                                 }
                                 MotionEvent.ACTION_MOVE -> {
                                     if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
-                                        // Check if this should become a horizontal or vertical swipe
                                         when (checkForSwipeDirection(event.x, event.y)) {
                                             "horizontal" -> {
                                                 startHorizontalSeeking(event.x)
@@ -596,7 +667,6 @@ fun PlayerOverlay(
                                         // Continue horizontal seeking
                                         handleHorizontalSeeking(event.x)
                                     }
-                                    // If it's a long tap or vertical swipe, ignore movement (allow slight finger movement during hold)
                                     true
                                 }
                                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -643,14 +713,14 @@ fun PlayerOverlay(
                             )
                         }
                     }
-                    Box(modifier = Modifier.fillMaxWidth().height(48.dp)) { // CHANGED: Increased height for better touch area
+                    Box(modifier = Modifier.fillMaxWidth().height(48.dp)) {
                         SimpleDraggableProgressBar(
                             position = seekbarPosition,
                             duration = seekbarDuration,
                             onValueChange = { handleProgressBarDrag(it) },
                             onValueChangeFinished = { handleDragFinished() },
                             getFreshPosition = { getFreshPosition() },
-                            modifier = Modifier.fillMaxSize().height(48.dp) // CHANGED: Increased height
+                            modifier = Modifier.fillMaxSize().height(48.dp)
                         )
                     }
                 }
@@ -683,13 +753,12 @@ fun PlayerOverlay(
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
-                showQuickSeekFeedback -> Text( // ADD: Quick seek feedback
+                showQuickSeekFeedback -> Text(
                     text = quickSeekFeedbackText,
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
                 showSeekTime -> Text(
-                    // UPDATED: Add direction indicator to seek time
                     text = if (seekDirection.isNotEmpty()) "$seekTargetTime $seekDirection" else seekTargetTime,
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
@@ -718,55 +787,47 @@ fun SimpleDraggableProgressBar(
     var hasPassedThreshold by remember { mutableStateOf(false) }
     var thresholdStartX by remember { mutableStateOf(0f) }
     
-    // Convert 25dp to pixels for the movement threshold
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
-    Box(modifier = modifier.height(48.dp)) { // CHANGED: Increased container height
-        // Progress bar background
+    Box(modifier = modifier.height(48.dp)) {
         Box(modifier = Modifier
             .fillMaxWidth()
             .height(4.dp)
             .align(Alignment.CenterStart)
             .background(Color.Gray.copy(alpha = 0.6f)))
         
-        // Progress bar fill
         Box(modifier = Modifier
             .fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f)
             .height(4.dp)
             .align(Alignment.CenterStart)
             .background(Color.White))
         
-        // CHANGED: Increased touch area to full 48dp height
         Box(modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp) // This makes the entire 48dp area draggable
+            .height(48.dp)
             .align(Alignment.CenterStart)
             .pointerInput(Unit) {
                 detectDragGestures(
                     onDragStart = { offset ->
                         dragStartX = offset.x
-                        // GET FRESH POSITION IMMEDIATELY WHEN DRAG STARTS
                         dragStartPosition = getFreshPosition()
-                        hasPassedThreshold = false // Reset threshold flag
-                        thresholdStartX = 0f // Reset threshold start position
+                        hasPassedThreshold = false
+                        thresholdStartX = 0f
                     },
                     onDrag = { change, dragAmount ->
                         change.consume()
                         val currentX = change.position.x
                         val totalMovementX = abs(currentX - dragStartX)
                         
-                        // Check if we've passed the movement threshold
                         if (!hasPassedThreshold) {
                             if (totalMovementX > movementThresholdPx) {
                                 hasPassedThreshold = true
-                                thresholdStartX = currentX // NEW: Store position where threshold was passed
+                                thresholdStartX = currentX
                             } else {
-                                // Haven't passed threshold yet, don't seek
                                 return@detectDragGestures
                             }
                         }
                         
-                        // Calculate delta from the threshold start position, not the original drag start
                         val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
                         val deltaX = currentX - effectiveStartX
                         val deltaPosition = (deltaX / size.width) * duration
@@ -774,8 +835,8 @@ fun SimpleDraggableProgressBar(
                         onValueChange(newPosition)
                     },
                     onDragEnd = { 
-                        hasPassedThreshold = false // Reset for next drag
-                        thresholdStartX = 0f // Reset threshold start
+                        hasPassedThreshold = false
+                        thresholdStartX = 0f
                         onValueChangeFinished() 
                     }
                 )
