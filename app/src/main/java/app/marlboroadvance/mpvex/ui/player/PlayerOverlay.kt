@@ -136,8 +136,8 @@ fun PlayerOverlay(
     var audioPreviewEnabled by remember { mutableStateOf(true) } // Enabled by default
     var lastAudioPreviewTime by remember { mutableStateOf(0L) }
     var audioPreviewJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    val audioPreviewCooldownMs = 300L // Minimum 300ms between previews
-    val audioPreviewDurationMs = 250L // Play audio for 250ms
+    val audioPreviewCooldownMs = 50L // Minimum 300ms between previews
+    val audioPreviewDurationMs = 40L // Play audio for 250ms
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
