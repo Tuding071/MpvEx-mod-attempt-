@@ -630,7 +630,8 @@ class ThumbnailCache {
                 1 -> android.graphics.Color.GREEN
                 2 -> android.graphics.Color.BLUE
                 else -> android.graphics.Color.YELLOW
-            }
+            },
+            timestamp = time  // Fixed: Added timestamp parameter
         )
     }
     
@@ -640,13 +641,14 @@ class ThumbnailCache {
             bitmap = createColorBitmap(
                 width = thumbnailWidth,
                 height = thumbnailHeight,
-                color = android.graphics.Color.DKGRAY
+                color = android.graphics.Color.DKGRAY,
+                timestamp = time  // Fixed: Added timestamp parameter
             ),
             state = ThumbnailState.GENERATING
         )
     }
     
-    private fun createColorBitmap(width: Int, height: Int, color: Int): Bitmap {
+    private fun createColorBitmap(width: Int, height: Int, color: Int, timestamp: Double): Bitmap {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = android.graphics.Canvas(bitmap)
         canvas.drawColor(color)
@@ -656,7 +658,7 @@ class ThumbnailCache {
             this.color = android.graphics.Color.WHITE
             textSize = 12f
         }
-        val timeText = formatTimeSimple(time)
+        val timeText = formatTimeSimple(timestamp)  // Fixed: Using the timestamp parameter
         canvas.drawText(timeText, 10f, 20f, paint)
         
         return bitmap
