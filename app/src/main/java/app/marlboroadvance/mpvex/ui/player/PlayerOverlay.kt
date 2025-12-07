@@ -192,6 +192,17 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
+    // Function to show playback feedback
+    fun showPlaybackFeedbackFunc(text: String) {
+        playbackFeedbackJob?.cancel()
+        showPlaybackFeedback = true
+        playbackFeedbackText = text
+        playbackFeedbackJob = coroutineScope.launch {
+            delay(1000)
+            showPlaybackFeedback = false
+        }
+    }
+    
     // NEW: Function to apply resolution scaling
     fun applyResolution(resolution: VideoResolution) {
         currentResolution = resolution.name
@@ -204,12 +215,10 @@ fun PlayerOverlay(
             MPVLib.command("vf", "add", resolution.command)
         }
         
-        // Show feedback
-        showPlaybackFeedback("Resolution: ${resolution.name}")
-        
+        // REMOVED: Feedback for resolution changes
         // Auto-hide menu after selection
         coroutineScope.launch {
-            delay(1000)
+            delay(500)
             showResolutionMenu = false
         }
     }
@@ -239,12 +248,10 @@ fun PlayerOverlay(
             MPVLib.command("vf", "add", filter.command)
         }
         
-        // Show feedback
-        showPlaybackFeedback("Filter: ${filter.name}")
-        
+        // REMOVED: Feedback for filter changes
         // Auto-hide menu after selection
         coroutineScope.launch {
-            delay(1000)
+            delay(500)
             showFiltersMenu = false
         }
     }
@@ -260,10 +267,7 @@ fun PlayerOverlay(
         
         // Update resolution name to show original resolution
         if (width > 0 && height > 0) {
-            availableResolutions.firstOrNull { it.name == "Original" }?.let { originalRes ->
-                // Create a dynamic name like "Original (1920x1080)"
-                currentResolution = "Original (${width}x${height})"
-            }
+            currentResolution = "Original (${width}x${height})"
         }
     }
     
@@ -355,16 +359,6 @@ fun PlayerOverlay(
         scheduleSeekbarHide()
     }
     
-    fun showPlaybackFeedback(text: String) {
-        playbackFeedbackJob?.cancel()
-        showPlaybackFeedback = true
-        playbackFeedbackText = text
-        playbackFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showPlaybackFeedback = false
-        }
-    }
-    
     fun handleTap() {
         val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
         if (currentPaused) {
@@ -374,10 +368,10 @@ fun PlayerOverlay(
                 delay(100)
                 MPVLib.setPropertyBoolean("pause", false)
             }
-            showPlaybackFeedback("Resume")
+            showPlaybackFeedbackFunc("Resume")
         } else {
             MPVLib.setPropertyBoolean("pause", true)
-            showPlaybackFeedback("Pause")
+            showPlaybackFeedbackFunc("Pause")
         }
         if (showSeekbar) {
             showSeekbar = false
