@@ -1,23 +1,27 @@
 package app.marlboroadvance.mpvex.ui.player
 
 import android.view.MotionEvent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material3.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -26,20 +30,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
+import dev.vivvvek.seeker.Seeker
+import dev.vivvvek.seeker.SeekerDefaults
+import dev.vivvvek.seeker.Segment
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.coroutines.delay
@@ -54,21 +56,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import android.content.Intent
 import android.net.Uri
 import kotlin.math.abs
-import java.text.SimpleDateFormat
-import java.util.*
-
-// Data class for history/logs entry
-data class VideoHistoryEntry(
-    val id: String = UUID.randomUUID().toString(),
-    val fileName: String,
-    val fullPath: String? = null,
-    val timestamp: Long = System.currentTimeMillis(),
-    val duration: Double? = null,
-    val lastPosition: Double? = null
-) {
-    val formattedTime: String
-        get() = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
-}
 
 @Composable
 fun PlayerOverlay(
@@ -146,64 +133,24 @@ fun PlayerOverlay(
     var currentVolume by remember { mutableStateOf(viewModel.currentVolume.value) }
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    // ADD: History/logs functionality
-    var showHistoryPopup by remember { mutableStateOf(false) }
-    var videoHistory by remember { mutableStateOf<List<VideoHistoryEntry>>(emptyList()) }
-    val maxHistorySize = 10
+    // ADD: Filename flash for recent apps feature
+    var showRecentAppsOverlay by remember { mutableStateOf(false) }
+    var isFlashInProgress by remember { mutableStateOf(false) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // Function to add entry to history
-    fun addToHistory(name: String, path: String? = null) {
-        val duration = MPVLib.getPropertyDouble("duration")
-        val currentPos = MPVLib.getPropertyDouble("time-pos")
+    // ADD: Function to flash filename when going to recent apps
+    fun flashFilenameForRecentApps() {
+        if (isFlashInProgress) return // Prevent multiple flashes
         
-        val newEntry = VideoHistoryEntry(
-            fileName = name,
-            fullPath = path,
-            duration = duration,
-            lastPosition = currentPos
-        )
+        isFlashInProgress = true
+        showRecentAppsOverlay = true
         
-        // Remove if already exists (to update timestamp)
-        val updatedHistory = (videoHistory.filter { it.fileName != name } + newEntry)
-            .sortedByDescending { it.timestamp }
-            .take(maxHistorySize)
-        
-        videoHistory = updatedHistory
-    }
-    
-    // Function to remove from history
-    fun removeFromHistory(id: String) {
-        videoHistory = videoHistory.filter { it.id != id }
-    }
-    
-    // Function to clear all history
-    fun clearHistory() {
-        videoHistory = emptyList()
-    }
-    
-    // Function to play from history
-    fun playFromHistory(entry: VideoHistoryEntry) {
-        entry.fullPath?.let { path ->
-            // Load the video
-            MPVLib.command("loadfile", path)
-            
-            // Seek to last position if available
-            entry.lastPosition?.let { position ->
-                if (position > 0) {
-                    coroutineScope.launch {
-                        delay(500) // Wait for video to load
-                        MPVLib.command("seek", position.toString(), "absolute", "exact")
-                    }
-                }
-            }
-            
-            // Add to history again with updated timestamp
-            addToHistory(entry.fileName, entry.fullPath)
-            
-            // Close popup
-            showHistoryPopup = false
+        coroutineScope.launch {
+            delay(2000) // Show for 2 seconds
+            showRecentAppsOverlay = false
+            delay(300) // Small cooldown
+            isFlashInProgress = false
         }
     }
     
@@ -494,11 +441,6 @@ fun PlayerOverlay(
             delay(4000)
             showVideoInfo = 0
         }
-        
-        // Add current file to history
-        val path = MPVLib.getPropertyString("path")
-        addToHistory(fileName, path)
-        
         scheduleSeekbarHide()
     }
     
@@ -508,6 +450,27 @@ fun PlayerOverlay(
             MPVLib.setPropertyDouble("speed", 2.0)
         } else {
             MPVLib.setPropertyDouble("speed", 1.0)
+        }
+    }
+    
+    // ADD: Listen for app going to background (home/recent apps)
+    LaunchedEffect(Unit) {
+        // This is a simple approach - in a real app you'd use LifecycleObserver
+        // But for simplicity, we'll use a coroutine that checks periodically
+        while (isActive) {
+            delay(100) // Check every 100ms
+            
+            // Check if app might be going to background
+            // (This is a simplified check - proper implementation needs Activity lifecycle)
+            val isPaused = MPVLib.getPropertyBoolean("pause") ?: false
+            
+            // If video was playing but suddenly paused without user interaction
+            // it might be because app went to background
+            if (isPaused && !isPausing && !isSeeking && !wasPlayingBeforeSeek) {
+                // This could indicate app went to background
+                // Show filename flash
+                flashFilenameForRecentApps()
+            }
         }
     }
     
@@ -613,6 +576,28 @@ fun PlayerOverlay(
     }
     
     Box(modifier = modifier.fillMaxSize()) {
+        // ADD: Recent apps overlay - This goes FIRST so it's on top
+        if (showRecentAppsOverlay) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.9f))
+            ) {
+                Text(
+                    text = fileName,
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center
+                    ),
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(horizontal = 20.dp)
+                )
+            }
+        }
+        
         // MAIN GESTURE AREA - Full screen divided into areas
         Box(modifier = Modifier.fillMaxSize()) {
             // TOP 5% - Ignore area
@@ -685,68 +670,18 @@ fun PlayerOverlay(
                         }
                 )
                 
-                // RIGHT 5% - Video info toggle AND history button
+                // RIGHT 5% - Video info toggle
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.05f)
                         .fillMaxHeight()
                         .align(Alignment.CenterEnd)
-                ) {
-                    Column(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.Center,
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        // History button
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null,
-                                    onClick = {
-                                        showHistoryPopup = !showHistoryPopup
-                                        if (showHistoryPopup) {
-                                            cancelAutoHide()
-                                        } else {
-                                            scheduleSeekbarHide()
-                                        }
-                                    }
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.History,
-                                contentDescription = "Video History",
-                                tint = Color.White.copy(alpha = 0.8f),
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
-                        // Video info toggle button (original functionality)
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null,
-                                    onClick = { toggleVideoInfo() }
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "i",
-                                style = TextStyle(
-                                    color = Color.White.copy(alpha = 0.8f),
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            )
-                        }
-                    }
-                }
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { toggleVideoInfo() }
+                        )
+                )
             }
         }
         
@@ -797,116 +732,12 @@ fun PlayerOverlay(
             )
         }
         
-        // HISTORY POPUP
-        if (showHistoryPopup) {
-            Popup(
-                onDismissRequest = { showHistoryPopup = false },
-                properties = PopupProperties(focusable = true)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.5f))
-                        .clickable { showHistoryPopup = false }
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .offset(x = (-60).dp, y = 60.dp)
-                            .width(300.dp)
-                            .height(400.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color.DarkGray.copy(alpha = 0.95f))
-                            .padding(16.dp)
-                    ) {
-                        Column(modifier = Modifier.fillMaxSize()) {
-                            // Header
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "Recent Videos",
-                                    style = TextStyle(
-                                        color = Color.White,
-                                        fontSize = 18.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                )
-                                
-                                Row {
-                                    // Clear button
-                                    if (videoHistory.isNotEmpty()) {
-                                        TextButton(
-                                            onClick = { clearHistory() },
-                                            modifier = Modifier.padding(end = 8.dp)
-                                        ) {
-                                            Text(
-                                                text = "Clear",
-                                                style = TextStyle(
-                                                    color = Color.LightGray,
-                                                    fontSize = 12.sp
-                                                )
-                                            )
-                                        }
-                                    }
-                                    
-                                    // Close button
-                                    IconButton(
-                                        onClick = { showHistoryPopup = false },
-                                        modifier = Modifier.size(24.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Close,
-                                            contentDescription = "Close",
-                                            tint = Color.White
-                                        )
-                                    }
-                                }
-                            }
-                            
-                            Spacer(modifier = Modifier.height(16.dp))
-                            
-                            // History list
-                            if (videoHistory.isEmpty()) {
-                                Box(
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = "No history yet",
-                                        style = TextStyle(
-                                            color = Color.White.copy(alpha = 0.6f),
-                                            fontSize = 14.sp,
-                                            fontStyle = FontStyle.Italic
-                                        )
-                                    )
-                                }
-                            } else {
-                                LazyColumn(
-                                    modifier = Modifier.fillMaxSize(),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    items(videoHistory) { entry ->
-                                        HistoryItem(
-                                            entry = entry,
-                                            onPlayClick = { playFromHistory(entry) },
-                                            onDeleteClick = { removeFromHistory(entry.id) },
-                                            isCurrent = entry.fileName == fileName
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
         // FEEDBACK AREA
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
+                showRecentAppsOverlay -> {
+                    // Don't show other feedback when showing recent apps overlay
+                }
                 showVolumeFeedbackState -> Text(
                     text = "Volume: ${(currentVolume.toFloat() / viewModel.maxVolume.toFloat() * 100).toInt()}%",
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
@@ -933,100 +764,6 @@ fun PlayerOverlay(
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
-            }
-        }
-    }
-}
-
-@Composable
-fun HistoryItem(
-    entry: VideoHistoryEntry,
-    onPlayClick: () -> Unit,
-    onDeleteClick: () -> Unit,
-    isCurrent: Boolean = false
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isCurrent) Color.DarkGray else Color(0xFF2A2A2A)
-        ),
-        shape = RoundedCornerShape(8.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    text = entry.fileName,
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
-                    ),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        text = entry.formattedTime,
-                        style = TextStyle(
-                            color = Color.LightGray,
-                            fontSize = 12.sp
-                        )
-                    )
-                    
-                    entry.duration?.let { duration ->
-                        if (duration > 0) {
-                            Text(
-                                text = formatTimeSimple(duration),
-                                style = TextStyle(
-                                    color = Color.LightGray,
-                                    fontSize = 12.sp
-                                )
-                            )
-                        }
-                    }
-                }
-            }
-            
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // Play button
-                IconButton(
-                    onClick = onPlayClick,
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PlayArrow,
-                        contentDescription = "Play",
-                        tint = Color.White,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-                
-                // Delete button
-                IconButton(
-                    onClick = onDeleteClick,
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Delete",
-                        tint = Color.LightGray,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
             }
         }
     }
