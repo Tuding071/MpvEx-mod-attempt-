@@ -1,12 +1,9 @@
 package app.marlboroadvance.mpvex.ui.player
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.view.MotionEvent
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -18,8 +15,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
-import androidx.compose.runtime.snapshots.SnapshotStateList
-import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -41,8 +36,19 @@ import `is`.xyz.mpv.MPVLib
 import java.util.*
 import kotlin.math.*
 
+// Define Thumbnail and ThumbnailState classes at the top level
+data class Thumbnail(
+    val timestamp: Double, // in seconds
+    val bitmap: Bitmap?,
+    val state: ThumbnailState = ThumbnailState.LOADING
+)
+
+enum class ThumbnailState {
+    LOADING, READY, ERROR, GENERATING
+}
+
 @Composable
-fun PlayerOverlayWithThumbnailScrubbing(
+fun PlayerOverlay(
     viewModel: PlayerViewModel,
     modifier: Modifier = Modifier
 ) {
@@ -121,7 +127,9 @@ fun PlayerOverlayWithThumbnailScrubbing(
             activeThumbnailIndex = index
             
             // Ensure thumbnails are available around scrub position
-            thumbnailCache.ensureThumbnailsAround(scrubPosition)
+            coroutineScope.launch {
+                thumbnailCache.ensureThumbnailsAround(scrubPosition)
+            }
         }
     }
     
@@ -160,7 +168,9 @@ fun PlayerOverlayWithThumbnailScrubbing(
         thumbnailStripOffset = 0f
         
         // Ensure thumbnails are ready
-        thumbnailCache.ensureThumbnailsAround(scrubPosition)
+        coroutineScope.launch {
+            thumbnailCache.ensureThumbnailsAround(scrubPosition)
+        }
         
         showTimedFeedback("Scrubbing")
     }
@@ -177,7 +187,9 @@ fun PlayerOverlayWithThumbnailScrubbing(
         thumbnailStripOffset = deltaX
         
         // Get thumbnail for current position
-        thumbnailCache.getThumbnailAtTime(newPosition)
+        coroutineScope.launch {
+            thumbnailCache.getThumbnailAtTime(newPosition)
+        }
     }
     
     // End scrubbing
@@ -382,6 +394,7 @@ fun ThumbnailStrip(
     
     // Get thumbnails around current time
     val thumbnails = remember { mutableStateListOf<Thumbnail?>() }
+    val coroutineScope = rememberCoroutineScope()
     
     LaunchedEffect(currentTime, activeIndex) {
         val startTime = max(0.0, currentTime - windowSeconds)
@@ -391,7 +404,9 @@ fun ThumbnailStrip(
         for (i in 0 until totalThumbnails) {
             val time = startTime + (i.toDouble() / thumbnailsPerSecond)
             if (time <= endTime) {
-                newThumbnails.add(thumbnailCache.getThumbnailAtTime(time))
+                // Get thumbnail asynchronously
+                val thumbnail = thumbnailCache.getThumbnailAtTime(time)
+                newThumbnails.add(thumbnail)
             } else {
                 newThumbnails.add(null)
             }
@@ -442,7 +457,8 @@ fun ThumbnailItem(
                     ThumbnailState.READY -> Color.Transparent
                     ThumbnailState.LOADING -> Color.DarkGray
                     ThumbnailState.GENERATING -> Color.Gray
-                    else -> Color.Black
+                    ThumbnailState.ERROR -> Color.Red.copy(alpha = 0.3f)
+                    null -> Color.Black
                 }
             )
             .border(
@@ -451,7 +467,7 @@ fun ThumbnailItem(
             )
     ) {
         thumbnail?.bitmap?.asImageBitmap()?.let { imageBitmap ->
-            androidx.compose.foundation.Image(
+            Image(
                 bitmap = imageBitmap,
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize()
@@ -637,16 +653,13 @@ class ThumbnailCache {
             this.color = android.graphics.Color.WHITE
             textSize = 12f
         }
-        val timeText = formatTimeSimple(timeToIndex(index.toDouble()) / thumbnailsPerSecond.toDouble())
+        val timeText = formatTimeSimple(time)
         canvas.drawText(timeText, 10f, 20f, paint)
         
         return bitmap
     }
     
     fun clear() {
-        mutex.withLock {
-            cache.clear()
-        }
         generationJob?.cancel()
     }
 }
