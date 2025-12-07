@@ -133,24 +133,29 @@ fun PlayerOverlay(
     var currentVolume by remember { mutableStateOf(viewModel.currentVolume.value) }
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    // ADD: Filename flash for recent apps feature
-    var showRecentAppsOverlay by remember { mutableStateOf(false) }
-    var isFlashInProgress by remember { mutableStateOf(false) }
+    // ADD: Track if app is going to background
+    var isBackgroundTriggered by remember { mutableStateOf(false) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // ADD: Function to flash filename when going to recent apps
-    fun flashFilenameForRecentApps() {
-        if (isFlashInProgress) return // Prevent multiple flashes
-        
-        isFlashInProgress = true
-        showRecentAppsOverlay = true
-        
-        coroutineScope.launch {
-            delay(2000) // Show for 2 seconds
-            showRecentAppsOverlay = false
-            delay(300) // Small cooldown
-            isFlashInProgress = false
+    // ADD: Function to show filename (same as toggleVideoInfo but without toggle)
+    fun showFilenameTemporarily() {
+        if (showVideoInfo == 0) { // Only show if not already showing
+            showVideoInfo = 1
+            videoInfoJob?.cancel()
+            videoInfoJob = coroutineScope.launch {
+                delay(4000)
+                showVideoInfo = 0
+                isBackgroundTriggered = false
+            }
+        } else {
+            // If already showing, just reset the timeout
+            videoInfoJob?.cancel()
+            videoInfoJob = coroutineScope.launch {
+                delay(4000)
+                showVideoInfo = 0
+                isBackgroundTriggered = false
+            }
         }
     }
     
@@ -192,13 +197,25 @@ fun PlayerOverlay(
         MPVLib.command("seek", seconds.toString(), "relative", "exact")
     }
     
+    // MODIFIED: toggleVideoInfo to handle background trigger
     fun toggleVideoInfo() {
-        showVideoInfo = if (showVideoInfo == 0) 1 else 0
-        if (showVideoInfo != 0) {
+        if (isBackgroundTriggered) {
+            // If triggered by background, just reset the timeout
             videoInfoJob?.cancel()
             videoInfoJob = coroutineScope.launch {
                 delay(4000)
                 showVideoInfo = 0
+                isBackgroundTriggered = false
+            }
+        } else {
+            // Normal toggle behavior
+            showVideoInfo = if (showVideoInfo == 0) 1 else 0
+            if (showVideoInfo != 0) {
+                videoInfoJob?.cancel()
+                videoInfoJob = coroutineScope.launch {
+                    delay(4000)
+                    showVideoInfo = 0
+                }
             }
         }
     }
@@ -444,33 +461,44 @@ fun PlayerOverlay(
         scheduleSeekbarHide()
     }
     
+    // ADD: Detect when app goes to background
+    LaunchedEffect(Unit) {
+        var lastPausedState = MPVLib.getPropertyBoolean("pause") ?: false
+        var lastIsPausing = isPausing
+        var lastIsSeeking = isSeeking
+        var lastWasPlayingBeforeSeek = wasPlayingBeforeSeek
+        
+        while (isActive) {
+            delay(100) // Check every 100ms
+            
+            val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
+            
+            // Check if video was auto-paused without user interaction
+            val wasAutoPaused = (
+                !lastPausedState && currentPaused && 
+                !lastIsPausing && !lastIsSeeking && !lastWasPlayingBeforeSeek
+            )
+            
+            if (wasAutoPaused && !isBackgroundTriggered) {
+                // App likely went to background (home/recent apps pressed)
+                isBackgroundTriggered = true
+                showFilenameTemporarily()
+            }
+            
+            // Update last states for next check
+            lastPausedState = currentPaused
+            lastIsPausing = isPausing
+            lastIsSeeking = isSeeking
+            lastWasPlayingBeforeSeek = wasPlayingBeforeSeek
+        }
+    }
+    
     // Backup speed control
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
             MPVLib.setPropertyDouble("speed", 2.0)
         } else {
             MPVLib.setPropertyDouble("speed", 1.0)
-        }
-    }
-    
-    // ADD: Listen for app going to background (home/recent apps)
-    LaunchedEffect(Unit) {
-        // This is a simple approach - in a real app you'd use LifecycleObserver
-        // But for simplicity, we'll use a coroutine that checks periodically
-        while (isActive) {
-            delay(100) // Check every 100ms
-            
-            // Check if app might be going to background
-            // (This is a simplified check - proper implementation needs Activity lifecycle)
-            val isPaused = MPVLib.getPropertyBoolean("pause") ?: false
-            
-            // If video was playing but suddenly paused without user interaction
-            // it might be because app went to background
-            if (isPaused && !isPausing && !isSeeking && !wasPlayingBeforeSeek) {
-                // This could indicate app went to background
-                // Show filename flash
-                flashFilenameForRecentApps()
-            }
         }
     }
     
@@ -576,28 +604,6 @@ fun PlayerOverlay(
     }
     
     Box(modifier = modifier.fillMaxSize()) {
-        // ADD: Recent apps overlay - This goes FIRST so it's on top
-        if (showRecentAppsOverlay) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.9f))
-            ) {
-                Text(
-                    text = fileName,
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center
-                    ),
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .padding(horizontal = 20.dp)
-                )
-            }
-        }
-        
         // MAIN GESTURE AREA - Full screen divided into areas
         Box(modifier = Modifier.fillMaxSize()) {
             // TOP 5% - Ignore area
@@ -735,9 +741,6 @@ fun PlayerOverlay(
         // FEEDBACK AREA
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
-                showRecentAppsOverlay -> {
-                    // Don't show other feedback when showing recent apps overlay
-                }
                 showVolumeFeedbackState -> Text(
                     text = "Volume: ${(currentVolume.toFloat() / viewModel.maxVolume.toFloat() * 100).toInt()}%",
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
