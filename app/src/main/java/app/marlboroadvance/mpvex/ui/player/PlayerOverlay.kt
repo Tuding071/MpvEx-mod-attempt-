@@ -2,7 +2,9 @@ package app.marlboroadvance.mpvex.ui.player
 
 import android.graphics.Bitmap
 import android.view.MotionEvent
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -76,11 +78,6 @@ fun PlayerOverlay(
     var feedbackText by remember { mutableStateOf("") }
     var showVideoInfo by remember { mutableStateOf(0) }
     var videoTitle by remember { mutableStateOf("Video") }
-    
-    // Thumbnail strip dimensions
-    val thumbnailWidth = with(LocalDensity.current) { 100.dp.toPx() }
-    val thumbnailHeight = with(LocalDensity.current) { 56.dp.toPx() }
-    val thumbnailSpacing = with(LocalDensity.current) { 2.dp.toPx() }
     
     // Calculate pixels per second for scrubbing
     val screenWidth = LocalDensity.current.run { 1080.dp.toPx() } // Assume 1080p screen
@@ -296,22 +293,29 @@ fun PlayerOverlay(
                 )
             }
             
-            // Progress indicator
+            // Progress indicator - Fixed Canvas usage
             val progress = if (videoDuration > 0) (currentPosition / videoDuration).toFloat() else 0f
-            Canvas(
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(3.dp)
                     .align(Alignment.BottomStart)
             ) {
-                drawRect(
-                    color = Color.Gray.copy(alpha = 0.5f),
-                    size = Size(size.width, size.height)
-                )
-                drawRect(
-                    color = Color.White,
-                    size = Size(size.width * progress, size.height)
-                )
+                Canvas(
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    // Draw background
+                    drawRect(
+                        color = Color.Gray.copy(alpha = 0.5f),
+                        size = Size(size.width, size.height)
+                    )
+                    
+                    // Draw progress
+                    drawRect(
+                        color = Color.White,
+                        size = Size(size.width * progress, size.height)
+                    )
+                }
             }
         }
         
@@ -438,7 +442,6 @@ fun ThumbnailStrip(
                 .fillMaxHeight()
                 .width(2.dp)
                 .align(Alignment.Center)
-                .offset(x = with(LocalDensity.current) { offset.toDp() })
                 .background(Color.Red)
         )
     }
