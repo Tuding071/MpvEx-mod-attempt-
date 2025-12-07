@@ -1,891 +1,673 @@
 package app.marlboroadvance.mpvex.ui.player
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.view.MotionEvent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.ripple
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.vivvvek.seeker.Seeker
-import dev.vivvvek.seeker.SeekerDefaults
-import dev.vivvvek.seeker.Segment
-import kotlinx.collections.immutable.ImmutableList
-import kotlinx.collections.immutable.persistentListOf
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import `is`.xyz.mpv.MPVLib
-import `is`.xyz.mpv.Utils
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.ui.input.pointer.pointerInput
-import android.content.Intent
-import android.net.Uri
-import kotlin.math.abs
+import java.util.*
+import kotlin.math.*
 
 @Composable
-fun PlayerOverlay(
+fun PlayerOverlayWithThumbnailScrubbing(
     viewModel: PlayerViewModel,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    
+    // Core playback states
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
-    var seekTargetTime by remember { mutableStateOf("00:00") }
-    var showSeekTime by remember { mutableStateOf(false) }
-    var isSpeedingUp by remember { mutableStateOf(false) }
-    var pendingPauseResume by remember { mutableStateOf(false) }
-    var isPausing by remember { mutableStateOf(false) }
-    var showSeekbar by remember { mutableStateOf(true) }
-    
+    var isPlaying by remember { mutableStateOf(false) }
     var currentPosition by remember { mutableStateOf(0.0) }
     var videoDuration by remember { mutableStateOf(1.0) }
-    var seekbarPosition by remember { mutableStateOf(0f) }
-    var seekbarDuration by remember { mutableStateOf(1f) }
     
-    var isDragging by remember { mutableStateOf(false) }
+    // Thumbnail system states
+    val thumbnailCache = remember { ThumbnailCache() }
+    var scrubPosition by remember { mutableStateOf(0.0) }
+    var isScrubbing by remember { mutableStateOf(false) }
+    var wasPlayingBeforeScrub by remember { mutableStateOf(false) }
+    var showThumbnailStrip by remember { mutableStateOf(false) }
+    var thumbnailStripOffset by remember { mutableStateOf(0f) }
+    var activeThumbnailIndex by remember { mutableStateOf(0) }
     
-    var isSeeking by remember { mutableStateOf(false) }
-    var seekStartX by remember { mutableStateOf(0f) }
-    var seekStartPosition by remember { mutableStateOf(0.0) }
-    var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
-    
-    // ADD: Seek direction for feedback
-    var seekDirection by remember { mutableStateOf("") } // "+" or "-" or ""
-    
-    // REMOVED: lastSeekTime and seekDebounceMs
-    // ADD: Simple throttle control
-    var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 50L // Small delay between seek commands
-    
-    // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
-    var touchStartTime by remember { mutableStateOf(0L) }
-    var touchStartX by remember { mutableStateOf(0f) }
-    var touchStartY by remember { mutableStateOf(0f) }
-    var isTouching by remember { mutableStateOf(false) }
-    var isLongTap by remember { mutableStateOf(false) }
-    var isHorizontalSwipe by remember { mutableStateOf(false) }
-    var isVerticalSwipe by remember { mutableStateOf(false) } // ADD: Vertical swipe state
-    var longTapJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    
-    // THRESHOLDS
-    val longTapThreshold = 300L // ms
-    val horizontalSwipeThreshold = 30f // pixels - minimum horizontal movement to trigger seeking
-    val verticalSwipeThreshold = 40f // pixels - minimum vertical movement to trigger quick seek
-    val maxVerticalMovement = 50f // pixels - maximum vertical movement allowed for horizontal swipe
-    val maxHorizontalMovement = 50f // pixels - maximum horizontal movement allowed for vertical swipe
-    
-    // ADD: Quick seek amount in seconds
-    val quickSeekAmount = 5
-    
+    // UI feedback states
+    var showFeedback by remember { mutableStateOf(false) }
+    var feedbackText by remember { mutableStateOf("") }
     var showVideoInfo by remember { mutableStateOf(0) }
     var videoTitle by remember { mutableStateOf("Video") }
-    var fileName by remember { mutableStateOf("Video") }
-    var videoInfoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    var userInteracting by remember { mutableStateOf(false) }
-    var hideSeekbarJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    // Thumbnail strip dimensions
+    val thumbnailWidth = with(LocalDensity.current) { 100.dp.toPx() }
+    val thumbnailHeight = with(LocalDensity.current) { 56.dp.toPx() }
+    val thumbnailSpacing = with(LocalDensity.current) { 2.dp.toPx() }
     
-    var showPlaybackFeedback by remember { mutableStateOf(false) }
-    var playbackFeedbackText by remember { mutableStateOf("") }
-    var playbackFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    // Calculate pixels per second for scrubbing
+    val screenWidth = LocalDensity.current.run { 1080.dp.toPx() } // Assume 1080p screen
+    val pixelsPerSecond = screenWidth / 20.0f // 20-second window fills screen
     
-    // ADD: Quick seek feedback
-    var showQuickSeekFeedback by remember { mutableStateOf(false) }
-    var quickSeekFeedbackText by remember { mutableStateOf("") }
-    var quickSeekFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    
-    var showVolumeFeedbackState by remember { mutableStateOf(false) }
-    var currentVolume by remember { mutableStateOf(viewModel.currentVolume.value) }
-    var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    
-    // ADD: Track if app is going to background
-    var isBackgroundTriggered by remember { mutableStateOf(false) }
-    
-    val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
-    
-    // ADD: Function to show filename (same as toggleVideoInfo but without toggle)
-    fun showFilenameTemporarily() {
-        if (showVideoInfo == 0) { // Only show if not already showing
-            showVideoInfo = 1
-            videoInfoJob?.cancel()
-            videoInfoJob = coroutineScope.launch {
-                delay(4000)
-                showVideoInfo = 0
-                isBackgroundTriggered = false
-            }
-        } else {
-            // If already showing, just reset the timeout
-            videoInfoJob?.cancel()
-            videoInfoJob = coroutineScope.launch {
-                delay(4000)
-                showVideoInfo = 0
-                isBackgroundTriggered = false
-            }
+    // Initialize thumbnail cache
+    LaunchedEffect(videoDuration) {
+        if (videoDuration > 0) {
+            thumbnailCache.initialize(videoDuration)
+            // Start continuous thumbnail generation
+            thumbnailCache.startContinuousGeneration(coroutineScope, currentPosition)
         }
     }
     
-    // UPDATED: performRealTimeSeek with throttle
-    fun performRealTimeSeek(targetPosition: Double) {
-        if (isSeekInProgress) return // Skip if we're already processing a seek
-        
-        isSeekInProgress = true
-        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
-        
-        // Reset after throttle period
+    // Update current position and trigger thumbnail generation
+    LaunchedEffect(Unit) {
+        while (true) {
+            val pos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+            val dur = MPVLib.getPropertyDouble("duration") ?: 1.0
+            
+            currentPosition = pos
+            videoDuration = dur
+            currentTime = formatTime(pos)
+            totalTime = formatTime(dur)
+            
+            // Update playback state
+            isPlaying = MPVLib.getPropertyBoolean("pause") != true
+            
+            // Update thumbnail cache center
+            if (!isScrubbing) {
+                thumbnailCache.updateCenter(pos)
+                scrubPosition = pos
+            }
+            
+            delay(100) // Update 10 times per second
+        }
+    }
+    
+    // Handle scrub position changes
+    LaunchedEffect(scrubPosition) {
+        if (isScrubbing) {
+            // Update active thumbnail index
+            val index = thumbnailCache.timeToIndex(scrubPosition)
+            activeThumbnailIndex = index
+            
+            // Ensure thumbnails are available around scrub position
+            thumbnailCache.ensureThumbnailsAround(scrubPosition)
+        }
+    }
+    
+    // Function to show feedback
+    fun showTimedFeedback(text: String) {
+        feedbackText = text
+        showFeedback = true
         coroutineScope.launch {
-            delay(seekThrottleMs)
-            isSeekInProgress = false
+            delay(1500)
+            showFeedback = false
         }
     }
     
-    // NEW: Function to get fresh position from MPV
-    fun getFreshPosition(): Float {
-        return (MPVLib.getPropertyDouble("time-pos") ?: 0.0).toFloat()
-    }
-    
-    // ADD: Quick seek function
-    fun performQuickSeek(seconds: Int) {
-        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-        val newPosition = (currentPos + seconds).coerceIn(0.0, duration)
-        
-        // Show feedback
-        quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
-        showQuickSeekFeedback = true
-        quickSeekFeedbackJob?.cancel()
-        quickSeekFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showQuickSeekFeedback = false
-        }
-        
-        // Perform seek
-        MPVLib.command("seek", seconds.toString(), "relative", "exact")
-    }
-    
-    // MODIFIED: toggleVideoInfo to handle background trigger
-    fun toggleVideoInfo() {
-        if (isBackgroundTriggered) {
-            // If triggered by background, just reset the timeout
-            videoInfoJob?.cancel()
-            videoInfoJob = coroutineScope.launch {
-                delay(4000)
-                showVideoInfo = 0
-                isBackgroundTriggered = false
-            }
-        } else {
-            // Normal toggle behavior
-            showVideoInfo = if (showVideoInfo == 0) 1 else 0
-            if (showVideoInfo != 0) {
-                videoInfoJob?.cancel()
-                videoInfoJob = coroutineScope.launch {
-                    delay(4000)
-                    showVideoInfo = 0
-                }
-            }
-        }
-    }
-    
-    val showVolumeFeedback: (Int) -> Unit = { volume ->
-        volumeFeedbackJob?.cancel()
-        showVolumeFeedbackState = true
-        volumeFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showVolumeFeedbackState = false
-        }
-    }
-    
-    LaunchedEffect(viewModel.currentVolume) {
-        viewModel.currentVolume.collect { volume ->
-            currentVolume = volume
-            showVolumeFeedback(volume)
-        }
-    }
-    
-    fun scheduleSeekbarHide() {
-        if (userInteracting) return
-        hideSeekbarJob?.cancel()
-        hideSeekbarJob = coroutineScope.launch {
-            delay(4000)
-            showSeekbar = false
-        }
-    }
-    
-    fun cancelAutoHide() {
-        userInteracting = true
-        hideSeekbarJob?.cancel()
-        coroutineScope.launch {
-            delay(100)
-            userInteracting = false
-        }
-    }
-    
-    fun showSeekbarWithTimeout() {
-        showSeekbar = true
-        scheduleSeekbarHide()
-    }
-    
-    fun showPlaybackFeedback(text: String) {
-        playbackFeedbackJob?.cancel()
-        showPlaybackFeedback = true
-        playbackFeedbackText = text
-        playbackFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showPlaybackFeedback = false
-        }
-    }
-    
+    // Handle tap gesture
     fun handleTap() {
-        val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
-        if (currentPaused) {
-            coroutineScope.launch {
-                val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-                MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
-                delay(100)
-                MPVLib.setPropertyBoolean("pause", false)
-            }
-            showPlaybackFeedback("Resume")
-        } else {
+        if (isPlaying) {
             MPVLib.setPropertyBoolean("pause", true)
-            showPlaybackFeedback("Pause")
-        }
-        if (showSeekbar) {
-            showSeekbar = false
+            showTimedFeedback("Paused")
         } else {
-            showSeekbarWithTimeout()
-        }
-        isPausing = !currentPaused
-    }
-    
-    fun startLongTapDetection() {
-        isTouching = true
-        touchStartTime = System.currentTimeMillis()
-        longTapJob?.cancel()
-        longTapJob = coroutineScope.launch {
-            delay(longTapThreshold)
-            if (isTouching && !isHorizontalSwipe && !isVerticalSwipe) {
-                isLongTap = true
-                isSpeedingUp = true
-                MPVLib.setPropertyDouble("speed", 2.0)
-            }
+            MPVLib.setPropertyBoolean("pause", false)
+            showTimedFeedback("Playing")
         }
     }
     
-    // UPDATED: checkForHorizontalSwipe to also check for vertical swipes
-    fun checkForSwipeDirection(currentX: Float, currentY: Float): String {
-        if (isHorizontalSwipe || isVerticalSwipe || isLongTap) return "" // Already determined or long tap active
+    // Start scrubbing
+    fun startScrubbing(startX: Float) {
+        wasPlayingBeforeScrub = isPlaying
+        isScrubbing = true
+        showThumbnailStrip = true
         
-        val deltaX = kotlin.math.abs(currentX - touchStartX)
-        val deltaY = kotlin.math.abs(currentY - touchStartY)
+        // Pause video for accurate scrubbing
+        MPVLib.setPropertyBoolean("pause", true)
         
-        // Check for horizontal swipe
-        if (deltaX > horizontalSwipeThreshold && deltaX > deltaY && deltaY < maxVerticalMovement) {
-            return "horizontal"
-        }
+        // Set initial scrub position
+        scrubPosition = currentPosition
+        thumbnailStripOffset = 0f
         
-        // Check for vertical swipe
-        if (deltaY > verticalSwipeThreshold && deltaY > deltaX && deltaX < maxHorizontalMovement) {
-            return "vertical"
-        }
+        // Ensure thumbnails are ready
+        thumbnailCache.ensureThumbnailsAround(scrubPosition)
         
-        return ""
+        showTimedFeedback("Scrubbing")
     }
     
-    fun startHorizontalSeeking(startX: Float) {
-        isHorizontalSwipe = true
-        cancelAutoHide()
-        seekStartX = startX
-        seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-        wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
-        isSeeking = true
-        showSeekTime = true
-        // REMOVED: lastSeekTime = 0L
+    // Update scrubbing
+    fun updateScrubbing(deltaX: Float) {
+        // Calculate time delta based on pixels per second
+        val timeDelta = deltaX / pixelsPerSecond
+        val newPosition = (scrubPosition + timeDelta).coerceIn(0.0, videoDuration)
         
-        if (wasPlayingBeforeSeek) {
-            MPVLib.setPropertyBoolean("pause", true)
-        }
-    }
-    
-    // ADD: Start vertical swipe detection
-    fun startVerticalSwipe(startY: Float) {
-        isVerticalSwipe = true
-        cancelAutoHide()
-        // Determine direction based on initial movement
-        val currentY = startY
-        val deltaY = currentY - touchStartY
+        scrubPosition = newPosition
         
-        if (deltaY < 0) {
-            // Swipe up - seek forward
-            seekDirection = "+"
-            performQuickSeek(quickSeekAmount)
-        } else {
-            // Swipe down - seek backward
-            seekDirection = "-"
-            performQuickSeek(-quickSeekAmount)
-        }
-    }
-    
-    // UPDATED: handleHorizontalSeeking without debouncing
-    fun handleHorizontalSeeking(currentX: Float) {
-        if (!isSeeking) return
+        // Update strip offset for visual feedback
+        thumbnailStripOffset = deltaX
         
-        val deltaX = currentX - seekStartX
-        val pixelsPerSecond = 2f / 0.032f
-        val timeDeltaSeconds = deltaX / pixelsPerSecond
-        val newPositionSeconds = seekStartPosition + timeDeltaSeconds
-        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-        val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
+        // Get thumbnail for current position
+        thumbnailCache.getThumbnailAtTime(newPosition)
+    }
+    
+    // End scrubbing
+    fun endScrubbing() {
+        isScrubbing = false
+        showThumbnailStrip = false
         
-        // UPDATE: Set seek direction based on movement
-        seekDirection = if (deltaX > 0) "+" else "-"
+        // Seek to final position
+        MPVLib.command("seek", scrubPosition.toString(), "absolute", "exact")
         
-        // ALWAYS update UI instantly
-        seekTargetTime = formatTimeSimple(clampedPosition)
-        currentTime = formatTimeSimple(clampedPosition)
-        
-        // Send seek command with throttle
-        performRealTimeSeek(clampedPosition)
-    }
-    
-    fun endHorizontalSeeking() {
-        if (isSeeking) {
-            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
-            performRealTimeSeek(currentPos)
-            
-            if (wasPlayingBeforeSeek) {
-                coroutineScope.launch {
-                    delay(100)
-                    MPVLib.setPropertyBoolean("pause", false)
-                }
-            }
-            
-            isSeeking = false
-            showSeekTime = false
-            seekStartX = 0f
-            seekStartPosition = 0.0
-            wasPlayingBeforeSeek = false
-            seekDirection = "" // Reset direction
-            scheduleSeekbarHide()
-        }
-    }
-    
-    // ADD: End vertical swipe
-    fun endVerticalSwipe() {
-        isVerticalSwipe = false
-        scheduleSeekbarHide()
-    }
-    
-    fun endTouch() {
-        val touchDuration = System.currentTimeMillis() - touchStartTime
-        isTouching = false
-        longTapJob?.cancel()
-        
-        if (isLongTap) {
-            // Long tap ended - reset speed
-            isLongTap = false
-            isSpeedingUp = false
-            MPVLib.setPropertyDouble("speed", 1.0)
-        } else if (isHorizontalSwipe) {
-            // Horizontal swipe ended
-            endHorizontalSeeking()
-            isHorizontalSwipe = false
-        } else if (isVerticalSwipe) {
-            // Vertical swipe ended
-            endVerticalSwipe()
-            isVerticalSwipe = false
-        } else if (touchDuration < 150) {
-            // Short tap (less than 150ms)
-            handleTap()
-        }
-        // Reset all gesture states
-        isHorizontalSwipe = false
-        isVerticalSwipe = false
-        isLongTap = false
-    }
-    
-    LaunchedEffect(Unit) {
-        val intent = (context as? android.app.Activity)?.intent
-        fileName = when {
-            intent?.action == Intent.ACTION_SEND -> {
-                getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context)
-            }
-            intent?.action == Intent.ACTION_VIEW -> {
-                getFileNameFromUri(intent.data, context)
-            }
-            else -> {
-                getBestAvailableFileName(context)
-            }
-        }
-        val title = MPVLib.getPropertyString("media-title") ?: "Video"
-        videoTitle = title
-        showVideoInfo = 1
-        videoInfoJob?.cancel()
-        videoInfoJob = coroutineScope.launch {
-            delay(4000)
-            showVideoInfo = 0
-        }
-        scheduleSeekbarHide()
-    }
-    
-    // ADD: Detect when app goes to background
-    LaunchedEffect(Unit) {
-        var lastPausedState = MPVLib.getPropertyBoolean("pause") ?: false
-        var lastIsPausing = isPausing
-        var lastIsSeeking = isSeeking
-        var lastWasPlayingBeforeSeek = wasPlayingBeforeSeek
-        
-        while (isActive) {
-            delay(100) // Check every 100ms
-            
-            val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
-            
-            // Check if video was auto-paused without user interaction
-            val wasAutoPaused = (
-                !lastPausedState && currentPaused && 
-                !lastIsPausing && !lastIsSeeking && !lastWasPlayingBeforeSeek
-            )
-            
-            if (wasAutoPaused && !isBackgroundTriggered) {
-                // App likely went to background (home/recent apps pressed)
-                isBackgroundTriggered = true
-                showFilenameTemporarily()
-            }
-            
-            // Update last states for next check
-            lastPausedState = currentPaused
-            lastIsPausing = isPausing
-            lastIsSeeking = isSeeking
-            lastWasPlayingBeforeSeek = wasPlayingBeforeSeek
-        }
-    }
-    
-    // Backup speed control
-    LaunchedEffect(isSpeedingUp) {
-        if (isSpeedingUp) {
-            MPVLib.setPropertyDouble("speed", 2.0)
-        } else {
-            MPVLib.setPropertyDouble("speed", 1.0)
-        }
-    }
-    
-    LaunchedEffect(Unit) {
-        MPVLib.setPropertyString("hwdec", "no")
-        MPVLib.setPropertyString("vo", "gpu")
-        MPVLib.setPropertyString("profile", "fast")
-        MPVLib.setPropertyString("vd-lavc-threads", "8")
-        MPVLib.setPropertyString("audio-channels", "auto")
-        MPVLib.setPropertyString("demuxer-lavf-threads", "4")
-        MPVLib.setPropertyString("cache-initial", "0.5")
-        MPVLib.setPropertyString("video-sync", "display-resample")
-        MPVLib.setPropertyString("untimed", "yes")
-        MPVLib.setPropertyString("hr-seek", "yes")
-        MPVLib.setPropertyString("hr-seek-framedrop", "no")
-        MPVLib.setPropertyString("vd-lavc-fast", "yes")
-        MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")
-        MPVLib.setPropertyString("vd-lavc-skipidct", "all")
-        MPVLib.setPropertyString("vd-lavc-assemble", "yes")
-        MPVLib.setPropertyString("gpu-dumb-mode", "yes")
-        MPVLib.setPropertyString("opengl-pbo", "yes")
-        MPVLib.setPropertyString("stream-lavf-o", "reconnect=1:reconnect_at_eof=1:reconnect_streamed=1")
-        MPVLib.setPropertyString("network-timeout", "30")
-        MPVLib.setPropertyString("audio-client-name", "MPVEx-Software-4Core")
-        MPVLib.setPropertyString("audio-samplerate", "auto")
-        MPVLib.setPropertyString("deband", "no")
-        MPVLib.setPropertyString("video-aspect-override", "no")
-    }
-    
-    LaunchedEffect(Unit) {
-        var lastSeconds = -1
-        while (isActive) {
-            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-            val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
-            val currentSeconds = currentPos.toInt()
-            if (isSeeking) {
-                currentTime = seekTargetTime
-                totalTime = formatTimeSimple(duration)
-            } else {
-                if (currentSeconds != lastSeconds) {
-                    currentTime = formatTimeSimple(currentPos)
-                    totalTime = formatTimeSimple(duration)
-                    lastSeconds = currentSeconds
-                }
-            }
-            if (!isDragging) {
-                seekbarPosition = currentPos.toFloat()
-                seekbarDuration = duration.toFloat()
-            }
-            currentPosition = currentPos
-            videoDuration = duration
-            delay(100)
-        }
-    }
-    
-    val displayText = when (showVideoInfo) {
-        1 -> fileName
-        else -> ""
-    }
-    
-    // UPDATED: handleProgressBarDrag with movement threshold and direction
-    fun handleProgressBarDrag(newPosition: Float) {
-        cancelAutoHide()
-        if (!isSeeking) {
-            isSeeking = true
-            wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
-            showSeekTime = true
-            // REMOVED: lastSeekTime = 0L
-            if (wasPlayingBeforeSeek) {
-                MPVLib.setPropertyBoolean("pause", true)
-            }
-        }
-        isDragging = true
-        val oldPosition = seekbarPosition
-        seekbarPosition = newPosition
-        
-        // UPDATE: Set seek direction based on movement
-        seekDirection = if (newPosition > oldPosition) "+" else "-"
-        
-        val targetPosition = newPosition.toDouble()
-        
-        // ALWAYS update UI instantly
-        seekTargetTime = formatTimeSimple(targetPosition)
-        currentTime = formatTimeSimple(targetPosition)
-        
-        // Send seek command with throttle
-        performRealTimeSeek(targetPosition)
-    }
-    
-    fun handleDragFinished() {
-        isDragging = false
-        if (wasPlayingBeforeSeek) {
+        // Resume playback if it was playing before
+        if (wasPlayingBeforeScrub) {
             coroutineScope.launch {
-                delay(100)
+                delay(100) // Small delay for seek to complete
                 MPVLib.setPropertyBoolean("pause", false)
             }
         }
-        isSeeking = false
-        showSeekTime = false
-        wasPlayingBeforeSeek = false
-        seekDirection = "" // Reset direction
-        scheduleSeekbarHide()
+        
+        showTimedFeedback("Seeked to ${formatTime(scrubPosition)}")
+    }
+    
+    // Vertical swipe for quick seek
+    fun handleVerticalSwipe(deltaY: Float) {
+        val quickSeekAmount = if (deltaY < 0) 5.0 else -5.0
+        val newPosition = (currentPosition + quickSeekAmount).coerceIn(0.0, videoDuration)
+        
+        MPVLib.command("seek", newPosition.toString(), "absolute", "exact")
+        showTimedFeedback("${if (quickSeekAmount > 0) "+" else ""}${quickSeekAmount.toInt()}s")
     }
     
     Box(modifier = modifier.fillMaxSize()) {
-        // MAIN GESTURE AREA - Full screen divided into areas
-        Box(modifier = Modifier.fillMaxSize()) {
-            // TOP 5% - Ignore area
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.05f)
-                    .align(Alignment.TopStart)
-            )
-            
-            // CENTER AREA - 95% height, divided into left/center/right
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.95f)
-                    .align(Alignment.BottomStart)
-            ) {
-                // LEFT 5% - Video info toggle
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(0.05f)
-                        .fillMaxHeight()
-                        .align(Alignment.CenterStart)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = { toggleVideoInfo() }
-                        )
-                )
-                
-                // CENTER 90% - All gestures (tap, long tap, horizontal swipe, vertical swipe)
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(0.9f)
-                        .fillMaxHeight()
-                        .align(Alignment.Center)
-                        // USE SINGLE pointerInteropFilter FOR ALL GESTURES TO AVOID CONFLICTS
-                        .pointerInteropFilter { event ->
-                            when (event.action) {
-                                MotionEvent.ACTION_DOWN -> {
-                                    touchStartX = event.x
-                                    touchStartY = event.y
-                                    startLongTapDetection()
-                                    true
-                                }
-                                MotionEvent.ACTION_MOVE -> {
-                                    if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
-                                        // Check if this should become a horizontal or vertical swipe
-                                        when (checkForSwipeDirection(event.x, event.y)) {
-                                            "horizontal" -> {
-                                                startHorizontalSeeking(event.x)
-                                            }
-                                            "vertical" -> {
-                                                startVerticalSwipe(event.y)
-                                            }
-                                        }
-                                    } else if (isHorizontalSwipe) {
-                                        // Continue horizontal seeking
-                                        handleHorizontalSeeking(event.x)
-                                    }
-                                    // If it's a long tap or vertical swipe, ignore movement (allow slight finger movement during hold)
-                                    true
-                                }
-                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                    endTouch()
-                                    true
-                                }
-                                else -> false
-                            }
-                        }
-                )
-                
-                // RIGHT 5% - Video info toggle
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(0.05f)
-                        .fillMaxHeight()
-                        .align(Alignment.CenterEnd)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = { toggleVideoInfo() }
-                        )
-                )
-            }
-        }
-        
-        // BOTTOM SEEK BAR AREA
-        if (showSeekbar) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(70.dp)
-                    .align(Alignment.BottomStart)
-                    .padding(horizontal = 60.dp)
-                    .offset(y = (3).dp) 
-            ) {
-                Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
-                        Row(modifier = Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                text = "$currentTime / $totalTime",
-                                style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                                modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
-                    Box(modifier = Modifier.fillMaxWidth().height(48.dp)) { // CHANGED: Increased height for better touch area
-                        SimpleDraggableProgressBar(
-                            position = seekbarPosition,
-                            duration = seekbarDuration,
-                            onValueChange = { handleProgressBarDrag(it) },
-                            onValueChangeFinished = { handleDragFinished() },
-                            getFreshPosition = { getFreshPosition() },
-                            modifier = Modifier.fillMaxSize().height(48.dp) // CHANGED: Increased height
-                        )
-                    }
+        // Main gesture area
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = { handleTap() },
+                        onLongPress = { startScrubbing(it.x) }
+                    )
                 }
-            }
-        }
+                .pointerInput(Unit) {
+                    detectDragGestures(
+                        onDragStart = { offset ->
+                            startScrubbing(offset.x)
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            if (abs(dragAmount.x) > abs(dragAmount.y)) {
+                                // Horizontal drag - scrubbing
+                                updateScrubbing(dragAmount.x)
+                            } else {
+                                // Vertical drag - quick seek
+                                handleVerticalSwipe(dragAmount.y)
+                            }
+                        },
+                        onDragEnd = {
+                            endScrubbing()
+                        }
+                    )
+                }
+        )
         
-        // VIDEO INFO - Top Left
-        if (showVideoInfo != 0) {
-            Text(
-                text = displayText,
-                style = TextStyle(color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium),
+        // Thumbnail strip (shown during scrubbing)
+        if (showThumbnailStrip) {
+            ThumbnailStrip(
+                thumbnailCache = thumbnailCache,
+                currentTime = scrubPosition,
+                duration = videoDuration,
+                activeIndex = activeThumbnailIndex,
+                offset = thumbnailStripOffset,
                 modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .offset(x = 60.dp, y = 20.dp)
-                    .background(Color.DarkGray.copy(alpha = 0.8f))
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .fillMaxWidth()
+                    .height(80.dp)
+                    .align(Alignment.BottomCenter)
+                    .background(Color.Black.copy(alpha = 0.7f))
+                    .padding(vertical = 8.dp)
             )
         }
         
-        // FEEDBACK AREA
-        Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
-            when {
-                showVolumeFeedbackState -> Text(
-                    text = "Volume: ${(currentVolume.toFloat() / viewModel.maxVolume.toFloat() * 100).toInt()}%",
-                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+        // Top info bar
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(50.dp)
+                .align(Alignment.TopCenter)
+                .background(Color.Black.copy(alpha = 0.5f))
+                .padding(horizontal = 16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = videoTitle,
+                    style = TextStyle(color = Color.White, fontSize = 16.sp),
+                    maxLines = 1
                 )
-                isSpeedingUp -> Text(
-                    text = "2X",
-                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                
+                Text(
+                    text = "$currentTime / $totalTime",
+                    style = TextStyle(color = Color.White, fontSize = 14.sp)
                 )
-                showQuickSeekFeedback -> Text( // ADD: Quick seek feedback
-                    text = quickSeekFeedbackText,
-                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+            }
+            
+            // Progress indicator
+            val progress = if (videoDuration > 0) (currentPosition / videoDuration).toFloat() else 0f
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .align(Alignment.BottomStart)
+            ) {
+                drawRect(
+                    color = Color.Gray.copy(alpha = 0.5f),
+                    size = Size(size.width, size.height)
                 )
-                showSeekTime -> Text(
-                    // UPDATED: Add direction indicator to seek time
-                    text = if (seekDirection.isNotEmpty()) "$seekTargetTime $seekDirection" else seekTargetTime,
-                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                drawRect(
+                    color = Color.White,
+                    size = Size(size.width * progress, size.height)
                 )
-                showPlaybackFeedback -> Text(
-                    text = playbackFeedbackText,
-                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+            }
+        }
+        
+        // Center feedback
+        if (showFeedback) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color.Black.copy(alpha = 0.7f))
+                    .padding(horizontal = 24.dp, vertical = 12.dp)
+            ) {
+                Text(
+                    text = feedbackText,
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Medium
+                    )
                 )
+            }
+        }
+        
+        // Bottom controls
+        if (!isScrubbing) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(60.dp)
+                    .align(Alignment.BottomCenter)
+                    .background(Color.Black.copy(alpha = 0.5f))
+                    .padding(horizontal = 16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Play/Pause button
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clickable { handleTap() }
+                    ) {
+                        Text(
+                            text = if (isPlaying) "⏸" else "▶",
+                            style = TextStyle(
+                                color = Color.White,
+                                fontSize = 24.sp
+                            ),
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    }
+                    
+                    // Time display
+                    Text(
+                        text = currentTime,
+                        style = TextStyle(color = Color.White, fontSize = 16.sp)
+                    )
+                    
+                    // Placeholder for other controls
+                    Box(modifier = Modifier.size(48.dp))
+                }
             }
         }
     }
 }
 
 @Composable
-fun SimpleDraggableProgressBar(
-    position: Float,
-    duration: Float,
-    onValueChange: (Float) -> Unit,
-    onValueChangeFinished: () -> Unit,
-    getFreshPosition: () -> Float,
+fun ThumbnailStrip(
+    thumbnailCache: ThumbnailCache,
+    currentTime: Double,
+    duration: Double,
+    activeIndex: Int,
+    offset: Float,
     modifier: Modifier = Modifier
 ) {
-    var dragStartX by remember { mutableStateOf(0f) }
-    var dragStartPosition by remember { mutableStateOf(0f) }
-    var hasPassedThreshold by remember { mutableStateOf(false) }
-    var thresholdStartX by remember { mutableStateOf(0f) }
+    val thumbnailsPerSecond = 12
+    val windowSeconds = 10.0 // Show ±10 seconds
+    val totalThumbnails = (windowSeconds * 2 * thumbnailsPerSecond).toInt()
     
-    // Convert 25dp to pixels for the movement threshold
-    val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
+    // Get thumbnails around current time
+    val thumbnails = remember { mutableStateListOf<Thumbnail?>() }
     
-    Box(modifier = modifier.height(48.dp)) { // CHANGED: Increased container height
-        // Progress bar background
-        Box(modifier = Modifier
-            .fillMaxWidth()
-            .height(4.dp)
-            .align(Alignment.CenterStart)
-            .background(Color.Gray.copy(alpha = 0.6f)))
+    LaunchedEffect(currentTime, activeIndex) {
+        val startTime = max(0.0, currentTime - windowSeconds)
+        val endTime = min(duration, currentTime + windowSeconds)
         
-        // Progress bar fill
-        Box(modifier = Modifier
-            .fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f)
-            .height(4.dp)
-            .align(Alignment.CenterStart)
-            .background(Color.White))
-        
-        // CHANGED: Increased touch area to full 48dp height
-        Box(modifier = Modifier
-            .fillMaxWidth()
-            .height(48.dp) // This makes the entire 48dp area draggable
-            .align(Alignment.CenterStart)
-            .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragStart = { offset ->
-                        dragStartX = offset.x
-                        // GET FRESH POSITION IMMEDIATELY WHEN DRAG STARTS
-                        dragStartPosition = getFreshPosition()
-                        hasPassedThreshold = false // Reset threshold flag
-                        thresholdStartX = 0f // Reset threshold start position
-                    },
-                    onDrag = { change, dragAmount ->
-                        change.consume()
-                        val currentX = change.position.x
-                        val totalMovementX = abs(currentX - dragStartX)
-                        
-                        // Check if we've passed the movement threshold
-                        if (!hasPassedThreshold) {
-                            if (totalMovementX > movementThresholdPx) {
-                                hasPassedThreshold = true
-                                thresholdStartX = currentX // NEW: Store position where threshold was passed
-                            } else {
-                                // Haven't passed threshold yet, don't seek
-                                return@detectDragGestures
-                            }
-                        }
-                        
-                        // Calculate delta from the threshold start position, not the original drag start
-                        val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
-                        val deltaX = currentX - effectiveStartX
-                        val deltaPosition = (deltaX / size.width) * duration
-                        val newPosition = (dragStartPosition + deltaPosition).coerceIn(0f, duration)
-                        onValueChange(newPosition)
-                    },
-                    onDragEnd = { 
-                        hasPassedThreshold = false // Reset for next drag
-                        thresholdStartX = 0f // Reset threshold start
-                        onValueChangeFinished() 
-                    }
+        val newThumbnails = mutableListOf<Thumbnail?>()
+        for (i in 0 until totalThumbnails) {
+            val time = startTime + (i.toDouble() / thumbnailsPerSecond)
+            if (time <= endTime) {
+                newThumbnails.add(thumbnailCache.getThumbnailAtTime(time))
+            } else {
+                newThumbnails.add(null)
+            }
+        }
+        thumbnails.clear()
+        thumbnails.addAll(newThumbnails)
+    }
+    
+    Box(modifier = modifier) {
+        LazyRow(
+            state = rememberLazyListState(initialFirstVisibleItemIndex = activeIndex),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            itemsIndexed(thumbnails) { index, thumbnail ->
+                ThumbnailItem(
+                    thumbnail = thumbnail,
+                    isActive = index == activeIndex,
+                    modifier = Modifier
+                        .width(100.dp)
+                        .height(56.dp)
                 )
             }
+        }
+        
+        // Current time indicator
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(2.dp)
+                .align(Alignment.Center)
+                .offset(x = with(LocalDensity.current) { offset.toDp() })
+                .background(Color.Red)
         )
+    }
+}
+
+@Composable
+fun ThumbnailItem(
+    thumbnail: Thumbnail?,
+    isActive: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .background(
+                color = when (thumbnail?.state) {
+                    ThumbnailState.READY -> Color.Transparent
+                    ThumbnailState.LOADING -> Color.DarkGray
+                    ThumbnailState.GENERATING -> Color.Gray
+                    else -> Color.Black
+                }
+            )
+            .border(
+                width = if (isActive) 2.dp else 0.dp,
+                color = if (isActive) Color.Red else Color.Transparent
+            )
+    ) {
+        thumbnail?.bitmap?.asImageBitmap()?.let { imageBitmap ->
+            androidx.compose.foundation.Image(
+                bitmap = imageBitmap,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+    }
+}
+
+// Thumbnail Cache Implementation
+class ThumbnailCache {
+    private val thumbnailsPerSecond = 12
+    private val windowSeconds = 10.0 // ±10 seconds = 20-second window
+    private val thumbnailWidth = 160
+    private val thumbnailHeight = 90
+    private val totalThumbnails = (windowSeconds * 2 * thumbnailsPerSecond).toInt()
+    
+    private val cache = mutableMapOf<Int, Thumbnail>()
+    private val mutex = Mutex()
+    private var generationJob: Job? = null
+    private var currentCenterIndex = 0
+    private var videoDuration = 0.0
+    
+    fun initialize(duration: Double) {
+        videoDuration = duration
+        currentCenterIndex = 0
+        cache.clear()
+    }
+    
+    fun startContinuousGeneration(scope: CoroutineScope, initialPosition: Double) {
+        generationJob?.cancel()
+        generationJob = scope.launch(Dispatchers.IO) {
+            updateCenter(initialPosition)
+            
+            while (isActive) {
+                // Generate thumbnails around current center
+                generateThumbnailsAroundCenter()
+                delay(100) // Adjust generation rate as needed
+            }
+        }
+    }
+    
+    suspend fun updateCenter(position: Double) {
+        mutex.withLock {
+            currentCenterIndex = timeToIndex(position)
+        }
+    }
+    
+    fun timeToIndex(time: Double): Int {
+        return (time * thumbnailsPerSecond).toInt()
+    }
+    
+    fun indexToTime(index: Int): Double {
+        return index.toDouble() / thumbnailsPerSecond
+    }
+    
+    suspend fun getThumbnailAtTime(time: Double): Thumbnail? {
+        val index = timeToIndex(time)
+        return mutex.withLock {
+            cache[index] ?: createPlaceholderThumbnail(time, index)
+        }
+    }
+    
+    suspend fun ensureThumbnailsAround(time: Double) {
+        val centerIndex = timeToIndex(time)
+        
+        // Generate thumbnails in priority order
+        val priorities = listOf(
+            centerIndex, // Current position (highest priority)
+            centerIndex - 1, centerIndex + 1, // Adjacent frames
+            centerIndex - thumbnailsPerSecond, centerIndex + thumbnailsPerSecond, // ±1 second
+            centerIndex - thumbnailsPerSecond * 5, centerIndex + thumbnailsPerSecond * 5 // ±5 seconds
+        )
+        
+        priorities.forEach { index ->
+            if (index >= 0 && index <= totalThumbnails && !cache.containsKey(index)) {
+                generateThumbnailAsync(index)
+            }
+        }
+    }
+    
+    private suspend fun generateThumbnailsAroundCenter() {
+        val center = currentCenterIndex
+        
+        // Generate thumbnails in expanding circles from center
+        for (radius in 0..(thumbnailsPerSecond * 5)) { // Generate up to 5 seconds away
+            val indices = listOf(
+                center + radius,
+                center - radius
+            )
+            
+            indices.forEach { index ->
+                if (index >= 0 && index <= totalThumbnails && !cache.containsKey(index)) {
+                    generateThumbnailAsync(index)
+                }
+            }
+            
+            // Small delay to prevent overwhelming the system
+            if (radius % 10 == 0) {
+                delay(10)
+            }
+        }
+    }
+    
+    private fun generateThumbnailAsync(index: Int) {
+        CoroutineScope(Dispatchers.IO).launch {
+            val time = indexToTime(index)
+            
+            // Skip if beyond video duration
+            if (time > videoDuration) return@launch
+            
+            // Create placeholder first
+            val placeholder = createPlaceholderThumbnail(time, index)
+            mutex.withLock {
+                cache[index] = placeholder
+            }
+            
+            try {
+                // Generate actual thumbnail using MPV
+                val bitmap = generateThumbnailFromMPV(time)
+                
+                mutex.withLock {
+                    cache[index] = Thumbnail(
+                        timestamp = time,
+                        bitmap = bitmap,
+                        state = ThumbnailState.READY
+                    )
+                }
+            } catch (e: Exception) {
+                // Keep placeholder on error
+                mutex.withLock {
+                    cache[index] = placeholder.copy(state = ThumbnailState.ERROR)
+                }
+            }
+        }
+    }
+    
+    private fun generateThumbnailFromMPV(time: Double): Bitmap? {
+        // Use MPV's screenshot capability
+        // Note: This is a simplified version. Actual implementation may vary.
+        
+        // Seek to position
+        MPVLib.command("seek", time.toString(), "absolute", "exact")
+        
+        // Wait a bit for frame to be ready
+        Thread.sleep(16) // ~60fps
+        
+        // Take screenshot
+        // Note: MPV Android doesn't have a direct screenshot API in MPVLib
+        // This would need to be implemented differently
+        
+        // For now, return a placeholder bitmap
+        return createColorBitmap(
+            width = thumbnailWidth,
+            height = thumbnailHeight,
+            color = when ((time.toInt() / 5) % 4) {
+                0 -> android.graphics.Color.RED
+                1 -> android.graphics.Color.GREEN
+                2 -> android.graphics.Color.BLUE
+                else -> android.graphics.Color.YELLOW
+            }
+        )
+    }
+    
+    private fun createPlaceholderThumbnail(time: Double, index: Int): Thumbnail {
+        return Thumbnail(
+            timestamp = time,
+            bitmap = createColorBitmap(
+                width = thumbnailWidth,
+                height = thumbnailHeight,
+                color = android.graphics.Color.DKGRAY
+            ),
+            state = ThumbnailState.GENERATING
+        )
+    }
+    
+    private fun createColorBitmap(width: Int, height: Int, color: Int): Bitmap {
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bitmap)
+        canvas.drawColor(color)
+        
+        // Add time text for debugging
+        val paint = android.graphics.Paint().apply {
+            this.color = android.graphics.Color.WHITE
+            textSize = 12f
+        }
+        val timeText = formatTimeSimple(timeToIndex(index.toDouble()) / thumbnailsPerSecond.toDouble())
+        canvas.drawText(timeText, 10f, 20f, paint)
+        
+        return bitmap
+    }
+    
+    fun clear() {
+        mutex.withLock {
+            cache.clear()
+        }
+        generationJob?.cancel()
+    }
+}
+
+// Helper functions
+private fun formatTime(seconds: Double): String {
+    val totalSeconds = seconds.toInt()
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val secs = totalSeconds % 60
+    
+    return if (hours > 0) {
+        String.format("%02d:%02d:%02d", hours, minutes, secs)
+    } else {
+        String.format("%02d:%02d", minutes, secs)
     }
 }
 
 private fun formatTimeSimple(seconds: Double): String {
     val totalSeconds = seconds.toInt()
-    val hours = totalSeconds / 3600
-    val minutes = (totalSeconds % 3600) / 60
+    val minutes = totalSeconds / 60
     val secs = totalSeconds % 60
-    return if (hours > 0) String.format("%02d:%02d:%02d", hours, minutes, secs) else String.format("%02d:%02d", minutes, secs)
-}
-
-private fun getFileNameFromUri(uri: Uri?, context: android.content.Context): String {
-    if (uri == null) return getBestAvailableFileName(context)
-    return when {
-        uri.scheme == "file" -> uri.lastPathSegment?.substringBeforeLast(".") ?: getBestAvailableFileName(context)
-        uri.scheme == "content" -> getDisplayNameFromContentUri(uri, context) ?: getBestAvailableFileName(context)
-        uri.scheme in listOf("http", "https") -> uri.lastPathSegment?.substringBeforeLast(".") ?: "Online Video"
-        else -> getBestAvailableFileName(context)
-    }
-}
-
-private fun getDisplayNameFromContentUri(uri: Uri, context: android.content.Context): String? {
-    return try {
-        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val displayNameIndex = cursor.getColumnIndex("_display_name")
-                val displayName = if (displayNameIndex != -1) cursor.getString(displayNameIndex)?.substringBeforeLast(".") else null
-                displayName ?: uri.lastPathSegment?.substringBeforeLast(".")
-            } else null
-        }
-    } catch (e: Exception) { null }
-}
-
-private fun getBestAvailableFileName(context: android.content.Context): String {
-    val mediaTitle = MPVLib.getPropertyString("media-title")
-    if (mediaTitle != null && mediaTitle != "Video" && mediaTitle.isNotBlank()) return mediaTitle.substringBeforeLast(".")
-    val mpvPath = MPVLib.getPropertyString("path")
-    if (mpvPath != null && mpvPath.isNotBlank()) return mpvPath.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "Video" }
-    return "Video"
+    return String.format("%d:%02d", minutes, secs)
 }
