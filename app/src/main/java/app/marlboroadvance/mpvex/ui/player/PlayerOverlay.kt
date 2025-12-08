@@ -790,7 +790,7 @@ fun PlayerOverlay(
     }
     
     Box(modifier = modifier.fillMaxSize()) {
-        // TOP CONTROL BUTTONS (Back and Log)
+        // TOP CONTROL BUTTONS (Back and Log) - PUT THESE FIRST SO THEY'RE ON TOP
         if (showControlButtons) {
             // Back button - Top Left
             Box(
@@ -841,7 +841,7 @@ fun PlayerOverlay(
         
         // MAIN GESTURE AREA - Full screen divided into areas
         Box(modifier = Modifier.fillMaxSize()) {
-            // TOP 5% - Ignore area (but contains control buttons)
+            // TOP 5% - Ignore area
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
