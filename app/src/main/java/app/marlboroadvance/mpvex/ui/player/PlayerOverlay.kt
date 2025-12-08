@@ -123,8 +123,7 @@ class VideoLogManager(private val maxLogs: Int = 10) {
 @Composable
 fun PlayerOverlay(
     viewModel: PlayerViewModel,
-    modifier: Modifier = Modifier,
-    onBackClick: () -> Unit = {}
+    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     var currentTime by remember { mutableStateOf("00:00") }
@@ -135,9 +134,6 @@ fun PlayerOverlay(
     var pendingPauseResume by remember { mutableStateOf(false) }
     var isPausing by remember { mutableStateOf(false) }
     var showSeekbar by remember { mutableStateOf(true) }
-    
-    // ADD: Control buttons visibility (toggle with tap)
-    var showControlButtons by remember { mutableStateOf(true) }
     
     var currentPosition by remember { mutableStateOf(0.0) }
     var videoDuration by remember { mutableStateOf(1.0) }
@@ -215,30 +211,6 @@ fun PlayerOverlay(
         videoLogs = videoLogManager.getLogs()
     }
     
-    // ADD THESE FUNCTIONS HERE - BEFORE handleTap
-    fun scheduleSeekbarHide() {
-        if (userInteracting) return
-        hideSeekbarJob?.cancel()
-        hideSeekbarJob = coroutineScope.launch {
-            delay(4000)
-            showSeekbar = false
-        }
-    }
-    
-    fun cancelAutoHide() {
-        userInteracting = true
-        hideSeekbarJob?.cancel()
-        coroutineScope.launch {
-            delay(100)
-            userInteracting = false
-        }
-    }
-    
-    fun showSeekbarWithTimeout() {
-        showSeekbar = true
-        scheduleSeekbarHide()
-    }
-    
     // UPDATED: performRealTimeSeek with throttle
     fun performRealTimeSeek(targetPosition: Double) {
         if (isSeekInProgress) return // Skip if we're already processing a seek
@@ -288,62 +260,6 @@ fun PlayerOverlay(
         }
     }
     
-    // ADD: Toggle control buttons (back and log buttons)
-    fun toggleControlButtons() {
-        showControlButtons = !showControlButtons
-        if (showControlButtons) {
-            // Auto-hide after 4 seconds
-            coroutineScope.launch {
-                delay(4000)
-                showControlButtons = false
-            }
-        }
-    }
-    
-    // Function to show playback feedback
-    fun showPlaybackFeedback(text: String) {
-        playbackFeedbackJob?.cancel()
-        showPlaybackFeedbackState = true
-        playbackFeedbackText = text
-        playbackFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showPlaybackFeedbackState = false
-        }
-    }
-    
-    // MODIFIED: handleTap to also toggle control buttons
-    fun handleTap() {
-        val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
-        if (currentPaused) {
-            coroutineScope.launch {
-                val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-                MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
-                delay(100)
-                MPVLib.setPropertyBoolean("pause", false)
-            }
-            showPlaybackFeedback("Resume")
-        } else {
-            MPVLib.setPropertyBoolean("pause", true)
-            showPlaybackFeedback("Pause")
-        }
-        
-        // Toggle seekbar visibility
-        if (showSeekbar) {
-            showSeekbar = false
-        } else {
-            showSeekbarWithTimeout()
-        }
-        
-        // ALWAYS show control buttons on tap and auto-hide after 4 seconds
-        showControlButtons = true
-        coroutineScope.launch {
-            delay(4000)
-            showControlButtons = false
-        }
-        
-        isPausing = !currentPaused
-    }
-    
     val showVolumeFeedback: (Int) -> Unit = { volume ->
         volumeFeedbackJob?.cancel()
         showVolumeFeedbackState = true
@@ -358,6 +274,61 @@ fun PlayerOverlay(
             currentVolume = volume
             showVolumeFeedback(volume)
         }
+    }
+    
+    fun scheduleSeekbarHide() {
+        if (userInteracting) return
+        hideSeekbarJob?.cancel()
+        hideSeekbarJob = coroutineScope.launch {
+            delay(4000)
+            showSeekbar = false
+        }
+    }
+    
+    fun cancelAutoHide() {
+        userInteracting = true
+        hideSeekbarJob?.cancel()
+        coroutineScope.launch {
+            delay(100)
+            userInteracting = false
+        }
+    }
+    
+    fun showSeekbarWithTimeout() {
+        showSeekbar = true
+        scheduleSeekbarHide()
+    }
+    
+    fun showPlaybackFeedback(text: String) {
+        playbackFeedbackJob?.cancel()
+        showPlaybackFeedbackState = true
+        playbackFeedbackText = text
+        playbackFeedbackJob = coroutineScope.launch {
+            delay(1000)
+            showPlaybackFeedbackState = false
+        }
+    }
+    
+    fun handleTap() {
+        val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
+        if (currentPaused) {
+            coroutineScope.launch {
+                val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+                MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
+                delay(100)
+                MPVLib.setPropertyBoolean("pause", false)
+            }
+            showPlaybackFeedback("Resume")
+        } else {
+            MPVLib.setPropertyBoolean("pause", true)
+            showPlaybackFeedback("Pause")
+        }
+        if (showSeekbar) {
+            showSeekbar = false
+        } else {
+            showSeekbarWithTimeout()
+        }
+        isPausing = !currentPaused
     }
     
     fun startLongTapDetection() {
@@ -532,14 +503,6 @@ fun PlayerOverlay(
             delay(4000)
             showVideoInfo = 0
         }
-        
-        // ADD: Show control buttons initially and auto-hide
-        showControlButtons = true
-        coroutineScope.launch {
-            delay(4000)
-            showControlButtons = false
-        }
-        
         scheduleSeekbarHide()
     }
     
@@ -790,38 +753,40 @@ fun PlayerOverlay(
     }
     
     Box(modifier = modifier.fillMaxSize()) {
-        // MAIN GESTURE AREA - Full screen (FIRST, gets drawn underneath)
+        // MAIN GESTURE AREA - Full screen divided into areas
         Box(modifier = Modifier.fillMaxSize()) {
-            // REMOVED: TOP 5% area
-            
-            // CENTER AREA - Full screen, divided
+            // TOP 5% - Ignore area
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight()
-                    .align(Alignment.CenterStart)
+                    .fillMaxHeight(0.05f)
+                    .align(Alignment.TopStart)
+            )
+            
+            // CENTER AREA - 95% height, divided into left/center/right
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.95f)
+                    .align(Alignment.BottomStart)
             ) {
-                // LEFT area - BUT EXCLUDE top 60dp where button is
-                if (showControlButtons) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(0.05f)
-                            .fillMaxHeight()
-                            .align(Alignment.CenterStart)
-                            // Start below button area (button is 36dp + 16dp offset = 52dp, use 60dp for safety)
-                            .padding(top = 60.dp)
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = { toggleVideoInfo() }
-                            )
-                    )
-                }
-                
-                // CENTER gesture area
+                // LEFT 5% - Video info toggle
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth(if (showControlButtons) 0.9f else 1f)
+                        .fillMaxWidth(0.05f)
+                        .fillMaxHeight()
+                        .align(Alignment.CenterStart)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { toggleVideoInfo() }
+                        )
+                )
+                
+                // CENTER 90% - All gestures (tap, long tap, horizontal swipe, vertical swipe)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
                         .fillMaxHeight()
                         .align(Alignment.Center)
                         // USE SINGLE pointerInteropFilter FOR ALL GESTURES TO AVOID CONFLICTS
@@ -860,26 +825,22 @@ fun PlayerOverlay(
                         }
                 )
                 
-                // RIGHT area - BUT EXCLUDE top 60dp where button is
-                if (showControlButtons) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(0.05f)
-                            .fillMaxHeight()
-                            .align(Alignment.CenterEnd)
-                            // Start below button area (button is 36dp + 16dp offset = 52dp, use 60dp for safety)
-                            .padding(top = 60.dp)
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = { toggleVideoInfo() }
-                            )
-                    )
-                }
+                // RIGHT 5% - Video info toggle
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.05f)
+                        .fillMaxHeight()
+                        .align(Alignment.CenterEnd)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { toggleVideoInfo() }
+                        )
+                )
             }
         }
         
-        // BOTTOM SEEK BAR AREA (drawn on top of gesture area)
+        // BOTTOM SEEK BAR AREA
         if (showSeekbar) {
             Box(
                 modifier = Modifier
@@ -913,57 +874,8 @@ fun PlayerOverlay(
             }
         }
         
-        // TOP CONTROL BUTTONS (Back and Log) - LAST so they get touch priority AND are visually on top
-        if (showControlButtons) {
-            // Back button - Top Left
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .offset(x = 16.dp, y = 16.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.ArrowBack,
-                    contentDescription = "Back",
-                    tint = Color.White,
-                    modifier = Modifier
-                        .size(36.dp)
-                        .background(Color.DarkGray.copy(alpha = 0.8f), RoundedCornerShape(8.dp))
-                        .padding(8.dp)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null
-                        ) {
-                            onBackClick()
-                        }
-                )
-            }
-            
-            // Log button - Top Right
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .offset(x = (-16).dp, y = 16.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.List,
-                    contentDescription = "Video Logs",
-                    tint = Color.White,
-                    modifier = Modifier
-                        .size(36.dp)
-                        .background(Color.DarkGray.copy(alpha = 0.8f), RoundedCornerShape(8.dp))
-                        .padding(8.dp)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null
-                        ) {
-                            showVideoLogsDialog = true
-                        }
-                )
-            }
-        }
-        
-        // VIDEO INFO - Top Left (below back button)
-        if (showVideoInfo != 0 && showControlButtons) {
+        // VIDEO INFO - Top Left (now clickable to show logs)
+        if (showVideoInfo != 0) {
             Text(
                 text = displayText,
                 style = TextStyle(color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium),
@@ -972,6 +884,11 @@ fun PlayerOverlay(
                     .offset(x = 60.dp, y = 20.dp)
                     .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = { showVideoLogsDialog = true }
+                    )
             )
         }
         
