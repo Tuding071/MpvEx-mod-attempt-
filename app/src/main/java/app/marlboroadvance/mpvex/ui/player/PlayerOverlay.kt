@@ -43,6 +43,7 @@ import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.vivvvek.seeker.Seeker
@@ -123,7 +124,7 @@ class VideoLogManager(private val maxLogs: Int = 10) {
 fun PlayerOverlay(
     viewModel: PlayerViewModel,
     modifier: Modifier = Modifier,
-    onBackClick: () -> Unit = {} // ADD: Back button callback
+    onBackClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var currentTime by remember { mutableStateOf("00:00") }
@@ -186,7 +187,8 @@ fun PlayerOverlay(
     var userInteracting by remember { mutableStateOf(false) }
     var hideSeekbarJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    var showPlaybackFeedback by remember { mutableStateOf(false) }
+    // CHANGED: Renamed to avoid conflict with function
+    var showPlaybackFeedbackState by remember { mutableStateOf(false) }
     var playbackFeedbackText by remember { mutableStateOf("") }
     var playbackFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
@@ -274,6 +276,17 @@ fun PlayerOverlay(
         }
     }
     
+    // Function to show playback feedback
+    fun showPlaybackFeedback(text: String) {
+        playbackFeedbackJob?.cancel()
+        showPlaybackFeedbackState = true
+        playbackFeedbackText = text
+        playbackFeedbackJob = coroutineScope.launch {
+            delay(1000)
+            showPlaybackFeedbackState = false
+        }
+    }
+    
     // MODIFIED: handleTap to also toggle control buttons
     fun handleTap() {
         val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
@@ -344,16 +357,6 @@ fun PlayerOverlay(
     fun showSeekbarWithTimeout() {
         showSeekbar = true
         scheduleSeekbarHide()
-    }
-    
-    fun showPlaybackFeedback(text: String) {
-        playbackFeedbackJob?.cancel()
-        showPlaybackFeedback = true
-        playbackFeedbackText = text
-        playbackFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showPlaybackFeedback = false
-        }
     }
     
     fun startLongTapDetection() {
@@ -997,7 +1000,7 @@ fun PlayerOverlay(
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
-                showPlaybackFeedback -> Text(
+                showPlaybackFeedbackState -> Text( // CHANGED: Updated variable name
                     text = playbackFeedbackText,
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
