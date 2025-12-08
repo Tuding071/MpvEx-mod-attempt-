@@ -215,6 +215,30 @@ fun PlayerOverlay(
         videoLogs = videoLogManager.getLogs()
     }
     
+    // ADD THESE FUNCTIONS HERE - BEFORE handleTap
+    fun scheduleSeekbarHide() {
+        if (userInteracting) return
+        hideSeekbarJob?.cancel()
+        hideSeekbarJob = coroutineScope.launch {
+            delay(4000)
+            showSeekbar = false
+        }
+    }
+    
+    fun cancelAutoHide() {
+        userInteracting = true
+        hideSeekbarJob?.cancel()
+        coroutineScope.launch {
+            delay(100)
+            userInteracting = false
+        }
+    }
+    
+    fun showSeekbarWithTimeout() {
+        showSeekbar = true
+        scheduleSeekbarHide()
+    }
+    
     // UPDATED: performRealTimeSeek with throttle
     fun performRealTimeSeek(targetPosition: Double) {
         if (isSeekInProgress) return // Skip if we're already processing a seek
@@ -334,29 +358,6 @@ fun PlayerOverlay(
             currentVolume = volume
             showVolumeFeedback(volume)
         }
-    }
-    
-    fun scheduleSeekbarHide() {
-        if (userInteracting) return
-        hideSeekbarJob?.cancel()
-        hideSeekbarJob = coroutineScope.launch {
-            delay(4000)
-            showSeekbar = false
-        }
-    }
-    
-    fun cancelAutoHide() {
-        userInteracting = true
-        hideSeekbarJob?.cancel()
-        coroutineScope.launch {
-            delay(100)
-            userInteracting = false
-        }
-    }
-    
-    fun showSeekbarWithTimeout() {
-        showSeekbar = true
-        scheduleSeekbarHide()
     }
     
     fun startLongTapDetection() {
