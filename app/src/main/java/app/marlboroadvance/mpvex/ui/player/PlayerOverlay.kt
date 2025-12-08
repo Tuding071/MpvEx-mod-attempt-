@@ -790,7 +790,130 @@ fun PlayerOverlay(
     }
     
     Box(modifier = modifier.fillMaxSize()) {
-        // TOP CONTROL BUTTONS (Back and Log) - PUT THESE FIRST SO THEY'RE ON TOP
+        // MAIN GESTURE AREA - Full screen (FIRST, gets drawn underneath)
+        Box(modifier = Modifier.fillMaxSize()) {
+            // REMOVED: TOP 5% area
+            
+            // CENTER AREA - Full screen, divided
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight()
+                    .align(Alignment.CenterStart)
+            ) {
+                // LEFT area - BUT EXCLUDE top 60dp where button is
+                if (showControlButtons) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.05f)
+                            .fillMaxHeight()
+                            .align(Alignment.CenterStart)
+                            // Start below button area (button is 36dp + 16dp offset = 52dp, use 60dp for safety)
+                            .padding(top = 60.dp)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = { toggleVideoInfo() }
+                            )
+                    )
+                }
+                
+                // CENTER gesture area
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(if (showControlButtons) 0.9f else 1f)
+                        .fillMaxHeight()
+                        .align(Alignment.Center)
+                        // USE SINGLE pointerInteropFilter FOR ALL GESTURES TO AVOID CONFLICTS
+                        .pointerInteropFilter { event ->
+                            when (event.action) {
+                                MotionEvent.ACTION_DOWN -> {
+                                    touchStartX = event.x
+                                    touchStartY = event.y
+                                    startLongTapDetection()
+                                    true
+                                }
+                                MotionEvent.ACTION_MOVE -> {
+                                    if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
+                                        // Check if this should become a horizontal or vertical swipe
+                                        when (checkForSwipeDirection(event.x, event.y)) {
+                                            "horizontal" -> {
+                                                startHorizontalSeeking(event.x)
+                                            }
+                                            "vertical" -> {
+                                                startVerticalSwipe(event.y)
+                                            }
+                                        }
+                                    } else if (isHorizontalSwipe) {
+                                        // Continue horizontal seeking
+                                        handleHorizontalSeeking(event.x)
+                                    }
+                                    // If it's a long tap or vertical swipe, ignore movement (allow slight finger movement during hold)
+                                    true
+                                }
+                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                    endTouch()
+                                    true
+                                }
+                                else -> false
+                            }
+                        }
+                )
+                
+                // RIGHT area - BUT EXCLUDE top 60dp where button is
+                if (showControlButtons) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.05f)
+                            .fillMaxHeight()
+                            .align(Alignment.CenterEnd)
+                            // Start below button area (button is 36dp + 16dp offset = 52dp, use 60dp for safety)
+                            .padding(top = 60.dp)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = { toggleVideoInfo() }
+                            )
+                    )
+                }
+            }
+        }
+        
+        // BOTTOM SEEK BAR AREA (drawn on top of gesture area)
+        if (showSeekbar) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(70.dp)
+                    .align(Alignment.BottomStart)
+                    .padding(horizontal = 60.dp)
+                    .offset(y = (3).dp) 
+            ) {
+                Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
+                        Row(modifier = Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "$currentTime / $totalTime",
+                                style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                                modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                    Box(modifier = Modifier.fillMaxWidth().height(48.dp)) { // CHANGED: Increased height for better touch area
+                        SimpleDraggableProgressBar(
+                            position = seekbarPosition,
+                            duration = seekbarDuration,
+                            onValueChange = { handleProgressBarDrag(it) },
+                            onValueChangeFinished = { handleDragFinished() },
+                            getFreshPosition = { getFreshPosition() },
+                            modifier = Modifier.fillMaxSize().height(48.dp) // CHANGED: Increased height
+                        )
+                    }
+                }
+            }
+        }
+        
+        // TOP CONTROL BUTTONS (Back and Log) - LAST so they get touch priority AND are visually on top
         if (showControlButtons) {
             // Back button - Top Left
             Box(
@@ -836,131 +959,6 @@ fun PlayerOverlay(
                             showVideoLogsDialog = true
                         }
                 )
-            }
-        }
-        
-        // MAIN GESTURE AREA - Full screen divided into areas
-        Box(modifier = Modifier.fillMaxSize()) {
-            // TOP 5% - Ignore area
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.05f)
-                    .align(Alignment.TopStart)
-            )
-            
-            // CENTER AREA - 95% height, divided into left/center/right
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.95f)
-                    .align(Alignment.BottomStart)
-            ) {
-                // LEFT 5% - Video info toggle (also shows/hides with control buttons)
-                if (showControlButtons) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(0.05f)
-                            .fillMaxHeight()
-                            .align(Alignment.CenterStart)
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = { toggleVideoInfo() }
-                            )
-                    )
-                }
-                
-                // CENTER 90% - All gestures (tap, long tap, horizontal swipe, vertical swipe)
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(if (showControlButtons) 0.9f else 1f)
-                        .fillMaxHeight()
-                        .align(Alignment.Center)
-                        // USE SINGLE pointerInteropFilter FOR ALL GESTURES TO AVOID CONFLICTS
-                        .pointerInteropFilter { event ->
-                            when (event.action) {
-                                MotionEvent.ACTION_DOWN -> {
-                                    touchStartX = event.x
-                                    touchStartY = event.y
-                                    startLongTapDetection()
-                                    true
-                                }
-                                MotionEvent.ACTION_MOVE -> {
-                                    if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
-                                        // Check if this should become a horizontal or vertical swipe
-                                        when (checkForSwipeDirection(event.x, event.y)) {
-                                            "horizontal" -> {
-                                                startHorizontalSeeking(event.x)
-                                            }
-                                            "vertical" -> {
-                                                startVerticalSwipe(event.y)
-                                            }
-                                        }
-                                    } else if (isHorizontalSwipe) {
-                                        // Continue horizontal seeking
-                                        handleHorizontalSeeking(event.x)
-                                    }
-                                    // If it's a long tap or vertical swipe, ignore movement (allow slight finger movement during hold)
-                                    true
-                                }
-                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                    endTouch()
-                                    true
-                                }
-                                else -> false
-                            }
-                        }
-                )
-                
-                // RIGHT 5% - Video info toggle (also shows/hides with control buttons)
-                if (showControlButtons) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(0.05f)
-                            .fillMaxHeight()
-                            .align(Alignment.CenterEnd)
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = { toggleVideoInfo() }
-                            )
-                    )
-                }
-            }
-        }
-        
-        // BOTTOM SEEK BAR AREA
-        if (showSeekbar) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(70.dp)
-                    .align(Alignment.BottomStart)
-                    .padding(horizontal = 60.dp)
-                    .offset(y = (3).dp) 
-            ) {
-                Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
-                        Row(modifier = Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                text = "$currentTime / $totalTime",
-                                style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                                modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
-                    Box(modifier = Modifier.fillMaxWidth().height(48.dp)) { // CHANGED: Increased height for better touch area
-                        SimpleDraggableProgressBar(
-                            position = seekbarPosition,
-                            duration = seekbarDuration,
-                            onValueChange = { handleProgressBarDrag(it) },
-                            onValueChangeFinished = { handleDragFinished() },
-                            getFreshPosition = { getFreshPosition() },
-                            modifier = Modifier.fillMaxSize().height(48.dp) // CHANGED: Increased height
-                        )
-                    }
-                }
             }
         }
         
