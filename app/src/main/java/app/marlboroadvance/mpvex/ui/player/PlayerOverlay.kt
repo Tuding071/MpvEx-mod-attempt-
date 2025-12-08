@@ -1,11 +1,8 @@
 package app.marlboroadvance.mpvex.ui.player
 
 import android.view.MotionEvent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -25,7 +22,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Divider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
@@ -37,11 +34,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -64,25 +62,68 @@ import androidx.compose.ui.input.pointer.pointerInput
 import android.content.Intent
 import android.net.Uri
 import kotlin.math.abs
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.window.Dialog
+import android.app.Activity
+import androidx.lifecycle.viewmodel.compose.viewModel
+import app.marlboroadvance.mpvex.R
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.List
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.UUID
 
-// NEW: Data classes for resolution and filters
-data class VideoResolution(
-    val name: String,
-    val width: Int,
-    val height: Int,
-    val command: String
+// Data class for log entries
+data class VideoLogEntry(
+    val id: String = UUID.randomUUID().toString(),
+    val fileName: String,
+    val timestamp: Long = System.currentTimeMillis(),
+    val formattedTime: String = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
 )
 
-data class VideoFilter(
-    val name: String,
-    val command: String,
-    val description: String = ""
-)
+// Helper class to manage video logs
+class VideoLogManager(private val maxLogs: Int = 10) {
+    private val logs = mutableListOf<VideoLogEntry>()
+    
+    fun addLog(fileName: String) {
+        // Check if same file was recently opened
+        val recentLog = logs.firstOrNull { it.fileName == fileName }
+        if (recentLog != null) {
+            // Remove existing entry to re-add it at the top (most recent)
+            logs.remove(recentLog)
+        }
+        
+        logs.add(0, VideoLogEntry(fileName = fileName))
+        
+        // Keep only latest logs
+        if (logs.size > maxLogs) {
+            logs.removeAt(logs.size - 1)
+        }
+    }
+    
+    fun getLogs(): List<VideoLogEntry> = logs.toList()
+    
+    fun clearLogs() {
+        logs.clear()
+    }
+    
+    fun removeLog(id: String) {
+        logs.removeAll { it.id == id }
+    }
+}
 
 @Composable
 fun PlayerOverlay(
     viewModel: PlayerViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onBackClick: () -> Unit = {} // ADD: Back button callback
 ) {
     val context = LocalContext.current
     var currentTime by remember { mutableStateOf("00:00") }
@@ -93,6 +134,9 @@ fun PlayerOverlay(
     var pendingPauseResume by remember { mutableStateOf(false) }
     var isPausing by remember { mutableStateOf(false) }
     var showSeekbar by remember { mutableStateOf(true) }
+    
+    // ADD: Control buttons visibility (toggle with tap)
+    var showControlButtons by remember { mutableStateOf(true) }
     
     var currentPosition by remember { mutableStateOf(0.0) }
     var videoDuration by remember { mutableStateOf(1.0) }
@@ -155,120 +199,18 @@ fun PlayerOverlay(
     var currentVolume by remember { mutableStateOf(viewModel.currentVolume.value) }
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    // NEW: Resolution scaling states
-    var showResolutionMenu by remember { mutableStateOf(false) }
-    var currentResolution by remember { mutableStateOf("Original") }
-    var originalVideoWidth by remember { mutableStateOf(0) }
-    var originalVideoHeight by remember { mutableStateOf(0) }
+    // ADD: Video logs dialog state
+    var showVideoLogsDialog by remember { mutableStateOf(false) }
     
-    // NEW: Available resolutions list
-    val availableResolutions = remember {
-        listOf(
-            VideoResolution("Original", 0, 0, ""),
-            VideoResolution("360p", 640, 360, "scale=w=640:h=360"),
-            VideoResolution("480p", 854, 480, "scale=w=854:h=480"),
-            VideoResolution("720p", 1280, 720, "scale=w=1280:h=720"),
-            VideoResolution("1080p", 1920, 1080, "scale=w=1920:h=1080"),
-            VideoResolution("1440p", 2560, 1440, "scale=w=2560:h=1440")
-        )
-    }
-    
-    // NEW: Video filters list
-    val videoFilters = remember {
-        listOf(
-            VideoFilter("None", "", "No filter"),
-            VideoFilter("Bilinear", "scale=flags=bilinear", "Basic upscaling"),
-            VideoFilter("Bicubic", "scale=flags=bicubic", "Better quality upscaling"),
-            VideoFilter("Lanczos", "scale=flags=lanczos", "High-quality upscaling"),
-            VideoFilter("Spline36", "scale=flags=spline36", "Very high-quality upscaling"),
-            VideoFilter("Sharpen", "unsharp=la=3.5", "Increase sharpness"),
-            VideoFilter("Deband", "deband=range=24:direction=135:blur=false", "Reduce banding artifacts")
-        )
-    }
-    
-    // NEW: Selected filter state
-    var currentFilter by remember { mutableStateOf("None") }
-    var showFiltersMenu by remember { mutableStateOf(false) }
+    // ADD: Video log manager
+    val videoLogManager = remember { VideoLogManager() }
+    var videoLogs by remember { mutableStateOf<List<VideoLogEntry>>(emptyList()) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // Function to show playback feedback
-    fun showPlaybackFeedbackFunc(text: String) {
-        playbackFeedbackJob?.cancel()
-        showPlaybackFeedback = true
-        playbackFeedbackText = text
-        playbackFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showPlaybackFeedback = false
-        }
-    }
-    
-    // NEW: Function to apply resolution scaling
-    fun applyResolution(resolution: VideoResolution) {
-        currentResolution = resolution.name
-        
-        // Clear existing scale filter
-        MPVLib.command("vf", "remove", "@scale")
-        
-        if (resolution.command.isNotEmpty()) {
-            // Apply new scale filter
-            MPVLib.command("vf", "add", resolution.command)
-        }
-        
-        // REMOVED: Feedback for resolution changes
-        // Auto-hide menu after selection
-        coroutineScope.launch {
-            delay(500)
-            showResolutionMenu = false
-        }
-    }
-    
-    // NEW: Function to apply video filter
-    fun applyFilter(filter: VideoFilter) {
-        currentFilter = filter.name
-        
-        // Remove all filters first (except scale if applied)
-        val currentVf = MPVLib.getPropertyString("vf") ?: ""
-        
-        // Keep scale filter if exists
-        val scaleFilter = if (currentVf.contains("scale=")) {
-            currentVf.split(",").find { it.contains("scale=") }
-        } else null
-        
-        // Clear all filters
-        MPVLib.command("vf", "clr", "")
-        
-        // Re-add scale filter if it existed
-        scaleFilter?.let {
-            MPVLib.command("vf", "add", it)
-        }
-        
-        // Apply new filter if not "None"
-        if (filter.command.isNotEmpty()) {
-            MPVLib.command("vf", "add", filter.command)
-        }
-        
-        // REMOVED: Feedback for filter changes
-        // Auto-hide menu after selection
-        coroutineScope.launch {
-            delay(500)
-            showFiltersMenu = false
-        }
-    }
-    
-    // NEW: Get original video resolution
-    LaunchedEffect(Unit) {
-        // Get original video dimensions
-        delay(500) // Wait for video to load
-        val width = MPVLib.getPropertyInt("width") ?: 0
-        val height = MPVLib.getPropertyInt("height") ?: 0
-        originalVideoWidth = width
-        originalVideoHeight = height
-        
-        // Update resolution name to show original resolution
-        if (width > 0 && height > 0) {
-            currentResolution = "Original (${width}x${height})"
-        }
+    // Function to refresh logs
+    fun refreshLogs() {
+        videoLogs = videoLogManager.getLogs()
     }
     
     // UPDATED: performRealTimeSeek with throttle
@@ -320,6 +262,51 @@ fun PlayerOverlay(
         }
     }
     
+    // ADD: Toggle control buttons (back and log buttons)
+    fun toggleControlButtons() {
+        showControlButtons = !showControlButtons
+        if (showControlButtons) {
+            // Auto-hide after 4 seconds
+            coroutineScope.launch {
+                delay(4000)
+                showControlButtons = false
+            }
+        }
+    }
+    
+    // MODIFIED: handleTap to also toggle control buttons
+    fun handleTap() {
+        val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
+        if (currentPaused) {
+            coroutineScope.launch {
+                val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+                MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
+                delay(100)
+                MPVLib.setPropertyBoolean("pause", false)
+            }
+            showPlaybackFeedback("Resume")
+        } else {
+            MPVLib.setPropertyBoolean("pause", true)
+            showPlaybackFeedback("Pause")
+        }
+        
+        // Toggle seekbar visibility
+        if (showSeekbar) {
+            showSeekbar = false
+        } else {
+            showSeekbarWithTimeout()
+        }
+        
+        // ALWAYS show control buttons on tap and auto-hide after 4 seconds
+        showControlButtons = true
+        coroutineScope.launch {
+            delay(4000)
+            showControlButtons = false
+        }
+        
+        isPausing = !currentPaused
+    }
+    
     val showVolumeFeedback: (Int) -> Unit = { volume ->
         volumeFeedbackJob?.cancel()
         showVolumeFeedbackState = true
@@ -359,26 +346,14 @@ fun PlayerOverlay(
         scheduleSeekbarHide()
     }
     
-    fun handleTap() {
-        val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
-        if (currentPaused) {
-            coroutineScope.launch {
-                val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-                MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
-                delay(100)
-                MPVLib.setPropertyBoolean("pause", false)
-            }
-            showPlaybackFeedbackFunc("Resume")
-        } else {
-            MPVLib.setPropertyBoolean("pause", true)
-            showPlaybackFeedbackFunc("Pause")
+    fun showPlaybackFeedback(text: String) {
+        playbackFeedbackJob?.cancel()
+        showPlaybackFeedback = true
+        playbackFeedbackText = text
+        playbackFeedbackJob = coroutineScope.launch {
+            delay(1000)
+            showPlaybackFeedback = false
         }
-        if (showSeekbar) {
-            showSeekbar = false
-        } else {
-            showSeekbarWithTimeout()
-        }
-        isPausing = !currentPaused
     }
     
     fun startLongTapDetection() {
@@ -542,12 +517,25 @@ fun PlayerOverlay(
         }
         val title = MPVLib.getPropertyString("media-title") ?: "Video"
         videoTitle = title
+        
+        // ADD: Save to video logs when video opens
+        videoLogManager.addLog(fileName)
+        refreshLogs()
+        
         showVideoInfo = 1
         videoInfoJob?.cancel()
         videoInfoJob = coroutineScope.launch {
             delay(4000)
             showVideoInfo = 0
         }
+        
+        // ADD: Show control buttons initially and auto-hide
+        showControlButtons = true
+        coroutineScope.launch {
+            delay(4000)
+            showControlButtons = false
+        }
+        
         scheduleSeekbarHide()
     }
     
@@ -661,10 +649,195 @@ fun PlayerOverlay(
         scheduleSeekbarHide()
     }
     
+    // ADD: Dialog for video logs
+    if (showVideoLogsDialog) {
+        Dialog(onDismissRequest = { showVideoLogsDialog = false }) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth(0.9f)
+                    .wrapContentHeight(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFF2C2C2C)
+                ),
+                elevation = CardDefaults.cardElevation(
+                    defaultElevation = 8.dp
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(16.dp)
+                        .fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Recent Videos",
+                        style = TextStyle(
+                            color = Color.White,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        ),
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    
+                    if (videoLogs.isEmpty()) {
+                        Text(
+                            text = "No recent videos",
+                            style = TextStyle(
+                                color = Color.Gray,
+                                fontSize = 14.sp
+                            ),
+                            modifier = Modifier.padding(vertical = 24.dp)
+                        )
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(300.dp)
+                        ) {
+                            items(videoLogs) { log ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 8.dp)
+                                        .clickable {
+                                            // Optional: Could add functionality to reopen the video
+                                        },
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text(
+                                            text = log.fileName,
+                                            style = TextStyle(
+                                                color = Color.White,
+                                                fontSize = 14.sp
+                                            ),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = log.formattedTime,
+                                            style = TextStyle(
+                                                color = Color.Gray,
+                                                fontSize = 12.sp
+                                            )
+                                        )
+                                    }
+                                    
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowBack,
+                                        contentDescription = "Remove",
+                                        tint = Color.Gray,
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .clickable {
+                                                videoLogManager.removeLog(log.id)
+                                                refreshLogs()
+                                            }
+                                            .padding(4.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        Text(
+                            text = "Clear All",
+                            style = TextStyle(
+                                color = Color(0xFF64B5F6),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            modifier = Modifier
+                                .clickable {
+                                    videoLogManager.clearLogs()
+                                    refreshLogs()
+                                }
+                                .padding(8.dp)
+                        )
+                        
+                        Spacer(modifier = Modifier.width(16.dp))
+                        
+                        Text(
+                            text = "Close",
+                            style = TextStyle(
+                                color = Color(0xFF64B5F6),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            modifier = Modifier
+                                .clickable {
+                                    showVideoLogsDialog = false
+                                }
+                                .padding(8.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+    
     Box(modifier = modifier.fillMaxSize()) {
+        // TOP CONTROL BUTTONS (Back and Log)
+        if (showControlButtons) {
+            // Back button - Top Left
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset(x = 16.dp, y = 16.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ArrowBack,
+                    contentDescription = "Back",
+                    tint = Color.White,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .background(Color.DarkGray.copy(alpha = 0.8f), RoundedCornerShape(8.dp))
+                        .padding(8.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) {
+                            onBackClick()
+                        }
+                )
+            }
+            
+            // Log button - Top Right
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(x = (-16).dp, y = 16.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.List,
+                    contentDescription = "Video Logs",
+                    tint = Color.White,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .background(Color.DarkGray.copy(alpha = 0.8f), RoundedCornerShape(8.dp))
+                        .padding(8.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) {
+                            showVideoLogsDialog = true
+                        }
+                )
+            }
+        }
+        
         // MAIN GESTURE AREA - Full screen divided into areas
         Box(modifier = Modifier.fillMaxSize()) {
-            // TOP 5% - Ignore area
+            // TOP 5% - Ignore area (but contains control buttons)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -679,23 +852,25 @@ fun PlayerOverlay(
                     .fillMaxHeight(0.95f)
                     .align(Alignment.BottomStart)
             ) {
-                // LEFT 5% - Video info toggle
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(0.05f)
-                        .fillMaxHeight()
-                        .align(Alignment.CenterStart)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = { toggleVideoInfo() }
-                        )
-                )
+                // LEFT 5% - Video info toggle (also shows/hides with control buttons)
+                if (showControlButtons) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.05f)
+                            .fillMaxHeight()
+                            .align(Alignment.CenterStart)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = { toggleVideoInfo() }
+                            )
+                    )
+                }
                 
                 // CENTER 90% - All gestures (tap, long tap, horizontal swipe, vertical swipe)
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth(0.9f)
+                        .fillMaxWidth(if (showControlButtons) 0.9f else 1f)
                         .fillMaxHeight()
                         .align(Alignment.Center)
                         // USE SINGLE pointerInteropFilter FOR ALL GESTURES TO AVOID CONFLICTS
@@ -734,18 +909,20 @@ fun PlayerOverlay(
                         }
                 )
                 
-                // RIGHT 5% - Video info toggle
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(0.05f)
-                        .fillMaxHeight()
-                        .align(Alignment.CenterEnd)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = { toggleVideoInfo() }
-                        )
-                )
+                // RIGHT 5% - Video info toggle (also shows/hides with control buttons)
+                if (showControlButtons) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.05f)
+                            .fillMaxHeight()
+                            .align(Alignment.CenterEnd)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = { toggleVideoInfo() }
+                            )
+                    )
+                }
             }
         }
         
@@ -761,21 +938,7 @@ fun PlayerOverlay(
             ) {
                 Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
-                        // UPDATED: Made time display clickable to show resolution menu
-                        Row(
-                            modifier = Modifier
-                                .align(Alignment.CenterStart)
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
-                                ) {
-                                    // Toggle resolution menu on click
-                                    showResolutionMenu = !showResolutionMenu
-                                    showFiltersMenu = false
-                                    cancelAutoHide()
-                                },
-                            horizontalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
+                        Row(modifier = Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
                                 text = "$currentTime / $totalTime",
                                 style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
@@ -783,22 +946,22 @@ fun PlayerOverlay(
                             )
                         }
                     }
-                    Box(modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                    Box(modifier = Modifier.fillMaxWidth().height(48.dp)) { // CHANGED: Increased height for better touch area
                         SimpleDraggableProgressBar(
                             position = seekbarPosition,
                             duration = seekbarDuration,
                             onValueChange = { handleProgressBarDrag(it) },
                             onValueChangeFinished = { handleDragFinished() },
                             getFreshPosition = { getFreshPosition() },
-                            modifier = Modifier.fillMaxSize().height(48.dp)
+                            modifier = Modifier.fillMaxSize().height(48.dp) // CHANGED: Increased height
                         )
                     }
                 }
             }
         }
         
-        // VIDEO INFO - Top Left
-        if (showVideoInfo != 0) {
+        // VIDEO INFO - Top Left (below back button)
+        if (showVideoInfo != 0 && showControlButtons) {
             Text(
                 text = displayText,
                 style = TextStyle(color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium),
@@ -808,180 +971,6 @@ fun PlayerOverlay(
                     .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 6.dp)
             )
-        }
-        
-        // RESOLUTION MENU - Bottom Left (when time is clicked)
-        AnimatedVisibility(
-            visible = showResolutionMenu,
-            enter = expandVertically(expandFrom = Alignment.Bottom),
-            exit = shrinkVertically(shrinkTowards = Alignment.Bottom),
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .offset(x = 60.dp, y = (-70).dp)
-        ) {
-            Column(
-                modifier = Modifier
-                    .width(180.dp)
-                    .background(Color.DarkGray.copy(alpha = 0.9f))
-                    .clip(MaterialTheme.shapes.medium)
-            ) {
-                // Resolution Section
-                Text(
-                    text = "Resolution",
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFF444444))
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                )
-                
-                LazyColumn(
-                    modifier = Modifier.height(200.dp)
-                ) {
-                    items(availableResolutions) { resolution ->
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { applyResolution(resolution) }
-                                .padding(horizontal = 16.dp, vertical = 12.dp)
-                        ) {
-                            Text(
-                                text = if (resolution.name == "Original" && originalVideoWidth > 0) {
-                                    "Original (${originalVideoWidth}x${originalVideoHeight})"
-                                } else resolution.name,
-                                style = TextStyle(
-                                    color = if (currentResolution == resolution.name) Color.Cyan else Color.White,
-                                    fontSize = 14.sp
-                                )
-                            )
-                        }
-                    }
-                }
-                
-                Divider(color = Color.Gray.copy(alpha = 0.5f), thickness = 1.dp)
-                
-                // Filters Section Header (clickable to show filters)
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            showFiltersMenu = !showFiltersMenu
-                            showResolutionMenu = false
-                        }
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                ) {
-                    Row(
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = "Filters",
-                            style = TextStyle(
-                                color = Color.White,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        )
-                        Text(
-                            text = "→",
-                            style = TextStyle(
-                                color = Color.LightGray,
-                                fontSize = 16.sp
-                            )
-                        )
-                    }
-                }
-            }
-        }
-        
-        // FILTERS MENU - Bottom Left
-        AnimatedVisibility(
-            visible = showFiltersMenu,
-            enter = expandVertically(expandFrom = Alignment.Bottom),
-            exit = shrinkVertically(shrinkTowards = Alignment.Bottom),
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .offset(x = 60.dp, y = (-70).dp)
-        ) {
-            Column(
-                modifier = Modifier
-                    .width(220.dp)
-                    .background(Color.DarkGray.copy(alpha = 0.9f))
-                    .clip(MaterialTheme.shapes.medium)
-            ) {
-                // Back button
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            showFiltersMenu = false
-                            showResolutionMenu = true
-                        }
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = "←",
-                            style = TextStyle(
-                                color = Color.LightGray,
-                                fontSize = 16.sp
-                            )
-                        )
-                        Text(
-                            text = "Filters",
-                            style = TextStyle(
-                                color = Color.White,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        )
-                    }
-                }
-                
-                Divider(color = Color.Gray.copy(alpha = 0.5f), thickness = 1.dp)
-                
-                // Filters List
-                LazyColumn(
-                    modifier = Modifier.height(250.dp)
-                ) {
-                    items(videoFilters) { filter ->
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { applyFilter(filter) }
-                                .padding(horizontal = 16.dp, vertical = 12.dp)
-                        ) {
-                            Text(
-                                text = filter.name,
-                                style = TextStyle(
-                                    color = if (currentFilter == filter.name) Color.Cyan else Color.White,
-                                    fontSize = 14.sp,
-                                    fontWeight = if (currentFilter == filter.name) FontWeight.Bold else FontWeight.Normal
-                                )
-                            )
-                            if (filter.description.isNotEmpty()) {
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = filter.description,
-                                    style = TextStyle(
-                                        color = Color.LightGray,
-                                        fontSize = 11.sp
-                                    ),
-                                    maxLines = 2
-                                )
-                            }
-                        }
-                    }
-                }
-            }
         }
         
         // FEEDBACK AREA
@@ -997,12 +986,13 @@ fun PlayerOverlay(
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
-                showQuickSeekFeedback -> Text(
+                showQuickSeekFeedback -> Text( // ADD: Quick seek feedback
                     text = quickSeekFeedbackText,
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
                 showSeekTime -> Text(
+                    // UPDATED: Add direction indicator to seek time
                     text = if (seekDirection.isNotEmpty()) "$seekTargetTime $seekDirection" else seekTargetTime,
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
@@ -1034,7 +1024,7 @@ fun SimpleDraggableProgressBar(
     // Convert 25dp to pixels for the movement threshold
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
-    Box(modifier = modifier.height(48.dp)) {
+    Box(modifier = modifier.height(48.dp)) { // CHANGED: Increased container height
         // Progress bar background
         Box(modifier = Modifier
             .fillMaxWidth()
@@ -1052,7 +1042,7 @@ fun SimpleDraggableProgressBar(
         // CHANGED: Increased touch area to full 48dp height
         Box(modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp)
+            .height(48.dp) // This makes the entire 48dp area draggable
             .align(Alignment.CenterStart)
             .pointerInput(Unit) {
                 detectDragGestures(
