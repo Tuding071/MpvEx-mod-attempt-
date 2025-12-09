@@ -120,6 +120,27 @@ class VideoLogManager(private val maxLogs: Int = 10) {
     }
 }
 
+// Singleton repository to persist logs across app lifecycle
+object VideoLogRepository {
+    private val logManager = VideoLogManager()
+    
+    fun addLog(fileName: String) {
+        logManager.addLog(fileName)
+    }
+    
+    fun getLogs(): List<VideoLogEntry> {
+        return logManager.getLogs()
+    }
+    
+    fun clearLogs() {
+        logManager.clearLogs()
+    }
+    
+    fun removeLog(id: String) {
+        logManager.removeLog(id)
+    }
+}
+
 @Composable
 fun PlayerOverlay(
     viewModel: PlayerViewModel,
@@ -200,15 +221,14 @@ fun PlayerOverlay(
     // ADD: Video logs dialog state
     var showVideoLogsDialog by remember { mutableStateOf(false) }
     
-    // ADD: Video log manager
-    val videoLogManager = remember { VideoLogManager() }
+    // ADD: Video logs - loaded from repository
     var videoLogs by remember { mutableStateOf<List<VideoLogEntry>>(emptyList()) }
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // Function to refresh logs
+    // Function to refresh logs from repository
     fun refreshLogs() {
-        videoLogs = videoLogManager.getLogs()
+        videoLogs = VideoLogRepository.getLogs()
     }
     
     // UPDATED: performRealTimeSeek with throttle
@@ -493,9 +513,9 @@ fun PlayerOverlay(
         val title = MPVLib.getPropertyString("media-title") ?: "Video"
         videoTitle = title
         
-        // ADD: Save to video logs when video opens
-        videoLogManager.addLog(fileName)
-        refreshLogs()
+        // ADD: Save to video logs when video opens - using singleton repository
+        VideoLogRepository.addLog(fileName)
+        refreshLogs() // Refresh the UI with current logs
         
         showVideoInfo = 1
         videoInfoJob?.cancel()
@@ -700,8 +720,8 @@ fun PlayerOverlay(
                                         modifier = Modifier
                                             .size(20.dp)
                                             .clickable {
-                                                videoLogManager.removeLog(log.id)
-                                                refreshLogs()
+                                                VideoLogRepository.removeLog(log.id)
+                                                refreshLogs() // Refresh UI after removal
                                             }
                                             .padding(4.dp)
                                     )
@@ -725,8 +745,8 @@ fun PlayerOverlay(
                             ),
                             modifier = Modifier
                                 .clickable {
-                                    videoLogManager.clearLogs()
-                                    refreshLogs()
+                                    VideoLogRepository.clearLogs()
+                                    refreshLogs() // Refresh UI after clearing
                                 }
                                 .padding(8.dp)
                         )
@@ -887,7 +907,11 @@ fun PlayerOverlay(
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
-                        onClick = { showVideoLogsDialog = true }
+                        onClick = {
+                            // Refresh logs before showing dialog
+                            refreshLogs()
+                            showVideoLogsDialog = true
+                        }
                     )
             )
         }
