@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -20,9 +19,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
@@ -35,15 +31,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.vivvvek.seeker.Seeker
@@ -63,83 +56,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import android.content.Intent
 import android.net.Uri
 import kotlin.math.abs
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.window.Dialog
-import android.app.Activity
-import androidx.lifecycle.viewmodel.compose.viewModel
-import app.marlboroadvance.mpvex.R
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.List
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.UUID
-
-// Data class for log entries
-data class VideoLogEntry(
-    val id: String = UUID.randomUUID().toString(),
-    val fileName: String,
-    val timestamp: Long = System.currentTimeMillis(),
-    val formattedTime: String = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-)
-
-// Helper class to manage video logs
-class VideoLogManager(private val maxLogs: Int = 10) {
-    private val logs = mutableListOf<VideoLogEntry>()
-    
-    fun addLog(fileName: String) {
-        // Check if same file was recently opened
-        val recentLog = logs.firstOrNull { it.fileName == fileName }
-        if (recentLog != null) {
-            // Remove existing entry to re-add it at the top (most recent)
-            logs.remove(recentLog)
-        }
-        
-        logs.add(0, VideoLogEntry(fileName = fileName))
-        
-        // Keep only latest logs
-        if (logs.size > maxLogs) {
-            logs.removeAt(logs.size - 1)
-        }
-    }
-    
-    fun getLogs(): List<VideoLogEntry> = logs.toList()
-    
-    fun clearLogs() {
-        logs.clear()
-    }
-    
-    fun removeLog(id: String) {
-        logs.removeAll { it.id == id }
-    }
-}
-
-// Singleton repository to persist logs across app lifecycle
-object VideoLogRepository {
-    private val logManager = VideoLogManager()
-    
-    fun addLog(fileName: String) {
-        logManager.addLog(fileName)
-    }
-    
-    fun getLogs(): List<VideoLogEntry> {
-        return logManager.getLogs()
-    }
-    
-    fun clearLogs() {
-        logManager.clearLogs()
-    }
-    
-    fun removeLog(id: String) {
-        logManager.removeLog(id)
-    }
-}
 
 @Composable
 fun PlayerOverlay(
@@ -204,8 +120,7 @@ fun PlayerOverlay(
     var userInteracting by remember { mutableStateOf(false) }
     var hideSeekbarJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    // CHANGED: Renamed to avoid conflict with function
-    var showPlaybackFeedbackState by remember { mutableStateOf(false) }
+    var showPlaybackFeedback by remember { mutableStateOf(false) }
     var playbackFeedbackText by remember { mutableStateOf("") }
     var playbackFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
@@ -218,18 +133,7 @@ fun PlayerOverlay(
     var currentVolume by remember { mutableStateOf(viewModel.currentVolume.value) }
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    // ADD: Video logs dialog state
-    var showVideoLogsDialog by remember { mutableStateOf(false) }
-    
-    // ADD: Video logs - loaded from repository
-    var videoLogs by remember { mutableStateOf<List<VideoLogEntry>>(emptyList()) }
-    
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
-    
-    // Function to refresh logs from repository
-    fun refreshLogs() {
-        videoLogs = VideoLogRepository.getLogs()
-    }
     
     // UPDATED: performRealTimeSeek with throttle
     fun performRealTimeSeek(targetPosition: Double) {
@@ -269,16 +173,8 @@ fun PlayerOverlay(
         MPVLib.command("seek", seconds.toString(), "relative", "exact")
     }
     
-    fun toggleVideoInfo() {
-        showVideoInfo = if (showVideoInfo == 0) 1 else 0
-        if (showVideoInfo != 0) {
-            videoInfoJob?.cancel()
-            videoInfoJob = coroutineScope.launch {
-                delay(4000)
-                showVideoInfo = 0
-            }
-        }
-    }
+    // REMOVED: toggleVideoInfo function since we removed left/right clickable areas
+    // Video info will only show on launch
     
     val showVolumeFeedback: (Int) -> Unit = { volume ->
         volumeFeedbackJob?.cancel()
@@ -321,11 +217,11 @@ fun PlayerOverlay(
     
     fun showPlaybackFeedback(text: String) {
         playbackFeedbackJob?.cancel()
-        showPlaybackFeedbackState = true
+        showPlaybackFeedback = true
         playbackFeedbackText = text
         playbackFeedbackJob = coroutineScope.launch {
             delay(1000)
-            showPlaybackFeedbackState = false
+            showPlaybackFeedback = false
         }
     }
     
@@ -512,11 +408,6 @@ fun PlayerOverlay(
         }
         val title = MPVLib.getPropertyString("media-title") ?: "Video"
         videoTitle = title
-        
-        // ADD: Save to video logs when video opens - using singleton repository
-        VideoLogRepository.addLog(fileName)
-        refreshLogs() // Refresh the UI with current logs
-        
         showVideoInfo = 1
         videoInfoJob?.cancel()
         videoInfoJob = coroutineScope.launch {
@@ -636,142 +527,6 @@ fun PlayerOverlay(
         scheduleSeekbarHide()
     }
     
-    // ADD: Dialog for video logs
-    if (showVideoLogsDialog) {
-        Dialog(onDismissRequest = { showVideoLogsDialog = false }) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth(0.9f)
-                    .wrapContentHeight(),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = Color(0xFF2C2C2C)
-                ),
-                elevation = CardDefaults.cardElevation(
-                    defaultElevation = 8.dp
-                )
-            ) {
-                Column(
-                    modifier = Modifier
-                        .padding(16.dp)
-                        .fillMaxWidth()
-                ) {
-                    Text(
-                        text = "Recent Videos",
-                        style = TextStyle(
-                            color = Color.White,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold
-                        ),
-                        modifier = Modifier.padding(bottom = 12.dp)
-                    )
-                    
-                    if (videoLogs.isEmpty()) {
-                        Text(
-                            text = "No recent videos",
-                            style = TextStyle(
-                                color = Color.Gray,
-                                fontSize = 14.sp
-                            ),
-                            modifier = Modifier.padding(vertical = 24.dp)
-                        )
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(300.dp)
-                        ) {
-                            items(videoLogs) { log ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 8.dp)
-                                        .clickable {
-                                            // Optional: Could add functionality to reopen the video
-                                        },
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Text(
-                                            text = log.fileName,
-                                            style = TextStyle(
-                                                color = Color.White,
-                                                fontSize = 14.sp
-                                            ),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = log.formattedTime,
-                                            style = TextStyle(
-                                                color = Color.Gray,
-                                                fontSize = 12.sp
-                                            )
-                                        )
-                                    }
-                                    
-                                    Icon(
-                                        imageVector = Icons.Default.ArrowBack,
-                                        contentDescription = "Remove",
-                                        tint = Color.Gray,
-                                        modifier = Modifier
-                                            .size(20.dp)
-                                            .clickable {
-                                                VideoLogRepository.removeLog(log.id)
-                                                refreshLogs() // Refresh UI after removal
-                                            }
-                                            .padding(4.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    
-                    Spacer(modifier = Modifier.height(8.dp))
-                    
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End
-                    ) {
-                        Text(
-                            text = "Clear All",
-                            style = TextStyle(
-                                color = Color(0xFF64B5F6),
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Medium
-                            ),
-                            modifier = Modifier
-                                .clickable {
-                                    VideoLogRepository.clearLogs()
-                                    refreshLogs() // Refresh UI after clearing
-                                }
-                                .padding(8.dp)
-                        )
-                        
-                        Spacer(modifier = Modifier.width(16.dp))
-                        
-                        Text(
-                            text = "Close",
-                            style = TextStyle(
-                                color = Color(0xFF64B5F6),
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Medium
-                            ),
-                            modifier = Modifier
-                                .clickable {
-                                    showVideoLogsDialog = false
-                                }
-                                .padding(8.dp)
-                        )
-                    }
-                }
-            }
-        }
-    }
-    
     Box(modifier = modifier.fillMaxSize()) {
         // MAIN GESTURE AREA - Full screen divided into areas
         Box(modifier = Modifier.fillMaxSize()) {
@@ -783,81 +538,47 @@ fun PlayerOverlay(
                     .align(Alignment.TopStart)
             )
             
-            // CENTER AREA - 95% height, divided into left/center/right
+            // CENTER AREA - 95% height, full width (left/right areas removed)
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
+                    .fillMaxWidth() // Full width now
                     .fillMaxHeight(0.95f)
                     .align(Alignment.BottomStart)
-            ) {
-                // LEFT 5% - Video info toggle
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(0.05f)
-                        .fillMaxHeight()
-                        .align(Alignment.CenterStart)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = { toggleVideoInfo() }
-                        )
-                )
-                
-                // CENTER 90% - All gestures (tap, long tap, horizontal swipe, vertical swipe)
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(0.9f)
-                        .fillMaxHeight()
-                        .align(Alignment.Center)
-                        // USE SINGLE pointerInteropFilter FOR ALL GESTURES TO AVOID CONFLICTS
-                        .pointerInteropFilter { event ->
-                            when (event.action) {
-                                MotionEvent.ACTION_DOWN -> {
-                                    touchStartX = event.x
-                                    touchStartY = event.y
-                                    startLongTapDetection()
-                                    true
-                                }
-                                MotionEvent.ACTION_MOVE -> {
-                                    if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
-                                        // Check if this should become a horizontal or vertical swipe
-                                        when (checkForSwipeDirection(event.x, event.y)) {
-                                            "horizontal" -> {
-                                                startHorizontalSeeking(event.x)
-                                            }
-                                            "vertical" -> {
-                                                startVerticalSwipe(event.y)
-                                            }
-                                        }
-                                    } else if (isHorizontalSwipe) {
-                                        // Continue horizontal seeking
-                                        handleHorizontalSeeking(event.x)
-                                    }
-                                    // If it's a long tap or vertical swipe, ignore movement (allow slight finger movement during hold)
-                                    true
-                                }
-                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                    endTouch()
-                                    true
-                                }
-                                else -> false
+                    // USE SINGLE pointerInteropFilter FOR ALL GESTURES TO AVOID CONFLICTS
+                    .pointerInteropFilter { event ->
+                        when (event.action) {
+                            MotionEvent.ACTION_DOWN -> {
+                                touchStartX = event.x
+                                touchStartY = event.y
+                                startLongTapDetection()
+                                true
                             }
+                            MotionEvent.ACTION_MOVE -> {
+                                if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
+                                    // Check if this should become a horizontal or vertical swipe
+                                    when (checkForSwipeDirection(event.x, event.y)) {
+                                        "horizontal" -> {
+                                            startHorizontalSeeking(event.x)
+                                        }
+                                        "vertical" -> {
+                                            startVerticalSwipe(event.y)
+                                        }
+                                    }
+                                } else if (isHorizontalSwipe) {
+                                    // Continue horizontal seeking
+                                    handleHorizontalSeeking(event.x)
+                                }
+                                // If it's a long tap or vertical swipe, ignore movement (allow slight finger movement during hold)
+                                true
+                            }
+                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                endTouch()
+                                true
+                            }
+                            else -> false
                         }
-                )
-                
-                // RIGHT 5% - Video info toggle
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(0.05f)
-                        .fillMaxHeight()
-                        .align(Alignment.CenterEnd)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = { toggleVideoInfo() }
-                        )
-                )
-            }
+                    }
+            )
         }
         
         // BOTTOM SEEK BAR AREA
@@ -894,7 +615,7 @@ fun PlayerOverlay(
             }
         }
         
-        // VIDEO INFO - Top Left (now clickable to show logs)
+        // VIDEO INFO - Top Left (only shows on launch)
         if (showVideoInfo != 0) {
             Text(
                 text = displayText,
@@ -904,15 +625,6 @@ fun PlayerOverlay(
                     .offset(x = 60.dp, y = 20.dp)
                     .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 6.dp)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = {
-                            // Refresh logs before showing dialog
-                            refreshLogs()
-                            showVideoLogsDialog = true
-                        }
-                    )
             )
         }
         
@@ -940,7 +652,7 @@ fun PlayerOverlay(
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
-                showPlaybackFeedbackState -> Text( // CHANGED: Updated variable name
+                showPlaybackFeedback -> Text(
                     text = playbackFeedbackText,
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
