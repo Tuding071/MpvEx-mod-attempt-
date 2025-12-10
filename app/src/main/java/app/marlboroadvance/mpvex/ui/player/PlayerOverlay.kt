@@ -295,16 +295,16 @@ fun PlayerOverlay(
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide() // Cancel auto-hide for both
+        
+        // IMPORTANT: During horizontal seeking, only show seekbar, hide everything else
+        showSeekbar = true
+        showVideoInfo = false // Hide video info during seeking
+        showSeekTime = false // Hide seek time too
+        
         seekStartX = startX
         seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
-        showSeekTime = true
-        // REMOVED: lastSeekTime = 0L
-        
-        // Show both during seeking
-        showSeekbar = true
-        showVideoInfo = true
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
@@ -512,12 +512,11 @@ fun PlayerOverlay(
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
-            showSeekTime = true
-            // REMOVED: lastSeekTime = 0L
             
-            // Show both during drag
+            // IMPORTANT: During drag seeking, only show seekbar, hide everything else
             showSeekbar = true
-            showVideoInfo = true
+            showVideoInfo = false // Hide video info during drag seeking
+            showSeekTime = false // Hide seek time too
             
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
@@ -653,14 +652,20 @@ fun PlayerOverlay(
                     .offset(y = (3).dp) 
             ) {
                 Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
-                        Row(modifier = Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                text = "$currentTime / $totalTime",
-                                style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                                modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
-                            )
+                    // IMPORTANT: Only show time display when NOT seeking
+                    if (!isSeeking) {
+                        Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
+                            Row(modifier = Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    text = "$currentTime / $totalTime",
+                                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                                )
+                            }
                         }
+                    } else {
+                        // During seeking, show minimal seekbar only (empty space where time would be)
+                        Box(modifier = Modifier.fillMaxWidth().wrapContentHeight())
                     }
                     Box(modifier = Modifier.fillMaxWidth().height(48.dp)) { // CHANGED: Increased height for better touch area
                         SimpleDraggableProgressBar(
@@ -676,8 +681,8 @@ fun PlayerOverlay(
             }
         }
         
-        // VIDEO INFO - Top Left (shows/hides with seekbar)
-        if (showVideoInfo) {
+        // VIDEO INFO - Top Left (shows/hides with seekbar, but NOT during seeking)
+        if (showVideoInfo && !isSeeking) {
             Text(
                 text = displayText,
                 style = TextStyle(color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium),
@@ -689,7 +694,7 @@ fun PlayerOverlay(
             )
         }
         
-        // FEEDBACK AREA
+        // FEEDBACK AREA - Keep feedback visible always
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
                 showVolumeFeedbackState -> Text(
