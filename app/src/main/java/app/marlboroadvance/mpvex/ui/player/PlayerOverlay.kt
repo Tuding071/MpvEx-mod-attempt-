@@ -112,8 +112,8 @@ fun PlayerOverlay(
     // ADD: Quick seek amount in seconds
     val quickSeekAmount = 5
     
-    // CHANGED: Video info now follows seekbar visibility
-    var showVideoInfo by remember { mutableStateOf(false) }
+    // CHANGED: Video info follows seekbar visibility
+    var showVideoInfo by remember { mutableStateOf(true) } // Start visible with seekbar
     var videoTitle by remember { mutableStateOf("Video") }
     var fileName by remember { mutableStateOf("Video") }
     var videoInfoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -133,14 +133,6 @@ fun PlayerOverlay(
     var showVolumeFeedbackState by remember { mutableStateOf(false) }
     var currentVolume by remember { mutableStateOf(viewModel.currentVolume.value) }
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    
-    // NEW: Volume control states for left/right areas
-    var leftTouchStartY by remember { mutableStateOf(0f) }
-    var rightTouchStartY by remember { mutableStateOf(0f) }
-    var isLeftVolumeControl by remember { mutableStateOf(false) }
-    var isRightVolumeControl by remember { mutableStateOf(false) }
-    var lastVolumeUpdateTime by remember { mutableStateOf(0L) }
-    val volumeUpdateThrottle = 100L // ms between volume updates
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
@@ -182,15 +174,16 @@ fun PlayerOverlay(
         MPVLib.command("seek", seconds.toString(), "relative", "exact")
     }
     
-    // CHANGED: Video info now toggles with seekbar
+    // CHANGED: Video info now follows seekbar system - toggle both together
     fun toggleVideoInfo() {
-        showVideoInfo = !showVideoInfo
-        // Video info visibility is now tied to seekbar visibility
-        // When user taps to toggle, we show/hide both together
-        if (showVideoInfo) {
-            showSeekbarWithTimeout()
+        if (showSeekbar) {
+            showSeekbar = false
+            showVideoInfo = false // Hide video info too
+            hideSeekbarJob?.cancel()
         } else {
-            hideSeekbarAndVideoInfo()
+            showSeekbar = true
+            showVideoInfo = true // Show video info too
+            scheduleSeekbarHide()
         }
     }
     
@@ -203,21 +196,6 @@ fun PlayerOverlay(
         }
     }
     
-    // NEW: Function to adjust volume
-    fun adjustVolume(delta: Int) {
-        val currentTime = System.currentTimeMillis()
-        if (currentTime - lastVolumeUpdateTime < volumeUpdateThrottle) {
-            return // Throttle volume updates
-        }
-        
-        val newVolume = (currentVolume + delta).coerceIn(0, viewModel.maxVolume)
-        if (newVolume != currentVolume) {
-            MPVLib.setPropertyInt("volume", newVolume)
-            viewModel.updateVolume(newVolume)
-            lastVolumeUpdateTime = currentTime
-        }
-    }
-    
     LaunchedEffect(viewModel.currentVolume) {
         viewModel.currentVolume.collect { volume ->
             currentVolume = volume
@@ -225,7 +203,7 @@ fun PlayerOverlay(
         }
     }
     
-    // CHANGED: Schedule hide for both seekbar and video info
+    // UPDATED: Schedule hide for both seekbar and video info
     fun scheduleSeekbarHide() {
         if (userInteracting) return
         hideSeekbarJob?.cancel()
@@ -249,13 +227,6 @@ fun PlayerOverlay(
         showSeekbar = true
         showVideoInfo = true // Show video info too
         scheduleSeekbarHide()
-    }
-    
-    // NEW: Hide both seekbar and video info
-    fun hideSeekbarAndVideoInfo() {
-        showSeekbar = false
-        showVideoInfo = false
-        hideSeekbarJob?.cancel()
     }
     
     fun showPlaybackFeedback(text: String) {
@@ -283,7 +254,8 @@ fun PlayerOverlay(
             showPlaybackFeedback("Pause")
         }
         if (showSeekbar) {
-            hideSeekbarAndVideoInfo()
+            showSeekbar = false
+            showVideoInfo = false // Hide video info too
         } else {
             showSeekbarWithTimeout()
         }
@@ -326,13 +298,15 @@ fun PlayerOverlay(
     
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
-        cancelAutoHide() // Cancel auto-hide for both seekbar and video info
+        cancelAutoHide() // Cancel auto-hide for both
         seekStartX = startX
         seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
-        // Show seekbar and video info during seeking
+        // REMOVED: lastSeekTime = 0L
+        
+        // Show both during seeking
         showSeekbar = true
         showVideoInfo = true
         
@@ -438,72 +412,6 @@ fun PlayerOverlay(
         isLongTap = false
     }
     
-    // NEW: Handle left/right area vertical swipe for volume
-    fun handleLeftAreaTouch(event: MotionEvent): Boolean {
-        when (event.action) {
-            MotionEvent.ACTION_DOWN -> {
-                leftTouchStartY = event.y
-                isLeftVolumeControl = true
-                cancelAutoHide() // Show UI during volume adjustment
-                showSeekbar = true
-                showVideoInfo = true
-                return true
-            }
-            MotionEvent.ACTION_MOVE -> {
-                if (isLeftVolumeControl) {
-                    val deltaY = leftTouchStartY - event.y // Up = increase volume
-                    val volumeDelta = (deltaY / 10).toInt() // Adjust sensitivity
-                    if (volumeDelta != 0) {
-                        adjustVolume(volumeDelta)
-                        leftTouchStartY = event.y
-                    }
-                    return true
-                }
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (isLeftVolumeControl) {
-                    isLeftVolumeControl = false
-                    scheduleSeekbarHide() // Schedule hide after volume adjustment
-                    return true
-                }
-            }
-        }
-        return false
-    }
-    
-    // NEW: Handle right area vertical swipe for volume
-    fun handleRightAreaTouch(event: MotionEvent): Boolean {
-        when (event.action) {
-            MotionEvent.ACTION_DOWN -> {
-                rightTouchStartY = event.y
-                isRightVolumeControl = true
-                cancelAutoHide() // Show UI during volume adjustment
-                showSeekbar = true
-                showVideoInfo = true
-                return true
-            }
-            MotionEvent.ACTION_MOVE -> {
-                if (isRightVolumeControl) {
-                    val deltaY = rightTouchStartY - event.y // Up = increase volume
-                    val volumeDelta = (deltaY / 10).toInt() // Adjust sensitivity
-                    if (volumeDelta != 0) {
-                        adjustVolume(volumeDelta)
-                        rightTouchStartY = event.y
-                    }
-                    return true
-                }
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (isRightVolumeControl) {
-                    isRightVolumeControl = false
-                    scheduleSeekbarHide() // Schedule hide after volume adjustment
-                    return true
-                }
-            }
-        }
-        return false
-    }
-    
     LaunchedEffect(Unit) {
         val intent = (context as? android.app.Activity)?.intent
         fileName = when {
@@ -520,7 +428,7 @@ fun PlayerOverlay(
         val title = MPVLib.getPropertyString("media-title") ?: "Video"
         videoTitle = title
         
-        // CHANGED: Show both video info and seekbar on launch
+        // Show both on launch
         showVideoInfo = true
         showSeekbar = true
         videoInfoJob?.cancel()
@@ -603,10 +511,12 @@ fun PlayerOverlay(
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
+            // REMOVED: lastSeekTime = 0L
+            
             // Show both during drag
             showSeekbar = true
             showVideoInfo = true
-            // REMOVED: lastSeekTime = 0L
+            
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
             }
@@ -661,15 +571,13 @@ fun PlayerOverlay(
                     .fillMaxHeight(0.95f)
                     .align(Alignment.BottomStart)
             ) {
-                // LEFT 5% - Vertical swipe for volume control
+                // LEFT 5% - Ignore area (removed clickable)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.05f)
                         .fillMaxHeight()
                         .align(Alignment.CenterStart)
-                        .pointerInteropFilter { event ->
-                            handleLeftAreaTouch(event)
-                        }
+                        // REMOVED: clickable modifier - now just an empty box
                 )
                 
                 // CENTER 90% - All gestures (tap, long tap, horizontal swipe, vertical swipe)
@@ -714,15 +622,13 @@ fun PlayerOverlay(
                         }
                 )
                 
-                // RIGHT 5% - Vertical swipe for volume control
+                // RIGHT 5% - Ignore area (removed clickable)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.05f)
                         .fillMaxHeight()
                         .align(Alignment.CenterEnd)
-                        .pointerInteropFilter { event ->
-                            handleRightAreaTouch(event)
-                        }
+                        // REMOVED: clickable modifier - now just an empty box
                 )
             }
         }
