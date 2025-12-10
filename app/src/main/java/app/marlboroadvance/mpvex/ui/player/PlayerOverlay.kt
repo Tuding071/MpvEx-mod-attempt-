@@ -125,6 +125,10 @@ fun PlayerOverlay(
     var playbackFeedbackText by remember { mutableStateOf("") }
     var playbackFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
+    // ADD: Track if video is paused
+    var isVideoPaused by remember { mutableStateOf(false) }
+    var ignoreUIToggleOnResume by remember { mutableStateOf(false) }
+    
     // ADD: Quick seek feedback
     var showQuickSeekFeedback by remember { mutableStateOf(false) }
     var quickSeekFeedbackText by remember { mutableStateOf("") }
@@ -211,8 +215,10 @@ fun PlayerOverlay(
         MPVLib.command("seek", seconds.toString(), "relative", "exact")
     }
     
-    // CHANGED: Video info now follows seekbar system - toggle both together
+    // MODIFIED: Video info now follows seekbar system with special handling for seeking
     fun toggleVideoInfo() {
+        if (isSeeking || isDragging) return // Don't toggle during seeking/dragging
+        
         if (showSeekbar) {
             showSeekbar = false
             showVideoInfo = false // Hide video info too
@@ -220,7 +226,7 @@ fun PlayerOverlay(
         } else {
             showSeekbar = true
             showVideoInfo = true // Show video info too
-            scheduleSeekbarHide()  // THIS WAS THE PROBLEM - NOW DEFINED ABOVE
+            scheduleSeekbarHide() 
         }
     }
     
@@ -237,24 +243,37 @@ fun PlayerOverlay(
     
     fun handleTap() {
         val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
+        
+        // Store if we're about to resume from pause
         if (currentPaused) {
+            // We're about to resume
+            ignoreUIToggleOnResume = true
             coroutineScope.launch {
                 val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
                 MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
                 delay(100)
                 MPVLib.setPropertyBoolean("pause", false)
+                delay(50) // Small delay to ensure playback resumes
+                ignoreUIToggleOnResume = false
             }
             showPlaybackFeedback("Resume")
         } else {
+            // We're about to pause
+            ignoreUIToggleOnResume = false
             MPVLib.setPropertyBoolean("pause", true)
             showPlaybackFeedback("Pause")
         }
-        if (showSeekbar) {
-            showSeekbar = false
-            showVideoInfo = false // Hide video info too
-        } else {
-            showSeekbarWithTimeout()
+        
+        // Only toggle UI if we're not resuming from pause when UI was hidden
+        if (!(currentPaused && !showSeekbar && ignoreUIToggleOnResume)) {
+            if (showSeekbar) {
+                showSeekbar = false
+                showVideoInfo = false // Hide video info too
+            } else {
+                showSeekbarWithTimeout()
+            }
         }
+        
         isPausing = !currentPaused
     }
     
@@ -292,19 +311,19 @@ fun PlayerOverlay(
         return ""
     }
     
+    // MODIFIED: Start horizontal seeking - hide video info during seeking
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide() // Cancel auto-hide for both
-        
-        // IMPORTANT: During horizontal seeking, only show seekbar, hide everything else
-        showSeekbar = true
-        showVideoInfo = false // Hide video info during seeking
-        showSeekTime = false // Hide seek time too
-        
         seekStartX = startX
         seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
+        showSeekTime = true
+        
+        // CHANGED: Only show seekbar during seeking, hide video info
+        showSeekbar = true
+        showVideoInfo = false  // Hide video info during seeking
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
@@ -352,6 +371,7 @@ fun PlayerOverlay(
         performRealTimeSeek(clampedPosition)
     }
     
+    // MODIFIED: End horizontal seeking - restore video info
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
@@ -370,6 +390,9 @@ fun PlayerOverlay(
             seekStartPosition = 0.0
             wasPlayingBeforeSeek = false
             seekDirection = "" // Reset direction
+            
+            // CHANGED: Restore video info when seeking ends
+            showVideoInfo = true
             scheduleSeekbarHide() // Schedule hide for both
         }
     }
@@ -443,6 +466,21 @@ fun PlayerOverlay(
         }
     }
     
+    // Track video pause state
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            val paused = MPVLib.getPropertyBoolean("pause") ?: false
+            if (paused != isVideoPaused) {
+                isVideoPaused = paused
+                if (!paused && !showSeekbar) {
+                    // Video just resumed but UI is hidden, show UI briefly
+                    showSeekbarWithTimeout()
+                }
+            }
+            delay(500)
+        }
+    }
+    
     // Backup speed control
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
@@ -506,17 +544,17 @@ fun PlayerOverlay(
     
     // ========== PROGRESS BAR HANDLERS ==========
     
-    // UPDATED: handleProgressBarDrag with movement threshold and direction
+    // MODIFIED: handleProgressBarDrag - hide video info during dragging
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide() // Cancel auto-hide for both
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
+            showSeekTime = true
             
-            // IMPORTANT: During drag seeking, only show seekbar, hide everything else
+            // CHANGED: Only show seekbar during dragging, hide video info
             showSeekbar = true
-            showVideoInfo = false // Hide video info during drag seeking
-            showSeekTime = false // Hide seek time too
+            showVideoInfo = false  // Hide video info during dragging
             
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
@@ -539,6 +577,7 @@ fun PlayerOverlay(
         performRealTimeSeek(targetPosition)
     }
     
+    // MODIFIED: handleDragFinished - restore video info
     fun handleDragFinished() {
         isDragging = false
         if (wasPlayingBeforeSeek) {
@@ -551,6 +590,9 @@ fun PlayerOverlay(
         showSeekTime = false
         wasPlayingBeforeSeek = false
         seekDirection = "" // Reset direction
+        
+        // CHANGED: Restore video info when dragging ends
+        showVideoInfo = true
         scheduleSeekbarHide() // Schedule hide for both
     }
     
@@ -558,7 +600,7 @@ fun PlayerOverlay(
     
     val displayText = when (showVideoInfo) {
         true -> fileName
-        else -> ""
+        false -> ""
     }
     
     Box(modifier = modifier.fillMaxSize()) {
@@ -585,7 +627,6 @@ fun PlayerOverlay(
                         .fillMaxWidth(0.05f)
                         .fillMaxHeight()
                         .align(Alignment.CenterStart)
-                        // REMOVED: clickable modifier - now just an empty box
                 )
                 
                 // CENTER 90% - All gestures (tap, long tap, horizontal swipe, vertical swipe)
@@ -636,7 +677,6 @@ fun PlayerOverlay(
                         .fillMaxWidth(0.05f)
                         .fillMaxHeight()
                         .align(Alignment.CenterEnd)
-                        // REMOVED: clickable modifier - now just an empty box
                 )
             }
         }
@@ -652,37 +692,31 @@ fun PlayerOverlay(
                     .offset(y = (3).dp) 
             ) {
                 Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // IMPORTANT: Only show time display when NOT seeking
-                    if (!isSeeking) {
-                        Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
-                            Row(modifier = Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(
-                                    text = "$currentTime / $totalTime",
-                                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
-                                )
-                            }
+                    Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
+                        Row(modifier = Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "$currentTime / $totalTime",
+                                style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                                modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
                         }
-                    } else {
-                        // During seeking, show minimal seekbar only (empty space where time would be)
-                        Box(modifier = Modifier.fillMaxWidth().wrapContentHeight())
                     }
-                    Box(modifier = Modifier.fillMaxWidth().height(48.dp)) { // CHANGED: Increased height for better touch area
+                    Box(modifier = Modifier.fillMaxWidth().height(48.dp)) {
                         SimpleDraggableProgressBar(
                             position = seekbarPosition,
                             duration = seekbarDuration,
                             onValueChange = { handleProgressBarDrag(it) },
                             onValueChangeFinished = { handleDragFinished() },
                             getFreshPosition = { getFreshPosition() },
-                            modifier = Modifier.fillMaxSize().height(48.dp) // CHANGED: Increased height
+                            modifier = Modifier.fillMaxSize().height(48.dp)
                         )
                     }
                 }
             }
         }
         
-        // VIDEO INFO - Top Left (shows/hides with seekbar, but NOT during seeking)
-        if (showVideoInfo && !isSeeking) {
+        // VIDEO INFO - Top Left (shows/hides with seekbar)
+        if (showVideoInfo) {
             Text(
                 text = displayText,
                 style = TextStyle(color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium),
@@ -694,7 +728,7 @@ fun PlayerOverlay(
             )
         }
         
-        // FEEDBACK AREA - Keep feedback visible always
+        // FEEDBACK AREA
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
                 showVolumeFeedbackState -> Text(
@@ -707,13 +741,12 @@ fun PlayerOverlay(
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
-                showQuickSeekFeedback -> Text( // ADD: Quick seek feedback
+                showQuickSeekFeedback -> Text(
                     text = quickSeekFeedbackText,
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
                 showSeekTime -> Text(
-                    // UPDATED: Add direction indicator to seek time
                     text = if (seekDirection.isNotEmpty()) "$seekTargetTime $seekDirection" else seekTargetTime,
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
@@ -745,7 +778,7 @@ fun SimpleDraggableProgressBar(
     // Convert 25dp to pixels for the movement threshold
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
-    Box(modifier = modifier.height(48.dp)) { // CHANGED: Increased container height
+    Box(modifier = modifier.height(48.dp)) {
         // Progress bar background
         Box(modifier = Modifier
             .fillMaxWidth()
@@ -760,19 +793,17 @@ fun SimpleDraggableProgressBar(
             .align(Alignment.CenterStart)
             .background(Color.White))
         
-        // CHANGED: Increased touch area to full 48dp height
         Box(modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp) // This makes the entire 48dp area draggable
+            .height(48.dp)
             .align(Alignment.CenterStart)
             .pointerInput(Unit) {
                 detectDragGestures(
                     onDragStart = { offset ->
                         dragStartX = offset.x
-                        // GET FRESH POSITION IMMEDIATELY WHEN DRAG STARTS
                         dragStartPosition = getFreshPosition()
-                        hasPassedThreshold = false // Reset threshold flag
-                        thresholdStartX = 0f // Reset threshold start position
+                        hasPassedThreshold = false
+                        thresholdStartX = 0f
                     },
                     onDrag = { change, dragAmount ->
                         change.consume()
@@ -783,14 +814,12 @@ fun SimpleDraggableProgressBar(
                         if (!hasPassedThreshold) {
                             if (totalMovementX > movementThresholdPx) {
                                 hasPassedThreshold = true
-                                thresholdStartX = currentX // NEW: Store position where threshold was passed
+                                thresholdStartX = currentX
                             } else {
-                                // Haven't passed threshold yet, don't seek
                                 return@detectDragGestures
                             }
                         }
                         
-                        // Calculate delta from the threshold start position, not the original drag start
                         val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
                         val deltaX = currentX - effectiveStartX
                         val deltaPosition = (deltaX / size.width) * duration
@@ -798,8 +827,8 @@ fun SimpleDraggableProgressBar(
                         onValueChange(newPosition)
                     },
                     onDragEnd = { 
-                        hasPassedThreshold = false // Reset for next drag
-                        thresholdStartX = 0f // Reset threshold start
+                        hasPassedThreshold = false
+                        thresholdStartX = 0f
                         onValueChangeFinished() 
                     }
                 )
