@@ -68,68 +68,51 @@ fun PlayerOverlay(
     var seekTargetTime by remember { mutableStateOf("00:00") }
     var showSeekTime by remember { mutableStateOf(false) }
     var isSpeedingUp by remember { mutableStateOf(false) }
-    var pendingPauseResume by remember { mutableStateOf(false) }
-    var isPausing by remember { mutableStateOf(false) }
-    var showSeekbar by remember { mutableStateOf(true) }
-    
-    var currentPosition by remember { mutableStateOf(0.0) }
-    var videoDuration by remember { mutableStateOf(1.0) }
-    var seekbarPosition by remember { mutableStateOf(0f) }
-    var seekbarDuration by remember { mutableStateOf(1f) }
-    
     var isDragging by remember { mutableStateOf(false) }
     
     var isSeeking by remember { mutableStateOf(false) }
     var seekStartX by remember { mutableStateOf(0f) }
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
+    var seekDirection by remember { mutableStateOf("") }
     
-    // ADD: Seek direction for feedback
-    var seekDirection by remember { mutableStateOf("") } // "+" or "-" or ""
-    
-    // REMOVED: lastSeekTime and seekDebounceMs
-    // ADD: Simple throttle control
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 50L // Small delay between seek commands
+    val seekThrottleMs = 50L
     
-    // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
+    // GESTURE STATES
     var touchStartTime by remember { mutableStateOf(0L) }
     var touchStartX by remember { mutableStateOf(0f) }
     var touchStartY by remember { mutableStateOf(0f) }
     var isTouching by remember { mutableStateOf(false) }
     var isLongTap by remember { mutableStateOf(false) }
     var isHorizontalSwipe by remember { mutableStateOf(false) }
-    var isVerticalSwipe by remember { mutableStateOf(false) } // ADD: Vertical swipe state
+    var isVerticalSwipe by remember { mutableStateOf(false) }
     var longTapJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
     // THRESHOLDS
-    val longTapThreshold = 300L // ms
-    val horizontalSwipeThreshold = 30f // pixels - minimum horizontal movement to trigger seeking
-    val verticalSwipeThreshold = 40f // pixels - minimum vertical movement to trigger quick seek
-    val maxVerticalMovement = 50f // pixels - maximum vertical movement allowed for horizontal swipe
-    val maxHorizontalMovement = 50f // pixels - maximum horizontal movement allowed for vertical swipe
-    
-    // ADD: Quick seek amount in seconds
+    val longTapThreshold = 300L
+    val horizontalSwipeThreshold = 30f
+    val verticalSwipeThreshold = 40f
+    val maxVerticalMovement = 50f
+    val maxHorizontalMovement = 50f
     val quickSeekAmount = 5
     
-    // CHANGED: Video info follows seekbar visibility
-    var showVideoInfo by remember { mutableStateOf(true) } // Start visible with seekbar
+    // UI VISIBILITY - SIMPLIFIED: One state controls ALL UI elements
+    var showPlayerUI by remember { mutableStateOf(true) } // Controls seekbar + video info + time
     var videoTitle by remember { mutableStateOf("Video") }
     var fileName by remember { mutableStateOf("Video") }
     var videoInfoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
+    // VIDEO STATE
+    var isVideoPaused by remember { mutableStateOf(false) }
     var userInteracting by remember { mutableStateOf(false) }
-    var hideSeekbarJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var hidePlayerUIJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
+    // FEEDBACK STATES
     var showPlaybackFeedback by remember { mutableStateOf(false) }
     var playbackFeedbackText by remember { mutableStateOf("") }
     var playbackFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    // ADD: Track if video is paused
-    var isVideoPaused by remember { mutableStateOf(false) }
-    var ignoreUIToggleOnResume by remember { mutableStateOf(false) }
-    
-    // ADD: Quick seek feedback
     var showQuickSeekFeedback by remember { mutableStateOf(false) }
     var quickSeekFeedbackText by remember { mutableStateOf("") }
     var quickSeekFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -138,33 +121,37 @@ fun PlayerOverlay(
     var currentVolume by remember { mutableStateOf(viewModel.currentVolume.value) }
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
+    // PLAYER POSITION STATES
+    var currentPosition by remember { mutableStateOf(0.0) }
+    var videoDuration by remember { mutableStateOf(1.0) }
+    var seekbarPosition by remember { mutableStateOf(0f) }
+    var seekbarDuration by remember { mutableStateOf(1f) }
+    
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // ========== UTILITY FUNCTIONS - DEFINE THESE FIRST ==========
+    // ========== UTILITY FUNCTIONS ==========
     
-    fun scheduleSeekbarHide() {
-        if (userInteracting) return
-        hideSeekbarJob?.cancel()
-        hideSeekbarJob = coroutineScope.launch {
+    fun schedulePlayerUIHide() {
+        if (userInteracting || isVideoPaused) return // Don't hide if paused or user interacting
+        hidePlayerUIJob?.cancel()
+        hidePlayerUIJob = coroutineScope.launch {
             delay(4000)
-            showSeekbar = false
-            showVideoInfo = false // Hide video info too
+            showPlayerUI = false
         }
     }
     
     fun cancelAutoHide() {
         userInteracting = true
-        hideSeekbarJob?.cancel()
+        hidePlayerUIJob?.cancel()
         coroutineScope.launch {
             delay(100)
             userInteracting = false
         }
     }
     
-    fun showSeekbarWithTimeout() {
-        showSeekbar = true
-        showVideoInfo = true // Show video info too
-        scheduleSeekbarHide()
+    fun showPlayerUIWithTimeout() {
+        showPlayerUI = true
+        schedulePlayerUIHide()
     }
     
     fun showPlaybackFeedback(text: String) {
@@ -177,31 +164,23 @@ fun PlayerOverlay(
         }
     }
     
-    // UPDATED: performRealTimeSeek with throttle
     fun performRealTimeSeek(targetPosition: Double) {
-        if (isSeekInProgress) return // Skip if we're already processing a seek
+        if (isSeekInProgress) return
         
         isSeekInProgress = true
         MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
         
-        // Reset after throttle period
         coroutineScope.launch {
             delay(seekThrottleMs)
             isSeekInProgress = false
         }
     }
     
-    // NEW: Function to get fresh position from MPV
     fun getFreshPosition(): Float {
         return (MPVLib.getPropertyDouble("time-pos") ?: 0.0).toFloat()
     }
     
-    // ADD: Quick seek function
     fun performQuickSeek(seconds: Int) {
-        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-        val newPosition = (currentPos + seconds).coerceIn(0.0, duration)
-        
         // Show feedback
         quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
         showQuickSeekFeedback = true
@@ -213,21 +192,6 @@ fun PlayerOverlay(
         
         // Perform seek
         MPVLib.command("seek", seconds.toString(), "relative", "exact")
-    }
-    
-    // MODIFIED: Video info now follows seekbar system with special handling for seeking
-    fun toggleVideoInfo() {
-        if (isSeeking || isDragging) return // Don't toggle during seeking/dragging
-        
-        if (showSeekbar) {
-            showSeekbar = false
-            showVideoInfo = false // Hide video info too
-            hideSeekbarJob?.cancel()
-        } else {
-            showSeekbar = true
-            showVideoInfo = true // Show video info too
-            scheduleSeekbarHide() 
-        }
     }
     
     val showVolumeFeedback: (Int) -> Unit = { volume ->
@@ -244,37 +208,24 @@ fun PlayerOverlay(
     fun handleTap() {
         val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
         
-        // Store if we're about to resume from pause
         if (currentPaused) {
-            // We're about to resume
-            ignoreUIToggleOnResume = true
+            // RESUME: Just resume, don't toggle UI
             coroutineScope.launch {
                 val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
                 MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
                 delay(100)
                 MPVLib.setPropertyBoolean("pause", false)
-                delay(50) // Small delay to ensure playback resumes
-                ignoreUIToggleOnResume = false
             }
             showPlaybackFeedback("Resume")
+            // Keep UI visible (it should already be visible when paused)
         } else {
-            // We're about to pause
-            ignoreUIToggleOnResume = false
+            // PAUSE: Pause and ALWAYS show UI
             MPVLib.setPropertyBoolean("pause", true)
             showPlaybackFeedback("Pause")
+            // Ensure UI is visible when paused
+            showPlayerUI = true
+            hidePlayerUIJob?.cancel() // Cancel any pending hide
         }
-        
-        // Only toggle UI if we're not resuming from pause when UI was hidden
-        if (!(currentPaused && !showSeekbar && ignoreUIToggleOnResume)) {
-            if (showSeekbar) {
-                showSeekbar = false
-                showVideoInfo = false // Hide video info too
-            } else {
-                showSeekbarWithTimeout()
-            }
-        }
-        
-        isPausing = !currentPaused
     }
     
     fun startLongTapDetection() {
@@ -291,9 +242,8 @@ fun PlayerOverlay(
         }
     }
     
-    // UPDATED: checkForHorizontalSwipe to also check for vertical swipes
     fun checkForSwipeDirection(currentX: Float, currentY: Float): String {
-        if (isHorizontalSwipe || isVerticalSwipe || isLongTap) return "" // Already determined or long tap active
+        if (isHorizontalSwipe || isVerticalSwipe || isLongTap) return ""
         
         val deltaX = kotlin.math.abs(currentX - touchStartX)
         val deltaY = kotlin.math.abs(currentY - touchStartY)
@@ -311,30 +261,27 @@ fun PlayerOverlay(
         return ""
     }
     
-    // MODIFIED: Start horizontal seeking - hide video info during seeking
+    // MODIFIED: Start horizontal seeking - show UI and cancel auto-hide
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
-        cancelAutoHide() // Cancel auto-hide for both
+        cancelAutoHide()
         seekStartX = startX
         seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
         
-        // CHANGED: Only show seekbar during seeking, hide video info
-        showSeekbar = true
-        showVideoInfo = false  // Hide video info during seeking
+        // Ensure UI is visible during seeking
+        showPlayerUI = true
         
         if (wasPlayingBeforeSeek) {
             MPVLib.setPropertyBoolean("pause", true)
         }
     }
     
-    // ADD: Start vertical swipe detection
     fun startVerticalSwipe(startY: Float) {
         isVerticalSwipe = true
-        cancelAutoHide() // Cancel auto-hide for both
-        // Determine direction based on initial movement
+        cancelAutoHide()
         val currentY = startY
         val deltaY = currentY - touchStartY
         
@@ -347,9 +294,11 @@ fun PlayerOverlay(
             seekDirection = "-"
             performQuickSeek(-quickSeekAmount)
         }
+        
+        // Ensure UI is visible during quick seek
+        showPlayerUI = true
     }
     
-    // UPDATED: handleHorizontalSeeking without debouncing
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
@@ -360,18 +309,14 @@ fun PlayerOverlay(
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
-        // UPDATE: Set seek direction based on movement
         seekDirection = if (deltaX > 0) "+" else "-"
         
-        // ALWAYS update UI instantly
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
         
-        // Send seek command with throttle
         performRealTimeSeek(clampedPosition)
     }
     
-    // MODIFIED: End horizontal seeking - restore video info
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
@@ -389,18 +334,21 @@ fun PlayerOverlay(
             seekStartX = 0f
             seekStartPosition = 0.0
             wasPlayingBeforeSeek = false
-            seekDirection = "" // Reset direction
+            seekDirection = ""
             
-            // CHANGED: Restore video info when seeking ends
-            showVideoInfo = true
-            scheduleSeekbarHide() // Schedule hide for both
+            // Schedule hide if video is playing (not paused)
+            if (!isVideoPaused) {
+                schedulePlayerUIHide()
+            }
         }
     }
     
-    // ADD: End vertical swipe
     fun endVerticalSwipe() {
         isVerticalSwipe = false
-        scheduleSeekbarHide() // Schedule hide for both
+        // Schedule hide if video is playing (not paused)
+        if (!isVideoPaused) {
+            schedulePlayerUIHide()
+        }
     }
     
     fun endTouch() {
@@ -409,23 +357,18 @@ fun PlayerOverlay(
         longTapJob?.cancel()
         
         if (isLongTap) {
-            // Long tap ended - reset speed
             isLongTap = false
             isSpeedingUp = false
             MPVLib.setPropertyDouble("speed", 1.0)
         } else if (isHorizontalSwipe) {
-            // Horizontal swipe ended
             endHorizontalSeeking()
             isHorizontalSwipe = false
         } else if (isVerticalSwipe) {
-            // Vertical swipe ended
             endVerticalSwipe()
             isVerticalSwipe = false
         } else if (touchDuration < 150) {
-            // Short tap (less than 150ms)
             handleTap()
         }
-        // Reset all gesture states
         isHorizontalSwipe = false
         isVerticalSwipe = false
         isLongTap = false
@@ -456,25 +399,35 @@ fun PlayerOverlay(
         val title = MPVLib.getPropertyString("media-title") ?: "Video"
         videoTitle = title
         
-        // Show both on launch
-        showVideoInfo = true
-        showSeekbar = true
+        // Show UI on launch
+        showPlayerUI = true
         videoInfoJob?.cancel()
         videoInfoJob = coroutineScope.launch {
             delay(4000)
-            scheduleSeekbarHide() // Schedule hide for both
+            // Only auto-hide if not paused
+            if (!isVideoPaused) {
+                schedulePlayerUIHide()
+            }
         }
     }
     
-    // Track video pause state
+    // Track video pause state - CRITICAL FOR UI VISIBILITY
     LaunchedEffect(Unit) {
         while (isActive) {
             val paused = MPVLib.getPropertyBoolean("pause") ?: false
             if (paused != isVideoPaused) {
                 isVideoPaused = paused
-                if (!paused && !showSeekbar) {
-                    // Video just resumed but UI is hidden, show UI briefly
-                    showSeekbarWithTimeout()
+                
+                if (paused) {
+                    // VIDEO PAUSED: Always show UI and cancel auto-hide
+                    showPlayerUI = true
+                    hidePlayerUIJob?.cancel()
+                } else {
+                    // VIDEO RESUMED: Schedule auto-hide after delay
+                    coroutineScope.launch {
+                        delay(1000) // Wait 1 second after resume before scheduling hide
+                        schedulePlayerUIHide()
+                    }
                 }
             }
             delay(500)
@@ -544,17 +497,15 @@ fun PlayerOverlay(
     
     // ========== PROGRESS BAR HANDLERS ==========
     
-    // MODIFIED: handleProgressBarDrag - hide video info during dragging
     fun handleProgressBarDrag(newPosition: Float) {
-        cancelAutoHide() // Cancel auto-hide for both
+        cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
             
-            // CHANGED: Only show seekbar during dragging, hide video info
-            showSeekbar = true
-            showVideoInfo = false  // Hide video info during dragging
+            // Ensure UI is visible during dragging
+            showPlayerUI = true
             
             if (wasPlayingBeforeSeek) {
                 MPVLib.setPropertyBoolean("pause", true)
@@ -564,20 +515,16 @@ fun PlayerOverlay(
         val oldPosition = seekbarPosition
         seekbarPosition = newPosition
         
-        // UPDATE: Set seek direction based on movement
         seekDirection = if (newPosition > oldPosition) "+" else "-"
         
         val targetPosition = newPosition.toDouble()
         
-        // ALWAYS update UI instantly
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
         
-        // Send seek command with throttle
         performRealTimeSeek(targetPosition)
     }
     
-    // MODIFIED: handleDragFinished - restore video info
     fun handleDragFinished() {
         isDragging = false
         if (wasPlayingBeforeSeek) {
@@ -589,22 +536,23 @@ fun PlayerOverlay(
         isSeeking = false
         showSeekTime = false
         wasPlayingBeforeSeek = false
-        seekDirection = "" // Reset direction
+        seekDirection = ""
         
-        // CHANGED: Restore video info when dragging ends
-        showVideoInfo = true
-        scheduleSeekbarHide() // Schedule hide for both
+        // Schedule hide if video is playing (not paused)
+        if (!isVideoPaused) {
+            schedulePlayerUIHide()
+        }
     }
     
     // ========== UI RENDERING ==========
     
-    val displayText = when (showVideoInfo) {
+    val displayText = when (showPlayerUI) {
         true -> fileName
         false -> ""
     }
     
     Box(modifier = modifier.fillMaxSize()) {
-        // MAIN GESTURE AREA - Full screen divided into areas
+        // MAIN GESTURE AREA
         Box(modifier = Modifier.fillMaxSize()) {
             // TOP 5% - Ignore area
             Box(
@@ -621,7 +569,7 @@ fun PlayerOverlay(
                     .fillMaxHeight(0.95f)
                     .align(Alignment.BottomStart)
             ) {
-                // LEFT 5% - Ignore area (removed clickable)
+                // LEFT 5% - Ignore area
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.05f)
@@ -629,13 +577,12 @@ fun PlayerOverlay(
                         .align(Alignment.CenterStart)
                 )
                 
-                // CENTER 90% - All gestures (tap, long tap, horizontal swipe, vertical swipe)
+                // CENTER 90% - All gestures
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.9f)
                         .fillMaxHeight()
                         .align(Alignment.Center)
-                        // USE SINGLE pointerInteropFilter FOR ALL GESTURES TO AVOID CONFLICTS
                         .pointerInteropFilter { event ->
                             when (event.action) {
                                 MotionEvent.ACTION_DOWN -> {
@@ -646,7 +593,6 @@ fun PlayerOverlay(
                                 }
                                 MotionEvent.ACTION_MOVE -> {
                                     if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
-                                        // Check if this should become a horizontal or vertical swipe
                                         when (checkForSwipeDirection(event.x, event.y)) {
                                             "horizontal" -> {
                                                 startHorizontalSeeking(event.x)
@@ -656,10 +602,8 @@ fun PlayerOverlay(
                                             }
                                         }
                                     } else if (isHorizontalSwipe) {
-                                        // Continue horizontal seeking
                                         handleHorizontalSeeking(event.x)
                                     }
-                                    // If it's a long tap or vertical swipe, ignore movement (allow slight finger movement during hold)
                                     true
                                 }
                                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -671,7 +615,7 @@ fun PlayerOverlay(
                         }
                 )
                 
-                // RIGHT 5% - Ignore area (removed clickable)
+                // RIGHT 5% - Ignore area
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.05f)
@@ -681,8 +625,8 @@ fun PlayerOverlay(
             }
         }
         
-        // BOTTOM SEEK BAR AREA
-        if (showSeekbar) {
+        // BOTTOM SEEK BAR AREA - Only show when showPlayerUI is true
+        if (showPlayerUI) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -715,8 +659,8 @@ fun PlayerOverlay(
             }
         }
         
-        // VIDEO INFO - Top Left (shows/hides with seekbar)
-        if (showVideoInfo) {
+        // VIDEO INFO - Top Left - Only show when showPlayerUI is true
+        if (showPlayerUI) {
             Text(
                 text = displayText,
                 style = TextStyle(color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium),
@@ -728,7 +672,7 @@ fun PlayerOverlay(
             )
         }
         
-        // FEEDBACK AREA
+        // FEEDBACK AREA - Always shows feedback regardless of UI visibility
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
                 showVolumeFeedbackState -> Text(
@@ -775,18 +719,15 @@ fun SimpleDraggableProgressBar(
     var hasPassedThreshold by remember { mutableStateOf(false) }
     var thresholdStartX by remember { mutableStateOf(0f) }
     
-    // Convert 25dp to pixels for the movement threshold
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
     Box(modifier = modifier.height(48.dp)) {
-        // Progress bar background
         Box(modifier = Modifier
             .fillMaxWidth()
             .height(4.dp)
             .align(Alignment.CenterStart)
             .background(Color.Gray.copy(alpha = 0.6f)))
         
-        // Progress bar fill
         Box(modifier = Modifier
             .fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f)
             .height(4.dp)
@@ -810,7 +751,6 @@ fun SimpleDraggableProgressBar(
                         val currentX = change.position.x
                         val totalMovementX = abs(currentX - dragStartX)
                         
-                        // Check if we've passed the movement threshold
                         if (!hasPassedThreshold) {
                             if (totalMovementX > movementThresholdPx) {
                                 hasPassedThreshold = true
