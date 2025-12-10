@@ -562,9 +562,11 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // CHANGED: Calculate transparency for video info and time during seeking
-    val videoInfoAlpha = if (isSeeking || isDragging) 0.3f else 0.8f
-    val timeDisplayAlpha = if (isSeeking || isDragging) 0.3f else 0.8f
+    // CHANGED: Calculate transparency for text AND background during seeking
+    val videoInfoTextAlpha = if (isSeeking || isDragging) 0.0f else 1.0f
+    val videoInfoBackgroundAlpha = if (isSeeking || isDragging) 0.0f else 0.8f
+    val timeDisplayTextAlpha = if (isSeeking || isDragging) 0.0f else 1.0f
+    val timeDisplayBackgroundAlpha = if (isSeeking || isDragging) 0.0f else 0.8f
     
     Box(modifier = modifier.fillMaxSize()) {
         // MAIN GESTURE AREA - Full screen divided into areas
@@ -657,12 +659,16 @@ fun PlayerOverlay(
                 Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
                         Row(modifier = Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                            // CHANGED: Time display with transparency during seeking
+                            // CHANGED: Time display with FULL transparency during seeking
                             Text(
                                 text = "$currentTime / $totalTime",
-                                style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                                style = TextStyle(
+                                    color = Color.White.copy(alpha = timeDisplayTextAlpha), // Transparent text
+                                    fontSize = 14.sp, 
+                                    fontWeight = FontWeight.Medium
+                                ),
                                 modifier = Modifier
-                                    .background(Color.DarkGray.copy(alpha = timeDisplayAlpha))
+                                    .background(Color.DarkGray.copy(alpha = timeDisplayBackgroundAlpha)) // Transparent background
                                     .padding(horizontal = 12.dp, vertical = 4.dp)
                             )
                         }
@@ -683,14 +689,18 @@ fun PlayerOverlay(
         
         // VIDEO INFO - Top Left (shows/hides with seekbar)
         if (showVideoInfo) {
-            // CHANGED: Video info with transparency during seeking
+            // CHANGED: Video info with FULL transparency during seeking
             Text(
                 text = displayText,
-                style = TextStyle(color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium),
+                style = TextStyle(
+                    color = Color.White.copy(alpha = videoInfoTextAlpha), // Transparent text
+                    fontSize = 15.sp, 
+                    fontWeight = FontWeight.Medium
+                ),
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .offset(x = 60.dp, y = 20.dp)
-                    .background(Color.DarkGray.copy(alpha = videoInfoAlpha))
+                    .background(Color.DarkGray.copy(alpha = videoInfoBackgroundAlpha)) // Transparent background
                     .padding(horizontal = 16.dp, vertical = 6.dp)
             )
         }
