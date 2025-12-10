@@ -136,6 +136,43 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
+    // ========== UTILITY FUNCTIONS - DEFINE THESE FIRST ==========
+    
+    fun scheduleSeekbarHide() {
+        if (userInteracting) return
+        hideSeekbarJob?.cancel()
+        hideSeekbarJob = coroutineScope.launch {
+            delay(4000)
+            showSeekbar = false
+            showVideoInfo = false // Hide video info too
+        }
+    }
+    
+    fun cancelAutoHide() {
+        userInteracting = true
+        hideSeekbarJob?.cancel()
+        coroutineScope.launch {
+            delay(100)
+            userInteracting = false
+        }
+    }
+    
+    fun showSeekbarWithTimeout() {
+        showSeekbar = true
+        showVideoInfo = true // Show video info too
+        scheduleSeekbarHide()
+    }
+    
+    fun showPlaybackFeedback(text: String) {
+        playbackFeedbackJob?.cancel()
+        showPlaybackFeedback = true
+        playbackFeedbackText = text
+        playbackFeedbackJob = coroutineScope.launch {
+            delay(1000)
+            showPlaybackFeedback = false
+        }
+    }
+    
     // UPDATED: performRealTimeSeek with throttle
     fun performRealTimeSeek(targetPosition: Double) {
         if (isSeekInProgress) return // Skip if we're already processing a seek
@@ -183,7 +220,7 @@ fun PlayerOverlay(
         } else {
             showSeekbar = true
             showVideoInfo = true // Show video info too
-            scheduleSeekbarHide()
+            scheduleSeekbarHide()  // THIS WAS THE PROBLEM - NOW DEFINED ABOVE
         }
     }
     
@@ -196,48 +233,7 @@ fun PlayerOverlay(
         }
     }
     
-    LaunchedEffect(viewModel.currentVolume) {
-        viewModel.currentVolume.collect { volume ->
-            currentVolume = volume
-            showVolumeFeedback(volume)
-        }
-    }
-    
-    // UPDATED: Schedule hide for both seekbar and video info
-    fun scheduleSeekbarHide() {
-        if (userInteracting) return
-        hideSeekbarJob?.cancel()
-        hideSeekbarJob = coroutineScope.launch {
-            delay(4000)
-            showSeekbar = false
-            showVideoInfo = false // Hide video info too
-        }
-    }
-    
-    fun cancelAutoHide() {
-        userInteracting = true
-        hideSeekbarJob?.cancel()
-        coroutineScope.launch {
-            delay(100)
-            userInteracting = false
-        }
-    }
-    
-    fun showSeekbarWithTimeout() {
-        showSeekbar = true
-        showVideoInfo = true // Show video info too
-        scheduleSeekbarHide()
-    }
-    
-    fun showPlaybackFeedback(text: String) {
-        playbackFeedbackJob?.cancel()
-        showPlaybackFeedback = true
-        playbackFeedbackText = text
-        playbackFeedbackJob = coroutineScope.launch {
-            delay(1000)
-            showPlaybackFeedback = false
-        }
-    }
+    // ========== GESTURE HANDLING FUNCTIONS ==========
     
     fun handleTap() {
         val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
@@ -412,6 +408,15 @@ fun PlayerOverlay(
         isLongTap = false
     }
     
+    // ========== EVENT HANDLERS ==========
+    
+    LaunchedEffect(viewModel.currentVolume) {
+        viewModel.currentVolume.collect { volume ->
+            currentVolume = volume
+            showVolumeFeedback(volume)
+        }
+    }
+    
     LaunchedEffect(Unit) {
         val intent = (context as? android.app.Activity)?.intent
         fileName = when {
@@ -499,10 +504,7 @@ fun PlayerOverlay(
         }
     }
     
-    val displayText = when (showVideoInfo) {
-        true -> fileName
-        else -> ""
-    }
+    // ========== PROGRESS BAR HANDLERS ==========
     
     // UPDATED: handleProgressBarDrag with movement threshold and direction
     fun handleProgressBarDrag(newPosition: Float) {
@@ -551,6 +553,13 @@ fun PlayerOverlay(
         wasPlayingBeforeSeek = false
         seekDirection = "" // Reset direction
         scheduleSeekbarHide() // Schedule hide for both
+    }
+    
+    // ========== UI RENDERING ==========
+    
+    val displayText = when (showVideoInfo) {
+        true -> fileName
+        else -> ""
     }
     
     Box(modifier = modifier.fillMaxSize()) {
