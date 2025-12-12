@@ -1,61 +1,59 @@
 package app.marlboroadvance.mpvex.ui.player
 
 import android.view.MotionEvent
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentHeight
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.ripple
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.vivvvek.seeker.Seeker
-import dev.vivvvek.seeker.SeekerDefaults
-import dev.vivvvek.seeker.Segment
-import kotlinx.collections.immutable.ImmutableList
-import kotlinx.collections.immutable.persistentListOf
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
+import androidx.compose.ui.window.Dialog
+import androidx.datastore.preferences.core.*
+import androidx.datastore.preferences.preferencesDataStore
+import androidx.datastore.core.DataStore
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import `is`.xyz.mpv.MPVLib
-import `is`.xyz.mpv.Utils
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.ui.input.pointer.pointerInput
+import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import kotlin.math.abs
+
+// DataStore for saving equalizer settings
+val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "equalizer_settings")
+
+// Equalizer bands (Hz frequencies)
+val equalizerBands = listOf(
+    "60 Hz" to 60,
+    "230 Hz" to 230,
+    "910 Hz" to 910,
+    "4 kHz" to 4000,
+    "14 kHz" to 14000,
+    "22 kHz" to 22000
+)
 
 @Composable
 fun PlayerOverlay(
@@ -63,6 +61,48 @@ fun PlayerOverlay(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
+    
+    // --- NEW: Equalizer State ---
+    var showEqualizerDialog by remember { mutableStateOf(false) }
+    var showInfoMenu by remember { mutableStateOf(false) }
+    
+    // Load saved equalizer values from DataStore
+    val equalizerValues = remember {
+        mutableStateOf(List(6) { index ->
+            // Load from DataStore or default to 0 (flat)
+            val savedValue = runBlocking {
+                context.dataStore.data.map { prefs ->
+                    prefs[intPreferencesKey("equalizer_band_$index")] ?: 0
+                }.first()
+            }
+            savedValue
+        })
+    }
+    
+    // Function to update equalizer in MPV
+    fun updateEqualizer() {
+        val eqString = equalizerValues.value.joinToString(":") { it.toString() }
+        MPVLib.command("af", "set", "equalizer=$eqString")
+    }
+    
+    // Save equalizer values to DataStore
+    fun saveEqualizerValue(index: Int, value: Int) {
+        coroutineScope.launch(Dispatchers.IO) {
+            context.dataStore.edit { prefs ->
+                prefs[intPreferencesKey("equalizer_band_$index")] = value
+            }
+        }
+    }
+    
+    // Apply equalizer when dialog closes
+    LaunchedEffect(showEqualizerDialog) {
+        if (!showEqualizerDialog) {
+            // Update MPV with current values
+            updateEqualizer()
+        }
+    }
+    
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
     var seekTargetTime by remember { mutableStateOf("00:00") }
@@ -84,36 +124,28 @@ fun PlayerOverlay(
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
-    // ADD: Seek direction for feedback
-    var seekDirection by remember { mutableStateOf("") } // "+" or "-" or ""
-    
-    // REMOVED: lastSeekTime and seekDebounceMs
-    // ADD: Simple throttle control
+    var seekDirection by remember { mutableStateOf("") }
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 50L // Small delay between seek commands
+    val seekThrottleMs = 50L
     
-    // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
     var touchStartTime by remember { mutableStateOf(0L) }
     var touchStartX by remember { mutableStateOf(0f) }
     var touchStartY by remember { mutableStateOf(0f) }
     var isTouching by remember { mutableStateOf(false) }
     var isLongTap by remember { mutableStateOf(false) }
     var isHorizontalSwipe by remember { mutableStateOf(false) }
-    var isVerticalSwipe by remember { mutableStateOf(false) } // ADD: Vertical swipe state
+    var isVerticalSwipe by remember { mutableStateOf(false) }
     var longTapJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    // THRESHOLDS
-    val longTapThreshold = 300L // ms
-    val horizontalSwipeThreshold = 30f // pixels - minimum horizontal movement to trigger seeking
-    val verticalSwipeThreshold = 40f // pixels - minimum vertical movement to trigger quick seek
-    val maxVerticalMovement = 50f // pixels - maximum vertical movement allowed for horizontal swipe
-    val maxHorizontalMovement = 50f // pixels - maximum horizontal movement allowed for vertical swipe
+    val longTapThreshold = 300L
+    val horizontalSwipeThreshold = 30f
+    val verticalSwipeThreshold = 40f
+    val maxVerticalMovement = 50f
+    val maxHorizontalMovement = 50f
     
-    // ADD: Quick seek amount in seconds
     val quickSeekAmount = 5
     
-    // CHANGED: Video info follows seekbar visibility
-    var showVideoInfo by remember { mutableStateOf(true) } // Start visible with seekbar
+    var showVideoInfo by remember { mutableStateOf(true) }
     var videoTitle by remember { mutableStateOf("Video") }
     var fileName by remember { mutableStateOf("Video") }
     var videoInfoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -125,7 +157,6 @@ fun PlayerOverlay(
     var playbackFeedbackText by remember { mutableStateOf("") }
     var playbackFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    // ADD: Quick seek feedback
     var showQuickSeekFeedback by remember { mutableStateOf(false) }
     var quickSeekFeedbackText by remember { mutableStateOf("") }
     var quickSeekFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -134,9 +165,7 @@ fun PlayerOverlay(
     var currentVolume by remember { mutableStateOf(viewModel.currentVolume.value) }
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
-    
-    // ========== UTILITY FUNCTIONS - DEFINE THESE FIRST ==========
+    // ========== UTILITY FUNCTIONS ==========
     
     fun scheduleSeekbarHide() {
         if (userInteracting) return
@@ -144,7 +173,7 @@ fun PlayerOverlay(
         hideSeekbarJob = coroutineScope.launch {
             delay(4000)
             showSeekbar = false
-            showVideoInfo = false // Hide video info too
+            showVideoInfo = false
         }
     }
     
@@ -159,7 +188,7 @@ fun PlayerOverlay(
     
     fun showSeekbarWithTimeout() {
         showSeekbar = true
-        showVideoInfo = true // Show video info too
+        showVideoInfo = true
         scheduleSeekbarHide()
     }
     
@@ -173,32 +202,25 @@ fun PlayerOverlay(
         }
     }
     
-    // UPDATED: performRealTimeSeek with throttle
     fun performRealTimeSeek(targetPosition: Double) {
-        if (isSeekInProgress) return // Skip if we're already processing a seek
-        
+        if (isSeekInProgress) return
         isSeekInProgress = true
         MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
-        
-        // Reset after throttle period
         coroutineScope.launch {
             delay(seekThrottleMs)
             isSeekInProgress = false
         }
     }
     
-    // NEW: Function to get fresh position from MPV
     fun getFreshPosition(): Float {
         return (MPVLib.getPropertyDouble("time-pos") ?: 0.0).toFloat()
     }
     
-    // ADD: Quick seek function
     fun performQuickSeek(seconds: Int) {
         val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         val newPosition = (currentPos + seconds).coerceIn(0.0, duration)
         
-        // Show feedback
         quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
         showQuickSeekFeedback = true
         quickSeekFeedbackJob?.cancel()
@@ -207,20 +229,18 @@ fun PlayerOverlay(
             showQuickSeekFeedback = false
         }
         
-        // Perform seek
         MPVLib.command("seek", seconds.toString(), "relative", "exact")
     }
     
-    // CHANGED: Video info now follows seekbar system - toggle both together
     fun toggleVideoInfo() {
         if (showSeekbar) {
             showSeekbar = false
-            showVideoInfo = false // Hide video info too
+            showVideoInfo = false
             hideSeekbarJob?.cancel()
         } else {
             showSeekbar = true
-            showVideoInfo = true // Show video info too
-            scheduleSeekbarHide()  // THIS WAS THE PROBLEM - NOW DEFINED ABOVE
+            showVideoInfo = true
+            scheduleSeekbarHide()
         }
     }
     
@@ -251,7 +271,7 @@ fun PlayerOverlay(
         }
         if (showSeekbar) {
             showSeekbar = false
-            showVideoInfo = false // Hide video info too
+            showVideoInfo = false
         } else {
             showSeekbarWithTimeout()
         }
@@ -272,19 +292,15 @@ fun PlayerOverlay(
         }
     }
     
-    // UPDATED: checkForHorizontalSwipe to also check for vertical swipes
     fun checkForSwipeDirection(currentX: Float, currentY: Float): String {
-        if (isHorizontalSwipe || isVerticalSwipe || isLongTap) return "" // Already determined or long tap active
-        
+        if (isHorizontalSwipe || isVerticalSwipe || isLongTap) return ""
         val deltaX = kotlin.math.abs(currentX - touchStartX)
         val deltaY = kotlin.math.abs(currentY - touchStartY)
         
-        // Check for horizontal swipe
         if (deltaX > horizontalSwipeThreshold && deltaX > deltaY && deltaY < maxVerticalMovement) {
             return "horizontal"
         }
         
-        // Check for vertical swipe
         if (deltaY > verticalSwipeThreshold && deltaY > deltaX && deltaX < maxHorizontalMovement) {
             return "vertical"
         }
@@ -294,15 +310,13 @@ fun PlayerOverlay(
     
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
-        cancelAutoHide() // Cancel auto-hide for both
+        cancelAutoHide()
         seekStartX = startX
         seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
-        // REMOVED: lastSeekTime = 0L
         
-        // Show both during seeking
         showSeekbar = true
         showVideoInfo = true
         
@@ -311,26 +325,21 @@ fun PlayerOverlay(
         }
     }
     
-    // ADD: Start vertical swipe detection
     fun startVerticalSwipe(startY: Float) {
         isVerticalSwipe = true
-        cancelAutoHide() // Cancel auto-hide for both
-        // Determine direction based on initial movement
+        cancelAutoHide()
         val currentY = startY
         val deltaY = currentY - touchStartY
         
         if (deltaY < 0) {
-            // Swipe up - seek forward
             seekDirection = "+"
             performQuickSeek(quickSeekAmount)
         } else {
-            // Swipe down - seek backward
             seekDirection = "-"
             performQuickSeek(-quickSeekAmount)
         }
     }
     
-    // UPDATED: handleHorizontalSeeking without debouncing
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
@@ -341,14 +350,9 @@ fun PlayerOverlay(
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
-        // UPDATE: Set seek direction based on movement
         seekDirection = if (deltaX > 0) "+" else "-"
-        
-        // ALWAYS update UI instantly
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
-        
-        // Send seek command with throttle
         performRealTimeSeek(clampedPosition)
     }
     
@@ -369,15 +373,14 @@ fun PlayerOverlay(
             seekStartX = 0f
             seekStartPosition = 0.0
             wasPlayingBeforeSeek = false
-            seekDirection = "" // Reset direction
-            scheduleSeekbarHide() // Schedule hide for both
+            seekDirection = ""
+            scheduleSeekbarHide()
         }
     }
     
-    // ADD: End vertical swipe
     fun endVerticalSwipe() {
         isVerticalSwipe = false
-        scheduleSeekbarHide() // Schedule hide for both
+        scheduleSeekbarHide()
     }
     
     fun endTouch() {
@@ -386,23 +389,18 @@ fun PlayerOverlay(
         longTapJob?.cancel()
         
         if (isLongTap) {
-            // Long tap ended - reset speed
             isLongTap = false
             isSpeedingUp = false
             MPVLib.setPropertyDouble("speed", 1.0)
         } else if (isHorizontalSwipe) {
-            // Horizontal swipe ended
             endHorizontalSeeking()
             isHorizontalSwipe = false
         } else if (isVerticalSwipe) {
-            // Vertical swipe ended
             endVerticalSwipe()
             isVerticalSwipe = false
         } else if (touchDuration < 150) {
-            // Short tap (less than 150ms)
             handleTap()
         }
-        // Reset all gesture states
         isHorizontalSwipe = false
         isVerticalSwipe = false
         isLongTap = false
@@ -418,7 +416,7 @@ fun PlayerOverlay(
     }
     
     LaunchedEffect(Unit) {
-        val intent = (context as? android.app.Activity)?.intent
+        val intent = (context as? Activity)?.intent
         fileName = when {
             intent?.action == Intent.ACTION_SEND -> {
                 getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context)
@@ -433,17 +431,15 @@ fun PlayerOverlay(
         val title = MPVLib.getPropertyString("media-title") ?: "Video"
         videoTitle = title
         
-        // Show both on launch
         showVideoInfo = true
         showSeekbar = true
         videoInfoJob?.cancel()
         videoInfoJob = coroutineScope.launch {
             delay(4000)
-            scheduleSeekbarHide() // Schedule hide for both
+            scheduleSeekbarHide()
         }
     }
     
-    // Backup speed control
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
             MPVLib.setPropertyDouble("speed", 2.0)
@@ -453,6 +449,9 @@ fun PlayerOverlay(
     }
     
     LaunchedEffect(Unit) {
+        // Apply saved equalizer on startup
+        updateEqualizer()
+        
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
         MPVLib.setPropertyString("profile", "fast")
@@ -506,16 +505,12 @@ fun PlayerOverlay(
     
     // ========== PROGRESS BAR HANDLERS ==========
     
-    // UPDATED: handleProgressBarDrag with movement threshold and direction
     fun handleProgressBarDrag(newPosition: Float) {
-        cancelAutoHide() // Cancel auto-hide for both
+        cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
-            // REMOVED: lastSeekTime = 0L
-            
-            // Show both during drag
             showSeekbar = true
             showVideoInfo = true
             
@@ -526,17 +521,10 @@ fun PlayerOverlay(
         isDragging = true
         val oldPosition = seekbarPosition
         seekbarPosition = newPosition
-        
-        // UPDATE: Set seek direction based on movement
         seekDirection = if (newPosition > oldPosition) "+" else "-"
-        
         val targetPosition = newPosition.toDouble()
-        
-        // ALWAYS update UI instantly
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
-        
-        // Send seek command with throttle
         performRealTimeSeek(targetPosition)
     }
     
@@ -551,8 +539,8 @@ fun PlayerOverlay(
         isSeeking = false
         showSeekTime = false
         wasPlayingBeforeSeek = false
-        seekDirection = "" // Reset direction
-        scheduleSeekbarHide() // Schedule hide for both
+        seekDirection = ""
+        scheduleSeekbarHide()
     }
     
     // ========== UI RENDERING ==========
@@ -562,16 +550,14 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // CHANGED: Calculate transparency for text AND background during seeking
     val videoInfoTextAlpha = if (isSeeking || isDragging) 0.0f else 1.0f
     val videoInfoBackgroundAlpha = if (isSeeking || isDragging) 0.0f else 0.8f
     val timeDisplayTextAlpha = if (isSeeking || isDragging) 0.0f else 1.0f
     val timeDisplayBackgroundAlpha = if (isSeeking || isDragging) 0.0f else 0.8f
     
     Box(modifier = modifier.fillMaxSize()) {
-        // MAIN GESTURE AREA - Full screen divided into areas
+        // MAIN GESTURE AREA
         Box(modifier = Modifier.fillMaxSize()) {
-            // TOP 5% - Ignore area
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -579,14 +565,12 @@ fun PlayerOverlay(
                     .align(Alignment.TopStart)
             )
             
-            // CENTER AREA - 95% height, divided into left/center/right
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .fillMaxHeight(0.95f)
                     .align(Alignment.BottomStart)
             ) {
-                // LEFT 5% - Ignore area (removed clickable)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.05f)
@@ -594,13 +578,11 @@ fun PlayerOverlay(
                         .align(Alignment.CenterStart)
                 )
                 
-                // CENTER 90% - All gestures (tap, long tap, horizontal swipe, vertical swipe)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.9f)
                         .fillMaxHeight()
                         .align(Alignment.Center)
-                        // USE SINGLE pointerInteropFilter FOR ALL GESTURES TO AVOID CONFLICTS
                         .pointerInteropFilter { event ->
                             when (event.action) {
                                 MotionEvent.ACTION_DOWN -> {
@@ -611,7 +593,6 @@ fun PlayerOverlay(
                                 }
                                 MotionEvent.ACTION_MOVE -> {
                                     if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
-                                        // Check if this should become a horizontal or vertical swipe
                                         when (checkForSwipeDirection(event.x, event.y)) {
                                             "horizontal" -> {
                                                 startHorizontalSeeking(event.x)
@@ -621,10 +602,8 @@ fun PlayerOverlay(
                                             }
                                         }
                                     } else if (isHorizontalSwipe) {
-                                        // Continue horizontal seeking
                                         handleHorizontalSeeking(event.x)
                                     }
-                                    // If it's a long tap or vertical swipe, ignore movement (allow slight finger movement during hold)
                                     true
                                 }
                                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -636,7 +615,6 @@ fun PlayerOverlay(
                         }
                 )
                 
-                // RIGHT 5% - Ignore area (removed clickable)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.05f)
@@ -659,16 +637,15 @@ fun PlayerOverlay(
                 Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
                         Row(modifier = Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                            // CHANGED: Time display with FULL transparency during seeking
                             Text(
                                 text = "$currentTime / $totalTime",
                                 style = TextStyle(
-                                    color = Color.White.copy(alpha = timeDisplayTextAlpha), // Transparent text
+                                    color = Color.White.copy(alpha = timeDisplayTextAlpha),
                                     fontSize = 14.sp, 
                                     fontWeight = FontWeight.Medium
                                 ),
                                 modifier = Modifier
-                                    .background(Color.DarkGray.copy(alpha = timeDisplayBackgroundAlpha)) // Transparent background
+                                    .background(Color.DarkGray.copy(alpha = timeDisplayBackgroundAlpha))
                                     .padding(horizontal = 12.dp, vertical = 4.dp)
                             )
                         }
@@ -687,22 +664,236 @@ fun PlayerOverlay(
             }
         }
         
-        // VIDEO INFO - Top Left (shows/hides with seekbar)
+        // VIDEO INFO - Clickable with menu
         if (showVideoInfo) {
-            // CHANGED: Video info with FULL transparency during seeking
-            Text(
-                text = displayText,
-                style = TextStyle(
-                    color = Color.White.copy(alpha = videoInfoTextAlpha), // Transparent text
-                    fontSize = 15.sp, 
-                    fontWeight = FontWeight.Medium
-                ),
+            Box(
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .offset(x = 60.dp, y = 20.dp)
-                    .background(Color.DarkGray.copy(alpha = videoInfoBackgroundAlpha)) // Transparent background
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
-            )
+            ) {
+                // Video info text with clickable area
+                Text(
+                    text = displayText,
+                    style = TextStyle(
+                        color = Color.White.copy(alpha = videoInfoTextAlpha),
+                        fontSize = 15.sp, 
+                        fontWeight = FontWeight.Medium
+                    ),
+                    modifier = Modifier
+                        .background(Color.DarkGray.copy(alpha = videoInfoBackgroundAlpha))
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null // No ripple effect
+                        ) {
+                            // Show menu when clicked
+                            showInfoMenu = true
+                            cancelAutoHide() // Keep UI visible while menu is open
+                        }
+                )
+                
+                // Info Menu Dialog
+                if (showInfoMenu) {
+                    Dialog(onDismissRequest = { showInfoMenu = false }) {
+                        Card(
+                            modifier = Modifier
+                                .width(280.dp)
+                                .wrapContentHeight(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color(0xFF2D2D2D),
+                                contentColor = Color.White
+                            )
+                        ) {
+                            Column {
+                                // Menu Header
+                                Text(
+                                    text = "Video Options",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = Color.White,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp)
+                                        .padding(bottom = 8.dp)
+                                )
+                                
+                                // Menu Items
+                                LazyColumn {
+                                    item {
+                                        // Equalizer option
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    showInfoMenu = false
+                                                    showEqualizerDialog = true
+                                                    scheduleSeekbarHide() // Restart hide timer
+                                                }
+                                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(
+                                                text = "Equalizer",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = Color.White
+                                            )
+                                            Text(
+                                                text = "›",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = Color.Gray
+                                            )
+                                        }
+                                    }
+                                    
+                                    // Add more menu items here in the future
+                                    item {
+                                        Divider(
+                                            color = Color.Gray.copy(alpha = 0.3f),
+                                            modifier = Modifier.padding(horizontal = 16.dp)
+                                        )
+                                    }
+                                    
+                                    item {
+                                        Text(
+                                            text = "More features coming soon...",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = Color.Gray,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // EQUALIZER DIALOG
+        if (showEqualizerDialog) {
+            Dialog(onDismissRequest = { showEqualizerDialog = false }) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
+                        .wrapContentHeight(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFF1E1E1E),
+                        contentColor = Color.White
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        // Dialog Title
+                        Text(
+                            text = "6-Band Equalizer",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = Color.White,
+                            modifier = Modifier.padding(bottom = 20.dp)
+                        )
+                        
+                        // Equalizer bands
+                        equalizerBands.forEachIndexed { index, (label, frequency) ->
+                            val value = equalizerValues.value[index]
+                            
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                // Band label and value
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = Color.White
+                                    )
+                                    Text(
+                                        text = "${value} dB",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = if (value == 0) Color.White else if (value > 0) Color.Green else Color.Red
+                                    )
+                                }
+                                
+                                // Slider (-15dB to +3dB, 1dB steps)
+                                Slider(
+                                    value = value.toFloat(),
+                                    onValueChange = { newValue ->
+                                        val intValue = newValue.toInt()
+                                        equalizerValues.value = equalizerValues.value.toMutableList().apply {
+                                            set(index, intValue)
+                                        }
+                                        saveEqualizerValue(index, intValue)
+                                    },
+                                    onValueChangeFinished = {
+                                        updateEqualizer()
+                                    },
+                                    valueRange = -15f..3f,
+                                    steps = 18, // 19 steps total (3 - (-15) + 1 = 19), minus 1 for steps parameter
+                                    colors = SliderDefaults.colors(
+                                        thumbColor = if (value == 0) Color.White else if (value > 0) Color.Green else Color.Red,
+                                        activeTrackColor = if (value == 0) Color.Gray else if (value > 0) Color.Green.copy(alpha = 0.7f) else Color.Red.copy(alpha = 0.7f),
+                                        inactiveTrackColor = Color.Gray.copy(alpha = 0.3f)
+                                    ),
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                
+                                // Frequency label
+                                Text(
+                                    text = "$frequency Hz",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.Gray
+                                )
+                            }
+                        }
+                        
+                        Spacer(modifier = Modifier.height(20.dp))
+                        
+                        // Reset and Close buttons
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            // Reset button
+                            TextButton(
+                                onClick = {
+                                    // Reset all bands to 0
+                                    equalizerValues.value = List(6) { 0 }
+                                    equalizerValues.value.forEachIndexed { index, _ ->
+                                        saveEqualizerValue(index, 0)
+                                    }
+                                    updateEqualizer()
+                                },
+                                colors = ButtonDefaults.textButtonColors(
+                                    contentColor = Color.Red
+                                )
+                            ) {
+                                Text("Reset All")
+                            }
+                            
+                            // Close button
+                            Button(
+                                onClick = { showEqualizerDialog = false },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF007AFF),
+                                    contentColor = Color.White
+                                )
+                            ) {
+                                Text("Close")
+                            }
+                        }
+                    }
+                }
+            }
         }
         
         // FEEDBACK AREA
@@ -718,13 +909,12 @@ fun PlayerOverlay(
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
-                showQuickSeekFeedback -> Text( // ADD: Quick seek feedback
+                showQuickSeekFeedback -> Text(
                     text = quickSeekFeedbackText,
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
                 showSeekTime -> Text(
-                    // UPDATED: Add direction indicator to seek time
                     text = if (seekDirection.isNotEmpty()) "$seekTargetTime $seekDirection" else seekTargetTime,
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
@@ -753,18 +943,15 @@ fun SimpleDraggableProgressBar(
     var hasPassedThreshold by remember { mutableStateOf(false) }
     var thresholdStartX by remember { mutableStateOf(0f) }
     
-    // Convert 25dp to pixels for the movement threshold
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
     Box(modifier = modifier.height(48.dp)) {
-        // Progress bar background
         Box(modifier = Modifier
             .fillMaxWidth()
             .height(4.dp)
             .align(Alignment.CenterStart)
             .background(Color.Gray.copy(alpha = 0.6f)))
         
-        // Progress bar fill
         Box(modifier = Modifier
             .fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f)
             .height(4.dp)
@@ -779,28 +966,24 @@ fun SimpleDraggableProgressBar(
                 detectDragGestures(
                     onDragStart = { offset ->
                         dragStartX = offset.x
-                        // GET FRESH POSITION IMMEDIATELY WHEN DRAG STARTS
                         dragStartPosition = getFreshPosition()
-                        hasPassedThreshold = false // Reset threshold flag
-                        thresholdStartX = 0f // Reset threshold start position
+                        hasPassedThreshold = false
+                        thresholdStartX = 0f
                     },
                     onDrag = { change, dragAmount ->
                         change.consume()
                         val currentX = change.position.x
                         val totalMovementX = abs(currentX - dragStartX)
                         
-                        // Check if we've passed the movement threshold
                         if (!hasPassedThreshold) {
                             if (totalMovementX > movementThresholdPx) {
                                 hasPassedThreshold = true
-                                thresholdStartX = currentX // NEW: Store position where threshold was passed
+                                thresholdStartX = currentX
                             } else {
-                                // Haven't passed threshold yet, don't seek
                                 return@detectDragGestures
                             }
                         }
                         
-                        // Calculate delta from the threshold start position, not the original drag start
                         val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
                         val deltaX = currentX - effectiveStartX
                         val deltaPosition = (deltaX / size.width) * duration
@@ -808,8 +991,8 @@ fun SimpleDraggableProgressBar(
                         onValueChange(newPosition)
                     },
                     onDragEnd = { 
-                        hasPassedThreshold = false // Reset for next drag
-                        thresholdStartX = 0f // Reset threshold start
+                        hasPassedThreshold = false
+                        thresholdStartX = 0f
                         onValueChangeFinished() 
                     }
                 )
