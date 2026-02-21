@@ -59,14 +59,9 @@ import kotlin.math.abs
 
 // Data class to store original MPV settings for restoration
 data class MpvSettings(
-    val vdLavcFast: String,
-    val vdLavcSkiploopfilter: String,
-    val vdLavcSkipidct: String,
     val vdLavcSkipframe: String,
-    val hrSeekFramedrop: String,
     val lowDelay: String,
-    val vdLavcThreads: String,
-    val videoSync: String
+    val vdLavcThreads: String
 )
 
 @Composable
@@ -96,7 +91,7 @@ fun PlayerOverlay(
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
-    // SEEKING OPTIMIZATION STATE
+    // SEEKING OPTIMIZATION STATE - Simplified
     var seekingMode by remember { mutableStateOf(false) }
     var originalMpvSettings by remember { mutableStateOf<MpvSettings?>(null) }
     
@@ -151,19 +146,14 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // ========== SEEKING OPTIMIZATION FUNCTIONS ==========
+    // ========== SIMPLIFIED SEEKING OPTIMIZATION FUNCTIONS ==========
     
     fun saveOriginalSettings() {
         if (originalMpvSettings == null) {
             originalMpvSettings = MpvSettings(
-                vdLavcFast = MPVLib.getPropertyString("vd-lavc-fast") ?: "no",
-                vdLavcSkiploopfilter = MPVLib.getPropertyString("vd-lavc-skiploopfilter") ?: "no",
-                vdLavcSkipidct = MPVLib.getPropertyString("vd-lavc-skipidct") ?: "no",
                 vdLavcSkipframe = MPVLib.getPropertyString("vd-lavc-skipframe") ?: "no",
-                hrSeekFramedrop = MPVLib.getPropertyString("hr-seek-framedrop") ?: "no",
                 lowDelay = MPVLib.getPropertyString("low-delay") ?: "no",
-                vdLavcThreads = MPVLib.getPropertyString("vd-lavc-threads") ?: "8",
-                videoSync = MPVLib.getPropertyString("video-sync") ?: "display-resample"
+                vdLavcThreads = MPVLib.getPropertyString("vd-lavc-threads") ?: "8"
             )
         }
     }
@@ -173,40 +163,26 @@ fun PlayerOverlay(
             seekingMode = true
             saveOriginalSettings()
             
-            // Apply seeking optimizations for ultra-smooth scrubbing
-            MPVLib.setPropertyString("vd-lavc-fast", "yes")              // Faster decoding
-            MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")    // Skip loop filter
-            MPVLib.setPropertyString("vd-lavc-skipidct", "all")          // Skip IDCT
-            MPVLib.setPropertyString("vd-lavc-skipframe", "all")         // Skip non-keyframes
-            MPVLib.setPropertyString("hr-seek-framedrop", "yes")         // Aggressive frame drop
-            MPVLib.setPropertyString("low-delay", "yes")                  // Minimize decoder buffering
-            MPVLib.setPropertyString("vd-lavc-threads", "1")              // Single thread for seeking
-            MPVLib.setPropertyString("video-sync", "audio")               // Simpler sync during seeking
+            // SIMPLIFIED: Just skip B-frames and reduce latency
+            // 1. Skip B-frames only - keeps motion smooth while reducing decode load
+            MPVLib.setPropertyString("vd-lavc-skipframe", "bidir")
             
-            // Force software decoding during seeking for maximum compatibility
-            MPVLib.setPropertyString("hwdec", "no")
+            // 2. Reduce decoder buffering/latency
+            MPVLib.setPropertyString("low-delay", "yes")
             
-            // Log for debugging
-            println("🎬 SEEKING MODE ENABLED - Optimizations active")
+            // 3. Keep 2 threads for smooth decoding during seek
+            MPVLib.setPropertyString("vd-lavc-threads", "2")
+            
+            println("🎬 SEEKING MODE - Skipping B-frames, low-delay enabled")
         }
     }
     
     fun disableSeekingOptimizations() {
         if (seekingMode && originalMpvSettings != null) {
             // Restore original settings
-            MPVLib.setPropertyString("vd-lavc-fast", originalMpvSettings!!.vdLavcFast)
-            MPVLib.setPropertyString("vd-lavc-skiploopfilter", originalMpvSettings!!.vdLavcSkiploopfilter)
-            MPVLib.setPropertyString("vd-lavc-skipidct", originalMpvSettings!!.vdLavcSkipidct)
             MPVLib.setPropertyString("vd-lavc-skipframe", originalMpvSettings!!.vdLavcSkipframe)
-            MPVLib.setPropertyString("hr-seek-framedrop", originalMpvSettings!!.hrSeekFramedrop)
             MPVLib.setPropertyString("low-delay", originalMpvSettings!!.lowDelay)
             MPVLib.setPropertyString("vd-lavc-threads", originalMpvSettings!!.vdLavcThreads)
-            MPVLib.setPropertyString("video-sync", originalMpvSettings!!.videoSync)
-            
-            // Restore hardware decoding if it was enabled
-            if (originalMpvSettings!!.vdLavcFast == "no") {
-                MPVLib.setPropertyString("hwdec", "auto")
-            }
             
             seekingMode = false
             println("🎬 SEEKING MODE DISABLED - Normal playback restored")
@@ -250,7 +226,7 @@ fun PlayerOverlay(
         }
     }
     
-    // UPDATED: performRealTimeSeek with throttle
+    // performRealTimeSeek with throttle
     fun performRealTimeSeek(targetPosition: Double) {
         if (isSeekInProgress) return // Skip if we're already processing a seek
         
@@ -369,7 +345,7 @@ fun PlayerOverlay(
         return ""
     }
     
-    // UPDATED: Start horizontal seeking with optimizations
+    // Start horizontal seeking with optimizations
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
@@ -379,7 +355,7 @@ fun PlayerOverlay(
         isSeeking = true
         showSeekTime = true
         
-        // ENABLE SEEKING OPTIMIZATIONS
+        // ENABLE SIMPLIFIED SEEKING OPTIMIZATIONS
         enableSeekingOptimizations()
         
         showSeekbar = true
@@ -395,7 +371,7 @@ fun PlayerOverlay(
         isVerticalSwipe = true
         cancelAutoHide()
         
-        // ENABLE SEEKING OPTIMIZATIONS for vertical swipe too
+        // ENABLE SIMPLIFIED SEEKING OPTIMIZATIONS
         enableSeekingOptimizations()
         
         val currentY = startY
@@ -434,7 +410,7 @@ fun PlayerOverlay(
         performRealTimeSeek(clampedPosition)
     }
     
-    // UPDATED: End horizontal seeking with restoration
+    // End horizontal seeking with restoration
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
@@ -460,7 +436,7 @@ fun PlayerOverlay(
         }
     }
     
-    // UPDATED: End vertical swipe with restoration
+    // End vertical swipe with restoration
     fun endVerticalSwipe() {
         // DISABLE SEEKING OPTIMIZATIONS
         disableSeekingOptimizations()
@@ -595,7 +571,7 @@ fun PlayerOverlay(
     
     // ========== PROGRESS BAR HANDLERS ==========
     
-    // UPDATED: handleProgressBarDrag with seeking optimizations
+    // handleProgressBarDrag with seeking optimizations
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
@@ -603,7 +579,7 @@ fun PlayerOverlay(
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
             
-            // ENABLE SEEKING OPTIMIZATIONS
+            // ENABLE SIMPLIFIED SEEKING OPTIMIZATIONS
             enableSeekingOptimizations()
             
             showSeekbar = true
@@ -630,7 +606,7 @@ fun PlayerOverlay(
         performRealTimeSeek(targetPosition)
     }
     
-    // UPDATED: handleDragFinished with restoration
+    // handleDragFinished with restoration
     fun handleDragFinished() {
         isDragging = false
         if (wasPlayingBeforeSeek) {
@@ -825,11 +801,11 @@ fun PlayerOverlay(
             }
         }
         
-        // SEEKING MODE INDICATOR (optional - for debugging)
+        // SEEKING MODE INDICATOR (shows when optimizations are active)
         if (seekingMode) {
             Text(
-                text = "⚡ Turbo Mode",
-                style = TextStyle(color = Color.Yellow, fontSize = 12.sp, fontWeight = FontWeight.Medium),
+                text = "⚡ Smooth Seek",
+                style = TextStyle(color = Color.Green, fontSize = 12.sp, fontWeight = FontWeight.Medium),
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .offset(x = (-16).dp, y = 20.dp)
