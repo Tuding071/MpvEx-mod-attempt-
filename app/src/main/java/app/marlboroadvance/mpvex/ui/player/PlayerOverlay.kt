@@ -66,7 +66,7 @@ import kotlin.math.min
 
 // ========== PURE FRAME MEDIACODEC DECODER - INTEGRATED ==========
 data class VideoFrame(
-    val buffer: ByteBuffer,
+    val buffer: ByteArray,
     val timestampUs: Long,
     val isKeyFrame: Boolean,
     val width: Int,
@@ -121,15 +121,20 @@ class MediaCodecSeeker {
             val bufferInfo = BufferInfo()
             var targetFrame: VideoFrame? = null
             
+            val timeoutUs = 10000L // 10ms timeout
+            
             // Decode until we reach target frame
             while (true) {
                 // Feed data to decoder
-                val inputBufferIndex = decoder?.dequeueInputBuffer(0L) ?: -1
+                val inputBufferIndex = decoder?.dequeueInputBuffer(timeoutUs) ?: -1
                 if (inputBufferIndex >= 0) {
                     val inputBuffer = decoder?.getInputBuffer(inputBufferIndex)
-                    val sampleSize = extractor?.readSampleData(extractor, inputBuffer!!, 0) ?: -1
+                    
+                    // Read sample data into buffer
+                    val sampleSize = extractor?.readSampleData(inputBuffer!!, 0) ?: -1
                     
                     if (sampleSize < 0) {
+                        // End of stream
                         decoder?.queueInputBuffer(inputBufferIndex, 0, 0, 0, 
                             MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                     } else {
@@ -141,7 +146,7 @@ class MediaCodecSeeker {
                 }
                 
                 // Get output frames
-                val outputBufferIndex = decoder?.dequeueOutputBuffer(bufferInfo, 0) ?: -1
+                val outputBufferIndex = decoder?.dequeueOutputBuffer(bufferInfo, timeoutUs) ?: -1
                 
                 when {
                     outputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {
@@ -157,7 +162,7 @@ class MediaCodecSeeker {
                         val frameData = outputBuffer?.let { buf ->
                             val bytes = ByteArray(buf.remaining())
                             buf.get(bytes)
-                            ByteBuffer.wrap(bytes)
+                            bytes
                         } ?: continue
                         
                         val isKeyFrame = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
@@ -204,13 +209,16 @@ class MediaCodecSeeker {
             
             val bufferInfo = BufferInfo()
             var lastFrame: VideoFrame? = null
+            val timeoutUs = 10000L // 10ms timeout
             
             while (true) {
                 // Feed data
-                val inputBufferIndex = decoder?.dequeueInputBuffer(0L) ?: -1
+                val inputBufferIndex = decoder?.dequeueInputBuffer(timeoutUs) ?: -1
                 if (inputBufferIndex >= 0) {
                     val inputBuffer = decoder?.getInputBuffer(inputBufferIndex)
-                    val sampleSize = extractor?.readSampleData(extractor, inputBuffer!!, 0) ?: -1
+                    
+                    // Read sample data
+                    val sampleSize = extractor?.readSampleData(inputBuffer!!, 0) ?: -1
                     
                     if (sampleSize < 0) {
                         decoder?.queueInputBuffer(inputBufferIndex, 0, 0, 0, 
@@ -224,7 +232,7 @@ class MediaCodecSeeker {
                 }
                 
                 // Get output
-                val outputBufferIndex = decoder?.dequeueOutputBuffer(bufferInfo, 0) ?: -1
+                val outputBufferIndex = decoder?.dequeueOutputBuffer(bufferInfo, timeoutUs) ?: -1
                 
                 when {
                     outputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {}
@@ -235,7 +243,7 @@ class MediaCodecSeeker {
                         val frameData = outputBuffer?.let { buf ->
                             val bytes = ByteArray(buf.remaining())
                             buf.get(bytes)
-                            ByteBuffer.wrap(bytes)
+                            bytes
                         } ?: continue
                         
                         val frame = VideoFrame(
@@ -1127,7 +1135,7 @@ private fun getDisplayNameFromContentUri(uri: Uri, context: android.content.Cont
     } catch (e: Exception) { null }
 }
 
-private fun getBestAvailableFileName(context: android.content.Context): String {
+private fun getBestAvailableFileName(context: android.context.Context): String {
     val mediaTitle = MPVLib.getPropertyString("media-title")
     if (mediaTitle != null && mediaTitle != "Video" && mediaTitle.isNotBlank()) return mediaTitle.substringBeforeLast(".")
     val mpvPath = MPVLib.getPropertyString("path")
