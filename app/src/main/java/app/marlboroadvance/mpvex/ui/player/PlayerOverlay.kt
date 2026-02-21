@@ -1,5 +1,9 @@
 package app.marlboroadvance.mpvex.ui.player
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Rect
 import android.media.MediaCodec
 import android.media.MediaCodec.BufferInfo
 import android.media.MediaExtractor
@@ -8,6 +12,7 @@ import android.view.MotionEvent
 import android.view.Surface
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -36,7 +41,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -72,7 +82,25 @@ data class VideoFrame(
     val isKeyFrame: Boolean,
     val width: Int,
     val height: Int
-)
+) {
+    // Convert to Android Bitmap
+    fun toBitmap(): Bitmap? {
+        return try {
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val buffer = ByteBuffer.wrap(this.buffer)
+            bitmap.copyPixelsFromBuffer(buffer)
+            bitmap
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+    
+    // Convert to Compose ImageBitmap
+    fun toImageBitmap(): ImageBitmap? {
+        return toBitmap()?.asImageBitmap()
+    }
+}
 
 class MediaCodecSeeker {
     private var extractor: MediaExtractor? = null
@@ -81,6 +109,7 @@ class MediaCodecSeeker {
     private var videoWidth = 0
     private var videoHeight = 0
     private var isInitialized = false
+    private var colorFormat = 0
     
     fun initialize(videoPath: String): Boolean {
         try {
@@ -156,7 +185,9 @@ class MediaCodecSeeker {
                         // No frames ready yet
                     }
                     outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                        // Format changed, ignore
+                        // Format changed, update color format
+                        val newFormat = decoder?.outputFormat
+                        colorFormat = newFormat?.getInteger(MediaFormat.KEY_COLOR_FORMAT) ?: colorFormat
                     }
                     outputBufferIndex >= 0 -> {
                         val outputBuffer = decoder?.getOutputBuffer(outputBufferIndex)
@@ -241,7 +272,10 @@ class MediaCodecSeeker {
                 
                 when {
                     outputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {}
-                    outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {}
+                    outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        val newFormat = decoder?.outputFormat
+                        colorFormat = newFormat?.getInteger(MediaFormat.KEY_COLOR_FORMAT) ?: colorFormat
+                    }
                     outputBufferIndex >= 0 -> {
                         val outputBuffer = decoder?.getOutputBuffer(outputBufferIndex)
                         
@@ -311,6 +345,8 @@ class MediaCodecSeeker {
     }
     
     val isReady: Boolean get() = isInitialized
+    val width: Int get() = videoWidth
+    val height: Int get() = videoHeight
 }
 
 @Composable
@@ -343,7 +379,7 @@ fun PlayerOverlay(
     // ========== MEDIACODEC SEEKER ==========
     var mediaCodecSeeker by remember { mutableStateOf<MediaCodecSeeker?>(null) }
     var isUsingMediaCodec by remember { mutableStateOf(false) }
-    var currentDecodedFrame by remember { mutableStateOf<VideoFrame?>(null) }
+    var currentFrameBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
     var mediaCodecReady by remember { mutableStateOf(false) }
     
     // ADD: Seek direction for feedback
@@ -466,9 +502,11 @@ fun PlayerOverlay(
         coroutineScope.launch(Dispatchers.Default) {
             val frame = mediaCodecSeeker?.seekToFrame(targetTimeUs)
             frame?.let {
-                currentDecodedFrame = it
-                // Here you would render the frame
-                // For now, we just store it
+                // Convert to bitmap and update UI on main thread
+                val bitmap = it.toImageBitmap()
+                coroutineScope.launch(Dispatchers.Main) {
+                    currentFrameBitmap = bitmap
+                }
             }
             
             // Reset throttle
@@ -487,8 +525,11 @@ fun PlayerOverlay(
         
         coroutineScope.launch(Dispatchers.Default) {
             mediaCodecSeeker?.decodeFramesToTarget(targetTimeUs) { frame ->
-                currentDecodedFrame = frame
-                // Render each frame as it comes - buttery smooth!
+                // Convert each frame to bitmap and update UI on main thread
+                val bitmap = frame.toImageBitmap()
+                coroutineScope.launch(Dispatchers.Main) {
+                    currentFrameBitmap = bitmap
+                }
             }
         }
     }
@@ -503,6 +544,8 @@ fun PlayerOverlay(
     
     fun switchBackToMPV(finalPositionSeconds: Double) {
         isUsingMediaCodec = false
+        // Clear the MediaCodec frame
+        currentFrameBitmap = null
         // Seek MPV to final position
         MPVLib.command("seek", finalPositionSeconds.toString(), "absolute", "exact")
         
@@ -870,6 +913,24 @@ fun PlayerOverlay(
     val timeDisplayBackgroundAlpha = if (isSeeking || isDragging) 0.0f else 0.8f
     
     Box(modifier = modifier.fillMaxSize()) {
+        // MPV VIDEO SURFACE (always behind)
+        // This is where MPV renders normally
+        
+        // MEDIACODEC FRAME OVERLAY (only visible during seeking)
+        if (isUsingMediaCodec && currentFrameBitmap != null) {
+            Canvas(
+                modifier = Modifier.fillMaxSize()
+            ) {
+                drawIntoCanvas { canvas ->
+                    canvas.nativeCanvas.drawBitmap(
+                        currentFrameBitmap!!.asAndroidBitmap(),
+                        android.graphics.Matrix(),
+                        null
+                    )
+                }
+            }
+        }
+        
         // MAIN GESTURE AREA
         Box(modifier = Modifier.fillMaxSize()) {
             // TOP 5% - Ignore area
@@ -1031,6 +1092,16 @@ fun PlayerOverlay(
             }
         }
     }
+}
+
+// Helper function to convert ImageBitmap to android.graphics.Bitmap
+fun ImageBitmap.asAndroidBitmap(): android.graphics.Bitmap {
+    val buffer = ByteBuffer.allocate(width * height * 4)
+    readPixels(buffer)
+    buffer.rewind()
+    val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+    bitmap.copyPixelsFromBuffer(buffer)
+    return bitmap
 }
 
 @Composable
