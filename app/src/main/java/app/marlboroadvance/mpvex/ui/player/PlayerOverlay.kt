@@ -130,18 +130,20 @@ class MediaCodecSeeker {
                 if (inputBufferIndex >= 0) {
                     val inputBuffer = decoder?.getInputBuffer(inputBufferIndex)
                     
-                    // Read sample data into buffer
-                    val sampleSize = extractor?.readSampleData(inputBuffer!!, 0) ?: -1
-                    
-                    if (sampleSize < 0) {
-                        // End of stream
-                        decoder?.queueInputBuffer(inputBufferIndex, 0, 0, 0, 
-                            MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                    } else {
-                        val presentationTimeUs = extractor?.sampleTime ?: 0
-                        decoder?.queueInputBuffer(inputBufferIndex, 0, sampleSize, 
-                            presentationTimeUs, 0)
-                        extractor?.advance()
+                    if (inputBuffer != null) {
+                        // Read sample data into buffer
+                        val sampleSize = extractor?.readSampleData(inputBuffer, 0) ?: -1
+                        
+                        if (sampleSize < 0) {
+                            // End of stream
+                            decoder?.queueInputBuffer(inputBufferIndex, 0, 0, 0, 
+                                MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                        } else {
+                            val presentationTimeUs = extractor?.sampleTime ?: 0
+                            decoder?.queueInputBuffer(inputBufferIndex, 0, sampleSize, 
+                                presentationTimeUs, 0)
+                            extractor?.advance()
+                        }
                     }
                 }
                 
@@ -217,17 +219,19 @@ class MediaCodecSeeker {
                 if (inputBufferIndex >= 0) {
                     val inputBuffer = decoder?.getInputBuffer(inputBufferIndex)
                     
-                    // Read sample data
-                    val sampleSize = extractor?.readSampleData(inputBuffer!!, 0) ?: -1
-                    
-                    if (sampleSize < 0) {
-                        decoder?.queueInputBuffer(inputBufferIndex, 0, 0, 0, 
-                            MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                    } else {
-                        val presentationTimeUs = extractor?.sampleTime ?: 0
-                        decoder?.queueInputBuffer(inputBufferIndex, 0, sampleSize, 
-                            presentationTimeUs, 0)
-                        extractor?.advance()
+                    if (inputBuffer != null) {
+                        // Read sample data
+                        val sampleSize = extractor?.readSampleData(inputBuffer, 0) ?: -1
+                        
+                        if (sampleSize < 0) {
+                            decoder?.queueInputBuffer(inputBufferIndex, 0, 0, 0, 
+                                MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                        } else {
+                            val presentationTimeUs = extractor?.sampleTime ?: 0
+                            decoder?.queueInputBuffer(inputBufferIndex, 0, sampleSize, 
+                                presentationTimeUs, 0)
+                            extractor?.advance()
+                        }
                     }
                 }
                 
@@ -404,6 +408,14 @@ fun PlayerOverlay(
         }
     }
     
+    // ========== CLEANUP ON DISPOSE ==========
+    DisposableEffect(Unit) {
+        onDispose {
+            mediaCodecSeeker?.release()
+            mediaCodecSeeker = null
+        }
+    }
+    
     // ========== UTILITY FUNCTIONS ==========
     
     fun scheduleSeekbarHide() {
@@ -509,7 +521,6 @@ fun PlayerOverlay(
     fun performQuickSeek(seconds: Int) {
         val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-        val newPosition = (currentPos + seconds).coerceIn(0.0, duration)
         
         quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
         showQuickSeekFeedback = true
@@ -845,14 +856,6 @@ fun PlayerOverlay(
         scheduleSeekbarHide()
     }
     
-    // ========== CLEANUP ==========
-    LaunchedEffect(Unit) {
-        coroutineScope.launch {
-            // This will run when composable is disposed
-            delay(1000000) // Placeholder, actual cleanup in onDispose
-        }
-    }
-    
     // ========== UI RENDERING ==========
     
     val displayText = when (showVideoInfo) {
@@ -1135,7 +1138,7 @@ private fun getDisplayNameFromContentUri(uri: Uri, context: android.content.Cont
     } catch (e: Exception) { null }
 }
 
-private fun getBestAvailableFileName(context: android.context.Context): String {
+private fun getBestAvailableFileName(context: android.content.Context): String {
     val mediaTitle = MPVLib.getPropertyString("media-title")
     if (mediaTitle != null && mediaTitle != "Video" && mediaTitle.isNotBlank()) return mediaTitle.substringBeforeLast(".")
     val mpvPath = MPVLib.getPropertyString("path")
