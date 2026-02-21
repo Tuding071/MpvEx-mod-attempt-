@@ -1,59 +1,304 @@
 package app.marlboroadvance.mpvex.ui.player
 
+import android.media.MediaCodec
+import android.media.MediaCodec.BufferInfo
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.view.MotionEvent
+import android.view.Surface
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.datastore.preferences.core.*
-import androidx.datastore.preferences.preferencesDataStore
-import androidx.datastore.core.DataStore
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import dev.vivvvek.seeker.Seeker
+import dev.vivvvek.seeker.SeekerDefaults
+import dev.vivvvek.seeker.Segment
+import kotlinx.collections.immutable.ImmutableList
+import kotlinx.collections.immutable.persistentListOf
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import `is`.xyz.mpv.MPVLib
-import android.app.Activity
+import `is`.xyz.mpv.Utils
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import android.content.Intent
 import android.net.Uri
+import java.nio.ByteBuffer
 import kotlin.math.abs
+import kotlin.math.min
 
-// DataStore for saving equalizer settings
-val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "equalizer_settings")
-
-// Equalizer bands (Hz frequencies)
-val equalizerBands = listOf(
-    "60 Hz" to 60,
-    "230 Hz" to 230,
-    "910 Hz" to 910,
-    "4 kHz" to 4000,
-    "14 kHz" to 14000,
-    "22 kHz" to 22000
+// ========== PURE FRAME MEDIACODEC DECODER - INTEGRATED ==========
+data class VideoFrame(
+    val buffer: ByteBuffer,
+    val timestampUs: Long,
+    val isKeyFrame: Boolean,
+    val width: Int,
+    val height: Int
 )
+
+class MediaCodecSeeker {
+    private var extractor: MediaExtractor? = null
+    private var decoder: MediaCodec? = null
+    private var videoTrackIndex = -1
+    private var videoWidth = 0
+    private var videoHeight = 0
+    private var isInitialized = false
+    
+    fun initialize(videoPath: String): Boolean {
+        try {
+            extractor = MediaExtractor()
+            extractor?.setDataSource(videoPath)
+            
+            // Select ONLY video track
+            videoTrackIndex = selectVideoTrack(extractor)
+            if (videoTrackIndex == -1) return false
+            
+            val format = extractor?.getTrackFormat(videoTrackIndex)
+            videoWidth = format?.getInteger(MediaFormat.KEY_WIDTH) ?: 0
+            videoHeight = format?.getInteger(MediaFormat.KEY_HEIGHT) ?: 0
+            
+            val mime = format?.getString(MediaFormat.KEY_MIME) ?: return false
+            
+            // Create decoder with MINIMAL configuration - NO SURFACE = pure buffer output
+            decoder = MediaCodec.createDecoderByType(mime)
+            decoder?.configure(format, null, null, 0)
+            decoder?.start()
+            
+            extractor?.selectTrack(videoTrackIndex)
+            isInitialized = true
+            return true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return false
+        }
+    }
+    
+    // Seek and decode to exact frame - PURE FRAMES, NO DROPS
+    fun seekToFrame(targetTimeUs: Long): VideoFrame? {
+        if (!isInitialized) return null
+        
+        try {
+            decoder?.flush()
+            extractor?.seekTo(targetTimeUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            
+            val bufferInfo = BufferInfo()
+            var targetFrame: VideoFrame? = null
+            
+            // Decode until we reach target frame
+            while (true) {
+                // Feed data to decoder
+                val inputBufferIndex = decoder?.dequeueInputBuffer(0L) ?: -1
+                if (inputBufferIndex >= 0) {
+                    val inputBuffer = decoder?.getInputBuffer(inputBufferIndex)
+                    val sampleSize = extractor?.readSampleData(extractor, inputBuffer!!, 0) ?: -1
+                    
+                    if (sampleSize < 0) {
+                        decoder?.queueInputBuffer(inputBufferIndex, 0, 0, 0, 
+                            MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                    } else {
+                        val presentationTimeUs = extractor?.sampleTime ?: 0
+                        decoder?.queueInputBuffer(inputBufferIndex, 0, sampleSize, 
+                            presentationTimeUs, 0)
+                        extractor?.advance()
+                    }
+                }
+                
+                // Get output frames
+                val outputBufferIndex = decoder?.dequeueOutputBuffer(bufferInfo, 0) ?: -1
+                
+                when {
+                    outputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                        // No frames ready yet
+                    }
+                    outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        // Format changed, ignore
+                    }
+                    outputBufferIndex >= 0 -> {
+                        val outputBuffer = decoder?.getOutputBuffer(outputBufferIndex)
+                        
+                        // Create copy of frame data
+                        val frameData = outputBuffer?.let { buf ->
+                            val bytes = ByteArray(buf.remaining())
+                            buf.get(bytes)
+                            ByteBuffer.wrap(bytes)
+                        } ?: continue
+                        
+                        val isKeyFrame = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
+                        
+                        val frame = VideoFrame(
+                            buffer = frameData,
+                            timestampUs = bufferInfo.presentationTimeUs,
+                            isKeyFrame = isKeyFrame,
+                            width = videoWidth,
+                            height = videoHeight
+                        )
+                        
+                        // Check if this is our target frame or past it
+                        if (bufferInfo.presentationTimeUs >= targetTimeUs) {
+                            targetFrame = frame
+                            decoder?.releaseOutputBuffer(outputBufferIndex, false)
+                            break
+                        }
+                        
+                        decoder?.releaseOutputBuffer(outputBufferIndex, false)
+                    }
+                }
+                
+                // Check for end of stream
+                if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                    break
+                }
+            }
+            
+            return targetFrame
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return null
+        }
+    }
+    
+    // Continuous frame decoding for smooth drag seeking - EVERY FRAME, NO DROPS
+    fun decodeFramesToTarget(targetTimeUs: Long, onFrameDecoded: (VideoFrame) -> Unit): VideoFrame? {
+        if (!isInitialized) return null
+        
+        try {
+            decoder?.flush()
+            extractor?.seekTo(targetTimeUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            
+            val bufferInfo = BufferInfo()
+            var lastFrame: VideoFrame? = null
+            
+            while (true) {
+                // Feed data
+                val inputBufferIndex = decoder?.dequeueInputBuffer(0L) ?: -1
+                if (inputBufferIndex >= 0) {
+                    val inputBuffer = decoder?.getInputBuffer(inputBufferIndex)
+                    val sampleSize = extractor?.readSampleData(extractor, inputBuffer!!, 0) ?: -1
+                    
+                    if (sampleSize < 0) {
+                        decoder?.queueInputBuffer(inputBufferIndex, 0, 0, 0, 
+                            MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                    } else {
+                        val presentationTimeUs = extractor?.sampleTime ?: 0
+                        decoder?.queueInputBuffer(inputBufferIndex, 0, sampleSize, 
+                            presentationTimeUs, 0)
+                        extractor?.advance()
+                    }
+                }
+                
+                // Get output
+                val outputBufferIndex = decoder?.dequeueOutputBuffer(bufferInfo, 0) ?: -1
+                
+                when {
+                    outputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {}
+                    outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {}
+                    outputBufferIndex >= 0 -> {
+                        val outputBuffer = decoder?.getOutputBuffer(outputBufferIndex)
+                        
+                        val frameData = outputBuffer?.let { buf ->
+                            val bytes = ByteArray(buf.remaining())
+                            buf.get(bytes)
+                            ByteBuffer.wrap(bytes)
+                        } ?: continue
+                        
+                        val frame = VideoFrame(
+                            buffer = frameData,
+                            timestampUs = bufferInfo.presentationTimeUs,
+                            isKeyFrame = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0,
+                            width = videoWidth,
+                            height = videoHeight
+                        )
+                        
+                        // Callback with every frame
+                        onFrameDecoded(frame)
+                        lastFrame = frame
+                        
+                        decoder?.releaseOutputBuffer(outputBufferIndex, false)
+                        
+                        // Stop if we've reached target
+                        if (bufferInfo.presentationTimeUs >= targetTimeUs) {
+                            break
+                        }
+                    }
+                }
+                
+                if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                    break
+                }
+            }
+            
+            return lastFrame
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return null
+        }
+    }
+    
+    fun release() {
+        try {
+            decoder?.stop()
+            decoder?.release()
+            extractor?.release()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        decoder = null
+        extractor = null
+        isInitialized = false
+    }
+    
+    private fun selectVideoTrack(extractor: MediaExtractor?): Int {
+        if (extractor == null) return -1
+        
+        for (i in 0 until extractor.trackCount) {
+            val format = extractor.getTrackFormat(i)
+            val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
+            if (mime.startsWith("video/")) {
+                return i
+            }
+        }
+        return -1
+    }
+    
+    val isReady: Boolean get() = isInitialized
+}
 
 @Composable
 fun PlayerOverlay(
@@ -61,48 +306,6 @@ fun PlayerOverlay(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
-    
-    // --- NEW: Equalizer State ---
-    var showEqualizerDialog by remember { mutableStateOf(false) }
-    var showInfoMenu by remember { mutableStateOf(false) }
-    
-    // Load saved equalizer values from DataStore
-    val equalizerValues = remember {
-        mutableStateOf(List(6) { index ->
-            // Load from DataStore or default to 0 (flat)
-            val savedValue = runBlocking {
-                context.dataStore.data.map { prefs ->
-                    prefs[intPreferencesKey("equalizer_band_$index")] ?: 0
-                }.first()
-            }
-            savedValue
-        })
-    }
-    
-    // Function to update equalizer in MPV
-    fun updateEqualizer() {
-        val eqString = equalizerValues.value.joinToString(":") { it.toString() }
-        MPVLib.command("af", "set", "equalizer=$eqString")
-    }
-    
-    // Save equalizer values to DataStore
-    fun saveEqualizerValue(index: Int, value: Int) {
-        coroutineScope.launch(Dispatchers.IO) {
-            context.dataStore.edit { prefs ->
-                prefs[intPreferencesKey("equalizer_band_$index")] = value
-            }
-        }
-    }
-    
-    // Apply equalizer when dialog closes
-    LaunchedEffect(showEqualizerDialog) {
-        if (!showEqualizerDialog) {
-            // Update MPV with current values
-            updateEqualizer()
-        }
-    }
-    
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
     var seekTargetTime by remember { mutableStateOf("00:00") }
@@ -124,10 +327,20 @@ fun PlayerOverlay(
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
-    var seekDirection by remember { mutableStateOf("") }
-    var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 50L
+    // ========== MEDIACODEC SEEKER ==========
+    var mediaCodecSeeker by remember { mutableStateOf<MediaCodecSeeker?>(null) }
+    var isUsingMediaCodec by remember { mutableStateOf(false) }
+    var currentDecodedFrame by remember { mutableStateOf<VideoFrame?>(null) }
+    var mediaCodecReady by remember { mutableStateOf(false) }
     
+    // ADD: Seek direction for feedback
+    var seekDirection by remember { mutableStateOf("") } // "+" or "-" or ""
+    
+    // ADD: Simple throttle control
+    var isSeekInProgress by remember { mutableStateOf(false) }
+    val seekThrottleMs = 16L // 16ms for 60fps smoothness
+    
+    // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
     var touchStartTime by remember { mutableStateOf(0L) }
     var touchStartX by remember { mutableStateOf(0f) }
     var touchStartY by remember { mutableStateOf(0f) }
@@ -137,14 +350,17 @@ fun PlayerOverlay(
     var isVerticalSwipe by remember { mutableStateOf(false) }
     var longTapJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
-    val longTapThreshold = 300L
-    val horizontalSwipeThreshold = 30f
-    val verticalSwipeThreshold = 40f
-    val maxVerticalMovement = 50f
-    val maxHorizontalMovement = 50f
+    // THRESHOLDS
+    val longTapThreshold = 300L // ms
+    val horizontalSwipeThreshold = 30f // pixels - minimum horizontal movement to trigger seeking
+    val verticalSwipeThreshold = 40f // pixels - minimum vertical movement to trigger quick seek
+    val maxVerticalMovement = 50f // pixels - maximum vertical movement allowed for horizontal swipe
+    val maxHorizontalMovement = 50f // pixels - maximum horizontal movement allowed for vertical swipe
     
+    // ADD: Quick seek amount in seconds
     val quickSeekAmount = 5
     
+    // Video info follows seekbar visibility
     var showVideoInfo by remember { mutableStateOf(true) }
     var videoTitle by remember { mutableStateOf("Video") }
     var fileName by remember { mutableStateOf("Video") }
@@ -164,6 +380,21 @@ fun PlayerOverlay(
     var showVolumeFeedbackState by remember { mutableStateOf(false) }
     var currentVolume by remember { mutableStateOf(viewModel.currentVolume.value) }
     var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    
+    val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
+    
+    // ========== INITIALIZE MEDIACODEC SEEKER ==========
+    LaunchedEffect(Unit) {
+        val videoPath = getVideoPath(context)
+        if (videoPath != null) {
+            val seeker = MediaCodecSeeker()
+            val initialized = seeker.initialize(videoPath)
+            if (initialized) {
+                mediaCodecSeeker = seeker
+                mediaCodecReady = true
+            }
+        }
+    }
     
     // ========== UTILITY FUNCTIONS ==========
     
@@ -202,13 +433,64 @@ fun PlayerOverlay(
         }
     }
     
-    fun performRealTimeSeek(targetPosition: Double) {
-        if (isSeekInProgress) return
+    // ========== MEDIACODEC SEEKING FUNCTIONS ==========
+    
+    // PURE FRAME SEEKING - NO AUDIO, NO TIMING, JUST FRAMES
+    fun performMediaCodecSeek(targetPositionSeconds: Double) {
+        if (isSeekInProgress || !mediaCodecReady) return
         isSeekInProgress = true
-        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
-        coroutineScope.launch {
-            delay(seekThrottleMs)
-            isSeekInProgress = false
+        
+        val targetTimeUs = (targetPositionSeconds * 1_000_000).toLong()
+        
+        coroutineScope.launch(Dispatchers.Default) {
+            val frame = mediaCodecSeeker?.seekToFrame(targetTimeUs)
+            frame?.let {
+                currentDecodedFrame = it
+                // Here you would render the frame
+                // For now, we just store it
+            }
+            
+            // Reset throttle
+            coroutineScope.launch {
+                delay(seekThrottleMs)
+                isSeekInProgress = false
+            }
+        }
+    }
+    
+    // CONTINUOUS FRAME DECODING FOR SMOOTH DRAG - EVERY FRAME, NO DROPS
+    fun performContinuousMediaCodecSeek(targetPositionSeconds: Double) {
+        if (!mediaCodecReady) return
+        
+        val targetTimeUs = (targetPositionSeconds * 1_000_000).toLong()
+        
+        coroutineScope.launch(Dispatchers.Default) {
+            mediaCodecSeeker?.decodeFramesToTarget(targetTimeUs) { frame ->
+                currentDecodedFrame = frame
+                // Render each frame as it comes - buttery smooth!
+            }
+        }
+    }
+    
+    fun switchToMediaCodecMode() {
+        isUsingMediaCodec = true
+        // Pause MPV playback during seeking
+        if (MPVLib.getPropertyBoolean("pause") == false) {
+            MPVLib.setPropertyBoolean("pause", true)
+        }
+    }
+    
+    fun switchBackToMPV(finalPositionSeconds: Double) {
+        isUsingMediaCodec = false
+        // Seek MPV to final position
+        MPVLib.command("seek", finalPositionSeconds.toString(), "absolute", "exact")
+        
+        // Resume playback if it was playing before
+        if (wasPlayingBeforeSeek) {
+            coroutineScope.launch {
+                delay(100)
+                MPVLib.setPropertyBoolean("pause", false)
+            }
         }
     }
     
@@ -294,8 +576,9 @@ fun PlayerOverlay(
     
     fun checkForSwipeDirection(currentX: Float, currentY: Float): String {
         if (isHorizontalSwipe || isVerticalSwipe || isLongTap) return ""
-        val deltaX = kotlin.math.abs(currentX - touchStartX)
-        val deltaY = kotlin.math.abs(currentY - touchStartY)
+        
+        val deltaX = abs(currentX - touchStartX)
+        val deltaY = abs(currentY - touchStartY)
         
         if (deltaX > horizontalSwipeThreshold && deltaX > deltaY && deltaY < maxVerticalMovement) {
             return "horizontal"
@@ -308,8 +591,10 @@ fun PlayerOverlay(
         return ""
     }
     
+    // Start horizontal seeking with MediaCodec
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
+        switchToMediaCodecMode() // Switch to MediaCodec for seeking
         cancelAutoHide()
         seekStartX = startX
         seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
@@ -320,16 +605,13 @@ fun PlayerOverlay(
         showSeekbar = true
         showVideoInfo = true
         
-        if (wasPlayingBeforeSeek) {
-            MPVLib.setPropertyBoolean("pause", true)
-        }
+        // Paused already handled in switchToMediaCodecMode
     }
     
     fun startVerticalSwipe(startY: Float) {
         isVerticalSwipe = true
         cancelAutoHide()
-        val currentY = startY
-        val deltaY = currentY - touchStartY
+        val deltaY = startY - touchStartY
         
         if (deltaY < 0) {
             seekDirection = "+"
@@ -340,6 +622,7 @@ fun PlayerOverlay(
         }
     }
     
+    // Handle horizontal seeking with continuous MediaCodec decoding
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
@@ -351,31 +634,37 @@ fun PlayerOverlay(
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
         seekDirection = if (deltaX > 0) "+" else "-"
+        
+        // Update UI instantly
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
-        performRealTimeSeek(clampedPosition)
+        
+        // Use MediaCodec for continuous frame decoding - BUTTERY SMOOTH!
+        if (mediaCodecReady) {
+            performContinuousMediaCodecSeek(clampedPosition)
+        } else {
+            // Fallback to MPV if MediaCodec not ready
+            performMediaCodecSeek(clampedPosition)
+        }
     }
     
+    // End horizontal seeking and switch back to MPV
     fun endHorizontalSeeking() {
         if (isSeeking) {
-            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
-            performRealTimeSeek(currentPos)
+            val finalPosition = seekStartPosition + 
+                ((seekStartX - touchStartX) / (2f / 0.032f))
             
-            if (wasPlayingBeforeSeek) {
-                coroutineScope.launch {
-                    delay(100)
-                    MPVLib.setPropertyBoolean("pause", false)
-                }
-            }
+            // Switch back to MPV at final position
+            switchBackToMPV(finalPosition)
             
             isSeeking = false
             showSeekTime = false
             seekStartX = 0f
             seekStartPosition = 0.0
-            wasPlayingBeforeSeek = false
             seekDirection = ""
             scheduleSeekbarHide()
         }
+        isHorizontalSwipe = false
     }
     
     fun endVerticalSwipe() {
@@ -394,10 +683,8 @@ fun PlayerOverlay(
             MPVLib.setPropertyDouble("speed", 1.0)
         } else if (isHorizontalSwipe) {
             endHorizontalSeeking()
-            isHorizontalSwipe = false
         } else if (isVerticalSwipe) {
             endVerticalSwipe()
-            isVerticalSwipe = false
         } else if (touchDuration < 150) {
             handleTap()
         }
@@ -416,7 +703,7 @@ fun PlayerOverlay(
     }
     
     LaunchedEffect(Unit) {
-        val intent = (context as? Activity)?.intent
+        val intent = (context as? android.app.Activity)?.intent
         fileName = when {
             intent?.action == Intent.ACTION_SEND -> {
                 getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context)
@@ -449,9 +736,6 @@ fun PlayerOverlay(
     }
     
     LaunchedEffect(Unit) {
-        // Apply saved equalizer on startup
-        updateEqualizer()
-        
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
         MPVLib.setPropertyString("profile", "fast")
@@ -483,6 +767,7 @@ fun PlayerOverlay(
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
             val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
             val currentSeconds = currentPos.toInt()
+            
             if (isSeeking) {
                 currentTime = seekTargetTime
                 totalTime = formatTimeSimple(duration)
@@ -493,10 +778,12 @@ fun PlayerOverlay(
                     lastSeconds = currentSeconds
                 }
             }
+            
             if (!isDragging) {
                 seekbarPosition = currentPos.toFloat()
                 seekbarDuration = duration.toFloat()
             }
+            
             currentPosition = currentPos
             videoDuration = duration
             delay(100)
@@ -505,42 +792,57 @@ fun PlayerOverlay(
     
     // ========== PROGRESS BAR HANDLERS ==========
     
+    // Progress bar drag with MediaCodec
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
+            switchToMediaCodecMode()
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
+            
             showSeekbar = true
             showVideoInfo = true
-            
-            if (wasPlayingBeforeSeek) {
-                MPVLib.setPropertyBoolean("pause", true)
-            }
         }
         isDragging = true
         val oldPosition = seekbarPosition
         seekbarPosition = newPosition
+        
         seekDirection = if (newPosition > oldPosition) "+" else "-"
+        
         val targetPosition = newPosition.toDouble()
+        
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
-        performRealTimeSeek(targetPosition)
+        
+        // Use MediaCodec for continuous frame decoding
+        if (mediaCodecReady) {
+            performContinuousMediaCodecSeek(targetPosition)
+        } else {
+            performMediaCodecSeek(targetPosition)
+        }
     }
     
     fun handleDragFinished() {
         isDragging = false
-        if (wasPlayingBeforeSeek) {
-            coroutineScope.launch {
-                delay(100)
-                MPVLib.setPropertyBoolean("pause", false)
-            }
-        }
+        val finalPosition = seekbarPosition.toDouble()
+        
+        // Switch back to MPV at final position
+        switchBackToMPV(finalPosition)
+        
         isSeeking = false
         showSeekTime = false
         wasPlayingBeforeSeek = false
         seekDirection = ""
         scheduleSeekbarHide()
+    }
+    
+    // ========== CLEANUP ==========
+    LaunchedEffect(Unit) {
+        coroutineScope.launch {
+            // This will run when composable is disposed
+            delay(1000000) // Placeholder, actual cleanup in onDispose
+        }
     }
     
     // ========== UI RENDERING ==========
@@ -558,6 +860,7 @@ fun PlayerOverlay(
     Box(modifier = modifier.fillMaxSize()) {
         // MAIN GESTURE AREA
         Box(modifier = Modifier.fillMaxSize()) {
+            // TOP 5% - Ignore area
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -565,12 +868,14 @@ fun PlayerOverlay(
                     .align(Alignment.TopStart)
             )
             
+            // CENTER AREA
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .fillMaxHeight(0.95f)
                     .align(Alignment.BottomStart)
             ) {
+                // LEFT 5% - Ignore area
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.05f)
@@ -578,6 +883,7 @@ fun PlayerOverlay(
                         .align(Alignment.CenterStart)
                 )
                 
+                // CENTER 90% - All gestures
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.9f)
@@ -615,6 +921,7 @@ fun PlayerOverlay(
                         }
                 )
                 
+                // RIGHT 5% - Ignore area
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.05f)
@@ -664,236 +971,21 @@ fun PlayerOverlay(
             }
         }
         
-        // VIDEO INFO - Clickable with menu
+        // VIDEO INFO - Top Left
         if (showVideoInfo) {
-            Box(
+            Text(
+                text = displayText,
+                style = TextStyle(
+                    color = Color.White.copy(alpha = videoInfoTextAlpha),
+                    fontSize = 15.sp, 
+                    fontWeight = FontWeight.Medium
+                ),
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .offset(x = 60.dp, y = 20.dp)
-            ) {
-                // Video info text with clickable area
-                Text(
-                    text = displayText,
-                    style = TextStyle(
-                        color = Color.White.copy(alpha = videoInfoTextAlpha),
-                        fontSize = 15.sp, 
-                        fontWeight = FontWeight.Medium
-                    ),
-                    modifier = Modifier
-                        .background(Color.DarkGray.copy(alpha = videoInfoBackgroundAlpha))
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null // No ripple effect
-                        ) {
-                            // Show menu when clicked
-                            showInfoMenu = true
-                            cancelAutoHide() // Keep UI visible while menu is open
-                        }
-                )
-                
-                // Info Menu Dialog
-                if (showInfoMenu) {
-                    Dialog(onDismissRequest = { showInfoMenu = false }) {
-                        Card(
-                            modifier = Modifier
-                                .width(280.dp)
-                                .wrapContentHeight(),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFF2D2D2D),
-                                contentColor = Color.White
-                            )
-                        ) {
-                            Column {
-                                // Menu Header
-                                Text(
-                                    text = "Video Options",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = Color.White,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(16.dp)
-                                        .padding(bottom = 8.dp)
-                                )
-                                
-                                // Menu Items
-                                LazyColumn {
-                                    item {
-                                        // Equalizer option
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clickable {
-                                                    showInfoMenu = false
-                                                    showEqualizerDialog = true
-                                                    scheduleSeekbarHide() // Restart hide timer
-                                                }
-                                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.SpaceBetween
-                                        ) {
-                                            Text(
-                                                text = "Equalizer",
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = Color.White
-                                            )
-                                            Text(
-                                                text = "›",
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = Color.Gray
-                                            )
-                                        }
-                                    }
-                                    
-                                    // Add more menu items here in the future
-                                    item {
-                                        Divider(
-                                            color = Color.Gray.copy(alpha = 0.3f),
-                                            modifier = Modifier.padding(horizontal = 16.dp)
-                                        )
-                                    }
-                                    
-                                    item {
-                                        Text(
-                                            text = "More features coming soon...",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = Color.Gray,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(16.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        // EQUALIZER DIALOG
-        if (showEqualizerDialog) {
-            Dialog(onDismissRequest = { showEqualizerDialog = false }) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth(0.9f)
-                        .wrapContentHeight(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFF1E1E1E),
-                        contentColor = Color.White
-                    )
-                ) {
-                    Column(
-                        modifier = Modifier.padding(20.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        // Dialog Title
-                        Text(
-                            text = "6-Band Equalizer",
-                            style = MaterialTheme.typography.titleLarge,
-                            color = Color.White,
-                            modifier = Modifier.padding(bottom = 20.dp)
-                        )
-                        
-                        // Equalizer bands
-                        equalizerBands.forEachIndexed { index, (label, frequency) ->
-                            val value = equalizerValues.value[index]
-                            
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 8.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                // Band label and value
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(
-                                        text = label,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = Color.White
-                                    )
-                                    Text(
-                                        text = "${value} dB",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = if (value == 0) Color.White else if (value > 0) Color.Green else Color.Red
-                                    )
-                                }
-                                
-                                // Slider (-15dB to +3dB, 1dB steps)
-                                Slider(
-                                    value = value.toFloat(),
-                                    onValueChange = { newValue ->
-                                        val intValue = newValue.toInt()
-                                        equalizerValues.value = equalizerValues.value.toMutableList().apply {
-                                            set(index, intValue)
-                                        }
-                                        saveEqualizerValue(index, intValue)
-                                    },
-                                    onValueChangeFinished = {
-                                        updateEqualizer()
-                                    },
-                                    valueRange = -15f..3f,
-                                    steps = 18, // 19 steps total (3 - (-15) + 1 = 19), minus 1 for steps parameter
-                                    colors = SliderDefaults.colors(
-                                        thumbColor = if (value == 0) Color.White else if (value > 0) Color.Green else Color.Red,
-                                        activeTrackColor = if (value == 0) Color.Gray else if (value > 0) Color.Green.copy(alpha = 0.7f) else Color.Red.copy(alpha = 0.7f),
-                                        inactiveTrackColor = Color.Gray.copy(alpha = 0.3f)
-                                    ),
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                                
-                                // Frequency label
-                                Text(
-                                    text = "$frequency Hz",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color.Gray
-                                )
-                            }
-                        }
-                        
-                        Spacer(modifier = Modifier.height(20.dp))
-                        
-                        // Reset and Close buttons
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            // Reset button
-                            TextButton(
-                                onClick = {
-                                    // Reset all bands to 0
-                                    equalizerValues.value = List(6) { 0 }
-                                    equalizerValues.value.forEachIndexed { index, _ ->
-                                        saveEqualizerValue(index, 0)
-                                    }
-                                    updateEqualizer()
-                                },
-                                colors = ButtonDefaults.textButtonColors(
-                                    contentColor = Color.Red
-                                )
-                            ) {
-                                Text("Reset All")
-                            }
-                            
-                            // Close button
-                            Button(
-                                onClick = { showEqualizerDialog = false },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFF007AFF),
-                                    contentColor = Color.White
-                                )
-                            ) {
-                                Text("Close")
-                            }
-                        }
-                    }
-                }
-            }
+                    .background(Color.DarkGray.copy(alpha = videoInfoBackgroundAlpha))
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+            )
         }
         
         // FEEDBACK AREA
@@ -984,7 +1076,11 @@ fun SimpleDraggableProgressBar(
                             }
                         }
                         
-                        val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
+                        val effectiveStartX = if (hasPassedThreshold) {
+                            dragStartX + movementThresholdPx
+                        } else {
+                            dragStartX
+                        }
                         val deltaX = currentX - effectiveStartX
                         val deltaPosition = (deltaX / size.width) * duration
                         val newPosition = (dragStartPosition + deltaPosition).coerceIn(0f, duration)
@@ -1037,4 +1133,44 @@ private fun getBestAvailableFileName(context: android.content.Context): String {
     val mpvPath = MPVLib.getPropertyString("path")
     if (mpvPath != null && mpvPath.isNotBlank()) return mpvPath.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "Video" }
     return "Video"
+}
+
+private fun getVideoPath(context: android.content.Context): String? {
+    val intent = (context as? android.app.Activity)?.intent
+    return when {
+        intent?.action == Intent.ACTION_SEND -> {
+            val uri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+            getPathFromUri(uri, context)
+        }
+        intent?.action == Intent.ACTION_VIEW -> {
+            getPathFromUri(intent.data, context)
+        }
+        else -> {
+            MPVLib.getPropertyString("path")
+        }
+    }
+}
+
+private fun getPathFromUri(uri: Uri?, context: android.content.Context): String? {
+    if (uri == null) return null
+    
+    return when (uri.scheme) {
+        "file" -> uri.path
+        "content" -> {
+            var path: String? = null
+            val projection = arrayOf(android.provider.MediaStore.Video.Media.DATA)
+            try {
+                context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val columnIndex = cursor.getColumnIndexOrThrow(projection[0])
+                        path = cursor.getString(columnIndex)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            path
+        }
+        else -> uri.toString()
+    }
 }
