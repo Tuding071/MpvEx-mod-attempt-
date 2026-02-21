@@ -3,6 +3,7 @@ package app.marlboroadvance.mpvex.ui.player
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.Matrix
 import android.graphics.Rect
 import android.media.MediaCodec
 import android.media.MediaCodec.BufferInfo
@@ -86,19 +87,16 @@ data class VideoFrame(
     // Convert to Android Bitmap
     fun toBitmap(): Bitmap? {
         return try {
+            // Try to create bitmap directly from YUV or other formats
+            // For now, create a simple RGB bitmap
             val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            val buffer = ByteBuffer.wrap(this.buffer)
-            bitmap.copyPixelsFromBuffer(buffer)
+            val byteBuffer = ByteBuffer.wrap(buffer)
+            bitmap.copyPixelsFromBuffer(byteBuffer)
             bitmap
         } catch (e: Exception) {
             e.printStackTrace()
             null
         }
-    }
-    
-    // Convert to Compose ImageBitmap
-    fun toImageBitmap(): ImageBitmap? {
-        return toBitmap()?.asImageBitmap()
     }
 }
 
@@ -379,7 +377,7 @@ fun PlayerOverlay(
     // ========== MEDIACODEC SEEKER ==========
     var mediaCodecSeeker by remember { mutableStateOf<MediaCodecSeeker?>(null) }
     var isUsingMediaCodec by remember { mutableStateOf(false) }
-    var currentFrameBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+    var currentFrameBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var mediaCodecReady by remember { mutableStateOf(false) }
     
     // ADD: Seek direction for feedback
@@ -503,7 +501,7 @@ fun PlayerOverlay(
             val frame = mediaCodecSeeker?.seekToFrame(targetTimeUs)
             frame?.let {
                 // Convert to bitmap and update UI on main thread
-                val bitmap = it.toImageBitmap()
+                val bitmap = it.toBitmap()
                 coroutineScope.launch(Dispatchers.Main) {
                     currentFrameBitmap = bitmap
                 }
@@ -526,9 +524,11 @@ fun PlayerOverlay(
         coroutineScope.launch(Dispatchers.Default) {
             mediaCodecSeeker?.decodeFramesToTarget(targetTimeUs) { frame ->
                 // Convert each frame to bitmap and update UI on main thread
-                val bitmap = frame.toImageBitmap()
-                coroutineScope.launch(Dispatchers.Main) {
-                    currentFrameBitmap = bitmap
+                val bitmap = frame.toBitmap()
+                if (bitmap != null) {
+                    coroutineScope.launch(Dispatchers.Main) {
+                        currentFrameBitmap = bitmap
+                    }
                 }
             }
         }
@@ -922,9 +922,11 @@ fun PlayerOverlay(
                 modifier = Modifier.fillMaxSize()
             ) {
                 drawIntoCanvas { canvas ->
+                    // Draw the bitmap directly
                     canvas.nativeCanvas.drawBitmap(
-                        currentFrameBitmap!!.asAndroidBitmap(),
-                        android.graphics.Matrix(),
+                        currentFrameBitmap!!,
+                        0f,
+                        0f,
                         null
                     )
                 }
@@ -1092,16 +1094,6 @@ fun PlayerOverlay(
             }
         }
     }
-}
-
-// Helper function to convert ImageBitmap to android.graphics.Bitmap
-fun ImageBitmap.asAndroidBitmap(): android.graphics.Bitmap {
-    val buffer = ByteBuffer.allocate(width * height * 4)
-    readPixels(buffer)
-    buffer.rewind()
-    val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
-    bitmap.copyPixelsFromBuffer(buffer)
-    return bitmap
 }
 
 @Composable
