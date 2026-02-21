@@ -1,19 +1,8 @@
 package app.marlboroadvance.mpvex.ui.player
 
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Canvas
-import android.graphics.Matrix
-import android.graphics.Rect
-import android.media.MediaCodec
-import android.media.MediaCodec.BufferInfo
-import android.media.MediaExtractor
-import android.media.MediaFormat
 import android.view.MotionEvent
-import android.view.Surface
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -35,19 +24,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
-import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -72,280 +55,19 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import android.content.Intent
 import android.net.Uri
-import java.nio.ByteBuffer
 import kotlin.math.abs
-import kotlin.math.min
 
-// ========== PURE FRAME MEDIACODEC DECODER - INTEGRATED ==========
-data class VideoFrame(
-    val buffer: ByteArray,
-    val timestampUs: Long,
-    val isKeyFrame: Boolean,
-    val width: Int,
-    val height: Int
-) {
-    // Convert to Android Bitmap
-    fun toBitmap(): Bitmap? {
-        return try {
-            // Try to create bitmap directly from YUV or other formats
-            // For now, create a simple RGB bitmap
-            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            val byteBuffer = ByteBuffer.wrap(buffer)
-            bitmap.copyPixelsFromBuffer(byteBuffer)
-            bitmap
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
-        }
-    }
-}
-
-class MediaCodecSeeker {
-    private var extractor: MediaExtractor? = null
-    private var decoder: MediaCodec? = null
-    private var videoTrackIndex = -1
-    private var videoWidth = 0
-    private var videoHeight = 0
-    private var isInitialized = false
-    private var colorFormat = 0
-    
-    fun initialize(videoPath: String): Boolean {
-        try {
-            extractor = MediaExtractor()
-            extractor?.setDataSource(videoPath)
-            
-            // Select ONLY video track
-            videoTrackIndex = selectVideoTrack(extractor)
-            if (videoTrackIndex == -1) return false
-            
-            val format = extractor?.getTrackFormat(videoTrackIndex)
-            videoWidth = format?.getInteger(MediaFormat.KEY_WIDTH) ?: 0
-            videoHeight = format?.getInteger(MediaFormat.KEY_HEIGHT) ?: 0
-            
-            val mime = format?.getString(MediaFormat.KEY_MIME) ?: return false
-            
-            // Create decoder with MINIMAL configuration - NO SURFACE = pure buffer output
-            decoder = MediaCodec.createDecoderByType(mime)
-            decoder?.configure(format, null, null, 0)
-            decoder?.start()
-            
-            extractor?.selectTrack(videoTrackIndex)
-            isInitialized = true
-            return true
-        } catch (e: Exception) {
-            e.printStackTrace()
-            return false
-        }
-    }
-    
-    // Seek and decode to exact frame - PURE FRAMES, NO DROPS
-    fun seekToFrame(targetTimeUs: Long): VideoFrame? {
-        if (!isInitialized) return null
-        
-        try {
-            decoder?.flush()
-            extractor?.seekTo(targetTimeUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
-            
-            val bufferInfo = BufferInfo()
-            var targetFrame: VideoFrame? = null
-            
-            val timeoutUs = 10000L // 10ms timeout
-            
-            // Decode until we reach target frame
-            while (true) {
-                // Feed data to decoder
-                val inputBufferIndex = decoder?.dequeueInputBuffer(timeoutUs) ?: -1
-                if (inputBufferIndex >= 0) {
-                    val inputBuffer = decoder?.getInputBuffer(inputBufferIndex)
-                    
-                    if (inputBuffer != null) {
-                        // Read sample data into buffer
-                        val sampleSize = extractor?.readSampleData(inputBuffer, 0) ?: -1
-                        
-                        if (sampleSize < 0) {
-                            // End of stream
-                            decoder?.queueInputBuffer(inputBufferIndex, 0, 0, 0, 
-                                MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                        } else {
-                            val presentationTimeUs = extractor?.sampleTime ?: 0
-                            decoder?.queueInputBuffer(inputBufferIndex, 0, sampleSize, 
-                                presentationTimeUs, 0)
-                            extractor?.advance()
-                        }
-                    }
-                }
-                
-                // Get output frames
-                val outputBufferIndex = decoder?.dequeueOutputBuffer(bufferInfo, timeoutUs) ?: -1
-                
-                when {
-                    outputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {
-                        // No frames ready yet
-                    }
-                    outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                        // Format changed, update color format
-                        val newFormat = decoder?.outputFormat
-                        colorFormat = newFormat?.getInteger(MediaFormat.KEY_COLOR_FORMAT) ?: colorFormat
-                    }
-                    outputBufferIndex >= 0 -> {
-                        val outputBuffer = decoder?.getOutputBuffer(outputBufferIndex)
-                        
-                        // Create copy of frame data
-                        val frameData = outputBuffer?.let { buf ->
-                            val bytes = ByteArray(buf.remaining())
-                            buf.get(bytes)
-                            bytes
-                        } ?: continue
-                        
-                        val isKeyFrame = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
-                        
-                        val frame = VideoFrame(
-                            buffer = frameData,
-                            timestampUs = bufferInfo.presentationTimeUs,
-                            isKeyFrame = isKeyFrame,
-                            width = videoWidth,
-                            height = videoHeight
-                        )
-                        
-                        // Check if this is our target frame or past it
-                        if (bufferInfo.presentationTimeUs >= targetTimeUs) {
-                            targetFrame = frame
-                            decoder?.releaseOutputBuffer(outputBufferIndex, false)
-                            break
-                        }
-                        
-                        decoder?.releaseOutputBuffer(outputBufferIndex, false)
-                    }
-                }
-                
-                // Check for end of stream
-                if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                    break
-                }
-            }
-            
-            return targetFrame
-        } catch (e: Exception) {
-            e.printStackTrace()
-            return null
-        }
-    }
-    
-    // Continuous frame decoding for smooth drag seeking - EVERY FRAME, NO DROPS
-    fun decodeFramesToTarget(targetTimeUs: Long, onFrameDecoded: (VideoFrame) -> Unit): VideoFrame? {
-        if (!isInitialized) return null
-        
-        try {
-            decoder?.flush()
-            extractor?.seekTo(targetTimeUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
-            
-            val bufferInfo = BufferInfo()
-            var lastFrame: VideoFrame? = null
-            val timeoutUs = 10000L // 10ms timeout
-            
-            while (true) {
-                // Feed data
-                val inputBufferIndex = decoder?.dequeueInputBuffer(timeoutUs) ?: -1
-                if (inputBufferIndex >= 0) {
-                    val inputBuffer = decoder?.getInputBuffer(inputBufferIndex)
-                    
-                    if (inputBuffer != null) {
-                        // Read sample data
-                        val sampleSize = extractor?.readSampleData(inputBuffer, 0) ?: -1
-                        
-                        if (sampleSize < 0) {
-                            decoder?.queueInputBuffer(inputBufferIndex, 0, 0, 0, 
-                                MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                        } else {
-                            val presentationTimeUs = extractor?.sampleTime ?: 0
-                            decoder?.queueInputBuffer(inputBufferIndex, 0, sampleSize, 
-                                presentationTimeUs, 0)
-                            extractor?.advance()
-                        }
-                    }
-                }
-                
-                // Get output
-                val outputBufferIndex = decoder?.dequeueOutputBuffer(bufferInfo, timeoutUs) ?: -1
-                
-                when {
-                    outputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {}
-                    outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                        val newFormat = decoder?.outputFormat
-                        colorFormat = newFormat?.getInteger(MediaFormat.KEY_COLOR_FORMAT) ?: colorFormat
-                    }
-                    outputBufferIndex >= 0 -> {
-                        val outputBuffer = decoder?.getOutputBuffer(outputBufferIndex)
-                        
-                        val frameData = outputBuffer?.let { buf ->
-                            val bytes = ByteArray(buf.remaining())
-                            buf.get(bytes)
-                            bytes
-                        } ?: continue
-                        
-                        val frame = VideoFrame(
-                            buffer = frameData,
-                            timestampUs = bufferInfo.presentationTimeUs,
-                            isKeyFrame = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0,
-                            width = videoWidth,
-                            height = videoHeight
-                        )
-                        
-                        // Callback with every frame
-                        onFrameDecoded(frame)
-                        lastFrame = frame
-                        
-                        decoder?.releaseOutputBuffer(outputBufferIndex, false)
-                        
-                        // Stop if we've reached target
-                        if (bufferInfo.presentationTimeUs >= targetTimeUs) {
-                            break
-                        }
-                    }
-                }
-                
-                if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                    break
-                }
-            }
-            
-            return lastFrame
-        } catch (e: Exception) {
-            e.printStackTrace()
-            return null
-        }
-    }
-    
-    fun release() {
-        try {
-            decoder?.stop()
-            decoder?.release()
-            extractor?.release()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-        decoder = null
-        extractor = null
-        isInitialized = false
-    }
-    
-    private fun selectVideoTrack(extractor: MediaExtractor?): Int {
-        if (extractor == null) return -1
-        
-        for (i in 0 until extractor.trackCount) {
-            val format = extractor.getTrackFormat(i)
-            val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
-            if (mime.startsWith("video/")) {
-                return i
-            }
-        }
-        return -1
-    }
-    
-    val isReady: Boolean get() = isInitialized
-    val width: Int get() = videoWidth
-    val height: Int get() = videoHeight
-}
+// Data class to store original MPV settings for restoration
+data class MpvSettings(
+    val vdLavcFast: String,
+    val vdLavcSkiploopfilter: String,
+    val vdLavcSkipidct: String,
+    val vdLavcSkipframe: String,
+    val hrSeekFramedrop: String,
+    val lowDelay: String,
+    val vdLavcThreads: String,
+    val videoSync: String
+)
 
 @Composable
 fun PlayerOverlay(
@@ -374,18 +96,16 @@ fun PlayerOverlay(
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
-    // ========== MEDIACODEC SEEKER ==========
-    var mediaCodecSeeker by remember { mutableStateOf<MediaCodecSeeker?>(null) }
-    var isUsingMediaCodec by remember { mutableStateOf(false) }
-    var currentFrameBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var mediaCodecReady by remember { mutableStateOf(false) }
+    // SEEKING OPTIMIZATION STATE
+    var seekingMode by remember { mutableStateOf(false) }
+    var originalMpvSettings by remember { mutableStateOf<MpvSettings?>(null) }
     
-    // ADD: Seek direction for feedback
-    var seekDirection by remember { mutableStateOf("") } // "+" or "-" or ""
+    // Seek direction for feedback
+    var seekDirection by remember { mutableStateOf("") }
     
-    // ADD: Simple throttle control
+    // Simple throttle control
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 16L // 16ms for 60fps smoothness
+    val seekThrottleMs = 50L // Small delay between seek commands
     
     // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
     var touchStartTime by remember { mutableStateOf(0L) }
@@ -404,7 +124,7 @@ fun PlayerOverlay(
     val maxVerticalMovement = 50f // pixels - maximum vertical movement allowed for horizontal swipe
     val maxHorizontalMovement = 50f // pixels - maximum horizontal movement allowed for vertical swipe
     
-    // ADD: Quick seek amount in seconds
+    // Quick seek amount in seconds
     val quickSeekAmount = 5
     
     // Video info follows seekbar visibility
@@ -420,6 +140,7 @@ fun PlayerOverlay(
     var playbackFeedbackText by remember { mutableStateOf("") }
     var playbackFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     
+    // Quick seek feedback
     var showQuickSeekFeedback by remember { mutableStateOf(false) }
     var quickSeekFeedbackText by remember { mutableStateOf("") }
     var quickSeekFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -430,24 +151,65 @@ fun PlayerOverlay(
     
     val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
     
-    // ========== INITIALIZE MEDIACODEC SEEKER ==========
-    LaunchedEffect(Unit) {
-        val videoPath = getVideoPath(context)
-        if (videoPath != null) {
-            val seeker = MediaCodecSeeker()
-            val initialized = seeker.initialize(videoPath)
-            if (initialized) {
-                mediaCodecSeeker = seeker
-                mediaCodecReady = true
-            }
+    // ========== SEEKING OPTIMIZATION FUNCTIONS ==========
+    
+    fun saveOriginalSettings() {
+        if (originalMpvSettings == null) {
+            originalMpvSettings = MpvSettings(
+                vdLavcFast = MPVLib.getPropertyString("vd-lavc-fast") ?: "no",
+                vdLavcSkiploopfilter = MPVLib.getPropertyString("vd-lavc-skiploopfilter") ?: "no",
+                vdLavcSkipidct = MPVLib.getPropertyString("vd-lavc-skipidct") ?: "no",
+                vdLavcSkipframe = MPVLib.getPropertyString("vd-lavc-skipframe") ?: "no",
+                hrSeekFramedrop = MPVLib.getPropertyString("hr-seek-framedrop") ?: "no",
+                lowDelay = MPVLib.getPropertyString("low-delay") ?: "no",
+                vdLavcThreads = MPVLib.getPropertyString("vd-lavc-threads") ?: "8",
+                videoSync = MPVLib.getPropertyString("video-sync") ?: "display-resample"
+            )
         }
     }
     
-    // ========== CLEANUP ON DISPOSE ==========
-    DisposableEffect(Unit) {
-        onDispose {
-            mediaCodecSeeker?.release()
-            mediaCodecSeeker = null
+    fun enableSeekingOptimizations() {
+        if (!seekingMode) {
+            seekingMode = true
+            saveOriginalSettings()
+            
+            // Apply seeking optimizations for ultra-smooth scrubbing
+            MPVLib.setPropertyString("vd-lavc-fast", "yes")              // Faster decoding
+            MPVLib.setPropertyString("vd-lavc-skiploopfilter", "all")    // Skip loop filter
+            MPVLib.setPropertyString("vd-lavc-skipidct", "all")          // Skip IDCT
+            MPVLib.setPropertyString("vd-lavc-skipframe", "all")         // Skip non-keyframes
+            MPVLib.setPropertyString("hr-seek-framedrop", "yes")         // Aggressive frame drop
+            MPVLib.setPropertyString("low-delay", "yes")                  // Minimize decoder buffering
+            MPVLib.setPropertyString("vd-lavc-threads", "1")              // Single thread for seeking
+            MPVLib.setPropertyString("video-sync", "audio")               // Simpler sync during seeking
+            
+            // Force software decoding during seeking for maximum compatibility
+            MPVLib.setPropertyString("hwdec", "no")
+            
+            // Log for debugging
+            println("🎬 SEEKING MODE ENABLED - Optimizations active")
+        }
+    }
+    
+    fun disableSeekingOptimizations() {
+        if (seekingMode && originalMpvSettings != null) {
+            // Restore original settings
+            MPVLib.setPropertyString("vd-lavc-fast", originalMpvSettings!!.vdLavcFast)
+            MPVLib.setPropertyString("vd-lavc-skiploopfilter", originalMpvSettings!!.vdLavcSkiploopfilter)
+            MPVLib.setPropertyString("vd-lavc-skipidct", originalMpvSettings!!.vdLavcSkipidct)
+            MPVLib.setPropertyString("vd-lavc-skipframe", originalMpvSettings!!.vdLavcSkipframe)
+            MPVLib.setPropertyString("hr-seek-framedrop", originalMpvSettings!!.hrSeekFramedrop)
+            MPVLib.setPropertyString("low-delay", originalMpvSettings!!.lowDelay)
+            MPVLib.setPropertyString("vd-lavc-threads", originalMpvSettings!!.vdLavcThreads)
+            MPVLib.setPropertyString("video-sync", originalMpvSettings!!.videoSync)
+            
+            // Restore hardware decoding if it was enabled
+            if (originalMpvSettings!!.vdLavcFast == "no") {
+                MPVLib.setPropertyString("hwdec", "auto")
+            }
+            
+            seekingMode = false
+            println("🎬 SEEKING MODE DISABLED - Normal playback restored")
         }
     }
     
@@ -488,84 +250,32 @@ fun PlayerOverlay(
         }
     }
     
-    // ========== MEDIACODEC SEEKING FUNCTIONS ==========
-    
-    // PURE FRAME SEEKING - NO AUDIO, NO TIMING, JUST FRAMES
-    fun performMediaCodecSeek(targetPositionSeconds: Double) {
-        if (isSeekInProgress || !mediaCodecReady) return
+    // UPDATED: performRealTimeSeek with throttle
+    fun performRealTimeSeek(targetPosition: Double) {
+        if (isSeekInProgress) return // Skip if we're already processing a seek
+        
         isSeekInProgress = true
+        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
         
-        val targetTimeUs = (targetPositionSeconds * 1_000_000).toLong()
-        
-        coroutineScope.launch(Dispatchers.Default) {
-            val frame = mediaCodecSeeker?.seekToFrame(targetTimeUs)
-            frame?.let {
-                // Convert to bitmap and update UI on main thread
-                val bitmap = it.toBitmap()
-                coroutineScope.launch(Dispatchers.Main) {
-                    currentFrameBitmap = bitmap
-                }
-            }
-            
-            // Reset throttle
-            coroutineScope.launch {
-                delay(seekThrottleMs)
-                isSeekInProgress = false
-            }
+        // Reset after throttle period
+        coroutineScope.launch {
+            delay(seekThrottleMs)
+            isSeekInProgress = false
         }
     }
     
-    // CONTINUOUS FRAME DECODING FOR SMOOTH DRAG - EVERY FRAME, NO DROPS
-    fun performContinuousMediaCodecSeek(targetPositionSeconds: Double) {
-        if (!mediaCodecReady) return
-        
-        val targetTimeUs = (targetPositionSeconds * 1_000_000).toLong()
-        
-        coroutineScope.launch(Dispatchers.Default) {
-            mediaCodecSeeker?.decodeFramesToTarget(targetTimeUs) { frame ->
-                // Convert each frame to bitmap and update UI on main thread
-                val bitmap = frame.toBitmap()
-                if (bitmap != null) {
-                    coroutineScope.launch(Dispatchers.Main) {
-                        currentFrameBitmap = bitmap
-                    }
-                }
-            }
-        }
-    }
-    
-    fun switchToMediaCodecMode() {
-        isUsingMediaCodec = true
-        // Pause MPV playback during seeking
-        if (MPVLib.getPropertyBoolean("pause") == false) {
-            MPVLib.setPropertyBoolean("pause", true)
-        }
-    }
-    
-    fun switchBackToMPV(finalPositionSeconds: Double) {
-        isUsingMediaCodec = false
-        // Clear the MediaCodec frame
-        currentFrameBitmap = null
-        // Seek MPV to final position
-        MPVLib.command("seek", finalPositionSeconds.toString(), "absolute", "exact")
-        
-        // Resume playback if it was playing before
-        if (wasPlayingBeforeSeek) {
-            coroutineScope.launch {
-                delay(100)
-                MPVLib.setPropertyBoolean("pause", false)
-            }
-        }
-    }
-    
+    // Function to get fresh position from MPV
     fun getFreshPosition(): Float {
         return (MPVLib.getPropertyDouble("time-pos") ?: 0.0).toFloat()
     }
     
+    // Quick seek function
     fun performQuickSeek(seconds: Int) {
         val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+        val newPosition = (currentPos + seconds).coerceIn(0.0, duration)
         
+        // Show feedback
         quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
         showQuickSeekFeedback = true
         quickSeekFeedbackJob?.cancel()
@@ -574,9 +284,11 @@ fun PlayerOverlay(
             showQuickSeekFeedback = false
         }
         
+        // Perform seek
         MPVLib.command("seek", seconds.toString(), "relative", "exact")
     }
     
+    // Toggle video info
     fun toggleVideoInfo() {
         if (showSeekbar) {
             showSeekbar = false
@@ -637,16 +349,19 @@ fun PlayerOverlay(
         }
     }
     
+    // Check for swipe direction
     fun checkForSwipeDirection(currentX: Float, currentY: Float): String {
         if (isHorizontalSwipe || isVerticalSwipe || isLongTap) return ""
         
-        val deltaX = abs(currentX - touchStartX)
-        val deltaY = abs(currentY - touchStartY)
+        val deltaX = kotlin.math.abs(currentX - touchStartX)
+        val deltaY = kotlin.math.abs(currentY - touchStartY)
         
+        // Check for horizontal swipe
         if (deltaX > horizontalSwipeThreshold && deltaX > deltaY && deltaY < maxVerticalMovement) {
             return "horizontal"
         }
         
+        // Check for vertical swipe
         if (deltaY > verticalSwipeThreshold && deltaY > deltaX && deltaX < maxHorizontalMovement) {
             return "vertical"
         }
@@ -654,10 +369,9 @@ fun PlayerOverlay(
         return ""
     }
     
-    // Start horizontal seeking with MediaCodec
+    // UPDATED: Start horizontal seeking with optimizations
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
-        switchToMediaCodecMode() // Switch to MediaCodec for seeking
         cancelAutoHide()
         seekStartX = startX
         seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
@@ -665,27 +379,40 @@ fun PlayerOverlay(
         isSeeking = true
         showSeekTime = true
         
+        // ENABLE SEEKING OPTIMIZATIONS
+        enableSeekingOptimizations()
+        
         showSeekbar = true
         showVideoInfo = true
         
-        // Paused already handled in switchToMediaCodecMode
+        if (wasPlayingBeforeSeek) {
+            MPVLib.setPropertyBoolean("pause", true)
+        }
     }
     
+    // Start vertical swipe detection
     fun startVerticalSwipe(startY: Float) {
         isVerticalSwipe = true
         cancelAutoHide()
-        val deltaY = startY - touchStartY
+        
+        // ENABLE SEEKING OPTIMIZATIONS for vertical swipe too
+        enableSeekingOptimizations()
+        
+        val currentY = startY
+        val deltaY = currentY - touchStartY
         
         if (deltaY < 0) {
+            // Swipe up - seek forward
             seekDirection = "+"
             performQuickSeek(quickSeekAmount)
         } else {
+            // Swipe down - seek backward
             seekDirection = "-"
             performQuickSeek(-quickSeekAmount)
         }
     }
     
-    // Handle horizontal seeking with continuous MediaCodec decoding
+    // Handle horizontal seeking
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
@@ -696,41 +423,47 @@ fun PlayerOverlay(
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
+        // Set seek direction based on movement
         seekDirection = if (deltaX > 0) "+" else "-"
         
-        // Update UI instantly
+        // ALWAYS update UI instantly
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
         
-        // Use MediaCodec for continuous frame decoding - BUTTERY SMOOTH!
-        if (mediaCodecReady) {
-            performContinuousMediaCodecSeek(clampedPosition)
-        } else {
-            // Fallback to MPV if MediaCodec not ready
-            performMediaCodecSeek(clampedPosition)
-        }
+        // Send seek command with throttle
+        performRealTimeSeek(clampedPosition)
     }
     
-    // End horizontal seeking and switch back to MPV
+    // UPDATED: End horizontal seeking with restoration
     fun endHorizontalSeeking() {
         if (isSeeking) {
-            val finalPosition = seekStartPosition + 
-                ((seekStartX - touchStartX) / (2f / 0.032f))
+            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
+            performRealTimeSeek(currentPos)
             
-            // Switch back to MPV at final position
-            switchBackToMPV(finalPosition)
+            // DISABLE SEEKING OPTIMIZATIONS
+            disableSeekingOptimizations()
+            
+            if (wasPlayingBeforeSeek) {
+                coroutineScope.launch {
+                    delay(100)
+                    MPVLib.setPropertyBoolean("pause", false)
+                }
+            }
             
             isSeeking = false
             showSeekTime = false
             seekStartX = 0f
             seekStartPosition = 0.0
+            wasPlayingBeforeSeek = false
             seekDirection = ""
             scheduleSeekbarHide()
         }
-        isHorizontalSwipe = false
     }
     
+    // UPDATED: End vertical swipe with restoration
     fun endVerticalSwipe() {
+        // DISABLE SEEKING OPTIMIZATIONS
+        disableSeekingOptimizations()
         isVerticalSwipe = false
         scheduleSeekbarHide()
     }
@@ -741,16 +474,23 @@ fun PlayerOverlay(
         longTapJob?.cancel()
         
         if (isLongTap) {
+            // Long tap ended - reset speed
             isLongTap = false
             isSpeedingUp = false
             MPVLib.setPropertyDouble("speed", 1.0)
         } else if (isHorizontalSwipe) {
+            // Horizontal swipe ended
             endHorizontalSeeking()
+            isHorizontalSwipe = false
         } else if (isVerticalSwipe) {
+            // Vertical swipe ended
             endVerticalSwipe()
+            isVerticalSwipe = false
         } else if (touchDuration < 150) {
+            // Short tap (less than 150ms)
             handleTap()
         }
+        // Reset all gesture states
         isHorizontalSwipe = false
         isVerticalSwipe = false
         isLongTap = false
@@ -790,6 +530,7 @@ fun PlayerOverlay(
         }
     }
     
+    // Backup speed control
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
             MPVLib.setPropertyDouble("speed", 2.0)
@@ -798,6 +539,7 @@ fun PlayerOverlay(
         }
     }
     
+    // Initial MPV configuration
     LaunchedEffect(Unit) {
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
@@ -824,13 +566,13 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("video-aspect-override", "no")
     }
     
+    // Position update loop
     LaunchedEffect(Unit) {
         var lastSeconds = -1
         while (isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
             val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
             val currentSeconds = currentPos.toInt()
-            
             if (isSeeking) {
                 currentTime = seekTargetTime
                 totalTime = formatTimeSimple(duration)
@@ -841,12 +583,10 @@ fun PlayerOverlay(
                     lastSeconds = currentSeconds
                 }
             }
-            
             if (!isDragging) {
                 seekbarPosition = currentPos.toFloat()
                 seekbarDuration = duration.toFloat()
             }
-            
             currentPosition = currentPos
             videoDuration = duration
             delay(100)
@@ -855,43 +595,53 @@ fun PlayerOverlay(
     
     // ========== PROGRESS BAR HANDLERS ==========
     
-    // Progress bar drag with MediaCodec
+    // UPDATED: handleProgressBarDrag with seeking optimizations
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
-            switchToMediaCodecMode()
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
             
+            // ENABLE SEEKING OPTIMIZATIONS
+            enableSeekingOptimizations()
+            
             showSeekbar = true
             showVideoInfo = true
+            
+            if (wasPlayingBeforeSeek) {
+                MPVLib.setPropertyBoolean("pause", true)
+            }
         }
         isDragging = true
         val oldPosition = seekbarPosition
         seekbarPosition = newPosition
         
+        // Set seek direction based on movement
         seekDirection = if (newPosition > oldPosition) "+" else "-"
         
         val targetPosition = newPosition.toDouble()
         
+        // ALWAYS update UI instantly
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
         
-        // Use MediaCodec for continuous frame decoding
-        if (mediaCodecReady) {
-            performContinuousMediaCodecSeek(targetPosition)
-        } else {
-            performMediaCodecSeek(targetPosition)
-        }
+        // Send seek command with throttle
+        performRealTimeSeek(targetPosition)
     }
     
+    // UPDATED: handleDragFinished with restoration
     fun handleDragFinished() {
         isDragging = false
-        val finalPosition = seekbarPosition.toDouble()
+        if (wasPlayingBeforeSeek) {
+            coroutineScope.launch {
+                delay(100)
+                MPVLib.setPropertyBoolean("pause", false)
+            }
+        }
         
-        // Switch back to MPV at final position
-        switchBackToMPV(finalPosition)
+        // DISABLE SEEKING OPTIMIZATIONS
+        disableSeekingOptimizations()
         
         isSeeking = false
         showSeekTime = false
@@ -907,32 +657,13 @@ fun PlayerOverlay(
         else -> ""
     }
     
+    // Calculate transparency for text AND background during seeking
     val videoInfoTextAlpha = if (isSeeking || isDragging) 0.0f else 1.0f
     val videoInfoBackgroundAlpha = if (isSeeking || isDragging) 0.0f else 0.8f
     val timeDisplayTextAlpha = if (isSeeking || isDragging) 0.0f else 1.0f
     val timeDisplayBackgroundAlpha = if (isSeeking || isDragging) 0.0f else 0.8f
     
     Box(modifier = modifier.fillMaxSize()) {
-        // MPV VIDEO SURFACE (always behind)
-        // This is where MPV renders normally
-        
-        // MEDIACODEC FRAME OVERLAY (only visible during seeking)
-        if (isUsingMediaCodec && currentFrameBitmap != null) {
-            Canvas(
-                modifier = Modifier.fillMaxSize()
-            ) {
-                drawIntoCanvas { canvas ->
-                    // Draw the bitmap directly
-                    canvas.nativeCanvas.drawBitmap(
-                        currentFrameBitmap!!,
-                        0f,
-                        0f,
-                        null
-                    )
-                }
-            }
-        }
-        
         // MAIN GESTURE AREA
         Box(modifier = Modifier.fillMaxSize()) {
             // TOP 5% - Ignore area
@@ -943,7 +674,7 @@ fun PlayerOverlay(
                     .align(Alignment.TopStart)
             )
             
-            // CENTER AREA
+            // CENTER AREA - 95% height
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1093,6 +824,19 @@ fun PlayerOverlay(
                 )
             }
         }
+        
+        // SEEKING MODE INDICATOR (optional - for debugging)
+        if (seekingMode) {
+            Text(
+                text = "⚡ Turbo Mode",
+                style = TextStyle(color = Color.Yellow, fontSize = 12.sp, fontWeight = FontWeight.Medium),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(x = (-16).dp, y = 20.dp)
+                    .background(Color.Black.copy(alpha = 0.6f))
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+        }
     }
 }
 
@@ -1113,12 +857,14 @@ fun SimpleDraggableProgressBar(
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
     Box(modifier = modifier.height(48.dp)) {
+        // Progress bar background
         Box(modifier = Modifier
             .fillMaxWidth()
             .height(4.dp)
             .align(Alignment.CenterStart)
             .background(Color.Gray.copy(alpha = 0.6f)))
         
+        // Progress bar fill
         Box(modifier = Modifier
             .fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f)
             .height(4.dp)
@@ -1151,11 +897,7 @@ fun SimpleDraggableProgressBar(
                             }
                         }
                         
-                        val effectiveStartX = if (hasPassedThreshold) {
-                            dragStartX + movementThresholdPx
-                        } else {
-                            dragStartX
-                        }
+                        val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
                         val deltaX = currentX - effectiveStartX
                         val deltaPosition = (deltaX / size.width) * duration
                         val newPosition = (dragStartPosition + deltaPosition).coerceIn(0f, duration)
@@ -1208,44 +950,4 @@ private fun getBestAvailableFileName(context: android.content.Context): String {
     val mpvPath = MPVLib.getPropertyString("path")
     if (mpvPath != null && mpvPath.isNotBlank()) return mpvPath.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "Video" }
     return "Video"
-}
-
-private fun getVideoPath(context: android.content.Context): String? {
-    val intent = (context as? android.app.Activity)?.intent
-    return when {
-        intent?.action == Intent.ACTION_SEND -> {
-            val uri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
-            getPathFromUri(uri, context)
-        }
-        intent?.action == Intent.ACTION_VIEW -> {
-            getPathFromUri(intent.data, context)
-        }
-        else -> {
-            MPVLib.getPropertyString("path")
-        }
-    }
-}
-
-private fun getPathFromUri(uri: Uri?, context: android.content.Context): String? {
-    if (uri == null) return null
-    
-    return when (uri.scheme) {
-        "file" -> uri.path
-        "content" -> {
-            var path: String? = null
-            val projection = arrayOf(android.provider.MediaStore.Video.Media.DATA)
-            try {
-                context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        val columnIndex = cursor.getColumnIndexOrThrow(projection[0])
-                        path = cursor.getString(columnIndex)
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-            path
-        }
-        else -> uri.toString()
-    }
 }
