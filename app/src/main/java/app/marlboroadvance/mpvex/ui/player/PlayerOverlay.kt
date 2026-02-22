@@ -61,6 +61,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.onEach
 import kotlin.math.roundToInt
+import androidx.compose.runtime.rememberCoroutineScope
 
 @Composable
 fun PlayerOverlay(
