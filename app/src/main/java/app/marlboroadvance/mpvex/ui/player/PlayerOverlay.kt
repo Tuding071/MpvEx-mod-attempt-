@@ -56,13 +56,11 @@ import androidx.compose.ui.input.pointer.pointerInput
 import android.content.Intent
 import android.net.Uri
 import kotlin.math.abs
-
-// Data class to store original MPV settings for restoration
-data class MpvSettings(
-    val vdLavcSkipframe: String,
-    val lowDelay: String,
-    val vdLavcThreads: String
-)
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.onEach
+import kotlin.math.roundToInt
 
 @Composable
 fun PlayerOverlay(
@@ -91,16 +89,15 @@ fun PlayerOverlay(
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     
-    // SEEKING OPTIMIZATION STATE - Simplified
-    var seekingMode by remember { mutableStateOf(false) }
-    var originalMpvSettings by remember { mutableStateOf<MpvSettings?>(null) }
-    
     // Seek direction for feedback
     var seekDirection by remember { mutableStateOf("") }
     
-    // Simple throttle control
-    var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 50L // Small delay between seek commands
+    // ===== NEW: Frame-accurate seeking queue =====
+    var pendingSeekPosition by remember { mutableStateOf<Double?>(null) }
+    var isSeekProcessing by remember { mutableStateOf(false) }
+    var lastRenderedPosition by remember { mutableStateOf(0.0) }
+    val seekQueue = remember { mutableStateOf<ArrayDeque<Double>>(ArrayDeque()) }
+    var seekQueueJob by remember { mutableStateOf<Job?>(null) }
     
     // CLEAR GESTURE STATES WITH MUTUAL EXCLUSION
     var touchStartTime by remember { mutableStateOf(0L) }
@@ -110,7 +107,7 @@ fun PlayerOverlay(
     var isLongTap by remember { mutableStateOf(false) }
     var isHorizontalSwipe by remember { mutableStateOf(false) }
     var isVerticalSwipe by remember { mutableStateOf(false) }
-    var longTapJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var longTapJob by remember { mutableStateOf<Job?>(null) }
     
     // THRESHOLDS
     val longTapThreshold = 300L // ms
@@ -122,70 +119,128 @@ fun PlayerOverlay(
     // Quick seek amount in seconds
     val quickSeekAmount = 5
     
-    // Video info follows seekbar visibility
     var showVideoInfo by remember { mutableStateOf(true) }
     var videoTitle by remember { mutableStateOf("Video") }
     var fileName by remember { mutableStateOf("Video") }
-    var videoInfoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var videoInfoJob by remember { mutableStateOf<Job?>(null) }
     
     var userInteracting by remember { mutableStateOf(false) }
-    var hideSeekbarJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var hideSeekbarJob by remember { mutableStateOf<Job?>(null) }
     
     var showPlaybackFeedback by remember { mutableStateOf(false) }
     var playbackFeedbackText by remember { mutableStateOf("") }
-    var playbackFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var playbackFeedbackJob by remember { mutableStateOf<Job?>(null) }
     
-    // Quick seek feedback
     var showQuickSeekFeedback by remember { mutableStateOf(false) }
     var quickSeekFeedbackText by remember { mutableStateOf("") }
-    var quickSeekFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var quickSeekFeedbackJob by remember { mutableStateOf<Job?>(null) }
     
     var showVolumeFeedbackState by remember { mutableStateOf(false) }
     var currentVolume by remember { mutableStateOf(viewModel.currentVolume.value) }
-    var volumeFeedbackJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var volumeFeedbackJob by remember { mutableStateOf<Job?>(null) }
     
-    val coroutineScope = remember { CoroutineScope(Dispatchers.Main) }
+    val coroutineScope = rememberCoroutineScope()
     
-    // ========== SIMPLIFIED SEEKING OPTIMIZATION FUNCTIONS ==========
-    
-    fun saveOriginalSettings() {
-        if (originalMpvSettings == null) {
-            originalMpvSettings = MpvSettings(
-                vdLavcSkipframe = MPVLib.getPropertyString("vd-lavc-skipframe") ?: "no",
-                lowDelay = MPVLib.getPropertyString("low-delay") ?: "no",
-                vdLavcThreads = MPVLib.getPropertyString("vd-lavc-threads") ?: "8"
-            )
+    // ========== FRAME-ACCURATE SEEK QUEUE PROCESSOR ==========
+    fun processSeekQueue() {
+        // Cancel existing processor if running
+        seekQueueJob?.cancel()
+        
+        // Start new queue processor
+        seekQueueJob = coroutineScope.launch {
+            while (seekQueue.value.isNotEmpty() && isSeeking) {
+                val targetPosition = seekQueue.value.first()
+                
+                // Mark as processing
+                isSeekProcessing = true
+                pendingSeekPosition = targetPosition
+                
+                // Perform the seek
+                MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+                
+                // Wait for frame to actually render by monitoring position
+                var frameRendered = false
+                var waitTime = 0
+                val maxWaitTime = 500 // Max 500ms wait per frame
+                
+                while (!frameRendered && waitTime < maxWaitTime && isSeeking) {
+                    delay(16) // ~1 frame at 60fps
+                    waitTime += 16
+                    
+                    // Check if position has actually changed to target
+                    val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
+                    val positionDiff = abs(currentPos - targetPosition)
+                    
+                    // If we're close enough to target and position is stable
+                    if (positionDiff < 0.1) { // Within 0.1 seconds
+                        // Additional small delay to ensure frame is rendered
+                        delay(16)
+                        frameRendered = true
+                        lastRenderedPosition = currentPos
+                    }
+                }
+                
+                // Remove the processed position from queue
+                if (seekQueue.value.isNotEmpty()) {
+                    seekQueue.value.removeFirst()
+                }
+                
+                // Update UI to current rendered position
+                if (frameRendered) {
+                    currentTime = formatTimeSimple(lastRenderedPosition)
+                    seekbarPosition = lastRenderedPosition.toFloat()
+                }
+                
+                pendingSeekPosition = null
+            }
+            
+            // Queue processing complete
+            isSeekProcessing = false
+            
+            // If we're still seeking but queue is empty, wait for more positions
+            if (isSeeking) {
+                // Small delay then check again
+                delay(50)
+                processSeekQueue()
+            }
         }
     }
     
-    fun enableSeekingOptimizations() {
-        if (!seekingMode) {
-            seekingMode = true
-            saveOriginalSettings()
-            
-            // SIMPLIFIED: Just skip B-frames and reduce latency
-            // 1. Skip B-frames only - keeps motion smooth while reducing decode load
-            MPVLib.setPropertyString("vd-lavc-skipframe", "bidir")
-            
-            // 2. Reduce decoder buffering/latency
-            MPVLib.setPropertyString("low-delay", "yes")
-            
-            // 3. Keep 2 threads for smooth decoding during seek
-            MPVLib.setPropertyString("vd-lavc-threads", "2")
-            
-            println("🎬 SEEKING MODE - Skipping B-frames, low-delay enabled")
+    // ===== NEW: Add position to seek queue =====
+    fun queueSeekPosition(position: Double) {
+        if (!isSeeking) return
+        
+        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+        val clampedPosition = position.coerceIn(0.0, duration)
+        
+        // Round to nearest 0.1 seconds to reduce queue size
+        val roundedPosition = (clampedPosition * 10).roundToInt() / 10.0
+        
+        // Update UI immediately for smooth feedback
+        seekTargetTime = formatTimeSimple(roundedPosition)
+        currentTime = formatTimeSimple(roundedPosition)
+        seekbarPosition = roundedPosition.toFloat()
+        
+        // Add to queue (replace if similar position already queued)
+        if (seekQueue.value.isEmpty()) {
+            seekQueue.value.add(roundedPosition)
+        } else {
+            // Check if last queued position is too close
+            val lastQueued = seekQueue.value.lastOrNull()
+            if (lastQueued == null || abs(lastQueued - roundedPosition) > 0.2) {
+                // Different enough, add to queue
+                seekQueue.value.add(roundedPosition)
+            } else {
+                // Too close, replace the last one
+                if (seekQueue.value.isNotEmpty()) {
+                    seekQueue.value[seekQueue.value.size - 1] = roundedPosition
+                }
+            }
         }
-    }
-    
-    fun disableSeekingOptimizations() {
-        if (seekingMode && originalMpvSettings != null) {
-            // Restore original settings
-            MPVLib.setPropertyString("vd-lavc-skipframe", originalMpvSettings!!.vdLavcSkipframe)
-            MPVLib.setPropertyString("low-delay", originalMpvSettings!!.lowDelay)
-            MPVLib.setPropertyString("vd-lavc-threads", originalMpvSettings!!.vdLavcThreads)
-            
-            seekingMode = false
-            println("🎬 SEEKING MODE DISABLED - Normal playback restored")
+        
+        // Start processor if not already running
+        if (!isSeekProcessing && seekQueue.value.isNotEmpty()) {
+            processSeekQueue()
         }
     }
     
@@ -226,32 +281,15 @@ fun PlayerOverlay(
         }
     }
     
-    // performRealTimeSeek with throttle
-    fun performRealTimeSeek(targetPosition: Double) {
-        if (isSeekInProgress) return // Skip if we're already processing a seek
-        
-        isSeekInProgress = true
-        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
-        
-        // Reset after throttle period
-        coroutineScope.launch {
-            delay(seekThrottleMs)
-            isSeekInProgress = false
-        }
-    }
-    
-    // Function to get fresh position from MPV
     fun getFreshPosition(): Float {
         return (MPVLib.getPropertyDouble("time-pos") ?: 0.0).toFloat()
     }
     
-    // Quick seek function
     fun performQuickSeek(seconds: Int) {
         val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
         val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
         val newPosition = (currentPos + seconds).coerceIn(0.0, duration)
         
-        // Show feedback
         quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
         showQuickSeekFeedback = true
         quickSeekFeedbackJob?.cancel()
@@ -260,11 +298,9 @@ fun PlayerOverlay(
             showQuickSeekFeedback = false
         }
         
-        // Perform seek
         MPVLib.command("seek", seconds.toString(), "relative", "exact")
     }
     
-    // Toggle video info
     fun toggleVideoInfo() {
         if (showSeekbar) {
             showSeekbar = false
@@ -325,19 +361,16 @@ fun PlayerOverlay(
         }
     }
     
-    // Check for swipe direction
     fun checkForSwipeDirection(currentX: Float, currentY: Float): String {
         if (isHorizontalSwipe || isVerticalSwipe || isLongTap) return ""
         
-        val deltaX = kotlin.math.abs(currentX - touchStartX)
-        val deltaY = kotlin.math.abs(currentY - touchStartY)
+        val deltaX = abs(currentX - touchStartX)
+        val deltaY = abs(currentY - touchStartY)
         
-        // Check for horizontal swipe
         if (deltaX > horizontalSwipeThreshold && deltaX > deltaY && deltaY < maxVerticalMovement) {
             return "horizontal"
         }
         
-        // Check for vertical swipe
         if (deltaY > verticalSwipeThreshold && deltaY > deltaX && deltaX < maxHorizontalMovement) {
             return "vertical"
         }
@@ -345,7 +378,6 @@ fun PlayerOverlay(
         return ""
     }
     
-    // Start horizontal seeking with optimizations
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
@@ -355,8 +387,10 @@ fun PlayerOverlay(
         isSeeking = true
         showSeekTime = true
         
-        // ENABLE SIMPLIFIED SEEKING OPTIMIZATIONS
-        enableSeekingOptimizations()
+        // Clear any existing queue
+        seekQueue.value.clear()
+        isSeekProcessing = false
+        seekQueueJob?.cancel()
         
         showSeekbar = true
         showVideoInfo = true
@@ -366,29 +400,21 @@ fun PlayerOverlay(
         }
     }
     
-    // Start vertical swipe detection
     fun startVerticalSwipe(startY: Float) {
         isVerticalSwipe = true
         cancelAutoHide()
-        
-        // ENABLE SIMPLIFIED SEEKING OPTIMIZATIONS
-        enableSeekingOptimizations()
-        
-        val currentY = startY
-        val deltaY = currentY - touchStartY
+        val deltaY = startY - touchStartY
         
         if (deltaY < 0) {
-            // Swipe up - seek forward
             seekDirection = "+"
             performQuickSeek(quickSeekAmount)
         } else {
-            // Swipe down - seek backward
             seekDirection = "-"
             performQuickSeek(-quickSeekAmount)
         }
     }
     
-    // Handle horizontal seeking
+    // ===== UPDATED: Queue position instead of seeking directly =====
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
@@ -396,31 +422,25 @@ fun PlayerOverlay(
         val pixelsPerSecond = 2f / 0.032f
         val timeDeltaSeconds = deltaX / pixelsPerSecond
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
-        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
-        val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
-        // Set seek direction based on movement
         seekDirection = if (deltaX > 0) "+" else "-"
         
-        // ALWAYS update UI instantly
-        seekTargetTime = formatTimeSimple(clampedPosition)
-        currentTime = formatTimeSimple(clampedPosition)
-        
-        // Send seek command with throttle
-        performRealTimeSeek(clampedPosition)
+        // Queue the position for frame-accurate seeking
+        queueSeekPosition(newPositionSeconds)
     }
     
-    // End horizontal seeking with restoration
     fun endHorizontalSeeking() {
         if (isSeeking) {
-            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
-            performRealTimeSeek(currentPos)
-            
-            // DISABLE SEEKING OPTIMIZATIONS
-            disableSeekingOptimizations()
-            
-            if (wasPlayingBeforeSeek) {
-                coroutineScope.launch {
+            // Wait for queue to finish processing
+            coroutineScope.launch {
+                // Wait for pending seeks to complete
+                while (isSeekProcessing || seekQueue.value.isNotEmpty()) {
+                    delay(50)
+                }
+                
+                val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
+                
+                if (wasPlayingBeforeSeek) {
                     delay(100)
                     MPVLib.setPropertyBoolean("pause", false)
                 }
@@ -436,10 +456,7 @@ fun PlayerOverlay(
         }
     }
     
-    // End vertical swipe with restoration
     fun endVerticalSwipe() {
-        // DISABLE SEEKING OPTIMIZATIONS
-        disableSeekingOptimizations()
         isVerticalSwipe = false
         scheduleSeekbarHide()
     }
@@ -450,23 +467,18 @@ fun PlayerOverlay(
         longTapJob?.cancel()
         
         if (isLongTap) {
-            // Long tap ended - reset speed
             isLongTap = false
             isSpeedingUp = false
             MPVLib.setPropertyDouble("speed", 1.0)
         } else if (isHorizontalSwipe) {
-            // Horizontal swipe ended
             endHorizontalSeeking()
             isHorizontalSwipe = false
         } else if (isVerticalSwipe) {
-            // Vertical swipe ended
             endVerticalSwipe()
             isVerticalSwipe = false
         } else if (touchDuration < 150) {
-            // Short tap (less than 150ms)
             handleTap()
         }
-        // Reset all gesture states
         isHorizontalSwipe = false
         isVerticalSwipe = false
         isLongTap = false
@@ -506,7 +518,6 @@ fun PlayerOverlay(
         }
     }
     
-    // Backup speed control
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
             MPVLib.setPropertyDouble("speed", 2.0)
@@ -515,7 +526,6 @@ fun PlayerOverlay(
         }
     }
     
-    // Initial MPV configuration
     LaunchedEffect(Unit) {
         MPVLib.setPropertyString("hwdec", "no")
         MPVLib.setPropertyString("vo", "gpu")
@@ -542,15 +552,16 @@ fun PlayerOverlay(
         MPVLib.setPropertyString("video-aspect-override", "no")
     }
     
-    // Position update loop
     LaunchedEffect(Unit) {
         var lastSeconds = -1
         while (isActive) {
             val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
             val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
             val currentSeconds = currentPos.toInt()
+            
             if (isSeeking) {
-                currentTime = seekTargetTime
+                // During seeking, we update time from the queue processor
+                // Only update total time
                 totalTime = formatTimeSimple(duration)
             } else {
                 if (currentSeconds != lastSeconds) {
@@ -559,10 +570,12 @@ fun PlayerOverlay(
                     lastSeconds = currentSeconds
                 }
             }
+            
             if (!isDragging) {
                 seekbarPosition = currentPos.toFloat()
                 seekbarDuration = duration.toFloat()
             }
+            
             currentPosition = currentPos
             videoDuration = duration
             delay(100)
@@ -571,7 +584,7 @@ fun PlayerOverlay(
     
     // ========== PROGRESS BAR HANDLERS ==========
     
-    // handleProgressBarDrag with seeking optimizations
+    // ===== UPDATED: Progress bar drag with queue =====
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
@@ -579,8 +592,10 @@ fun PlayerOverlay(
             wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
             showSeekTime = true
             
-            // ENABLE SIMPLIFIED SEEKING OPTIMIZATIONS
-            enableSeekingOptimizations()
+            // Clear any existing queue
+            seekQueue.value.clear()
+            isSeekProcessing = false
+            seekQueueJob?.cancel()
             
             showSeekbar = true
             showVideoInfo = true
@@ -593,31 +608,25 @@ fun PlayerOverlay(
         val oldPosition = seekbarPosition
         seekbarPosition = newPosition
         
-        // Set seek direction based on movement
         seekDirection = if (newPosition > oldPosition) "+" else "-"
         
-        val targetPosition = newPosition.toDouble()
-        
-        // ALWAYS update UI instantly
-        seekTargetTime = formatTimeSimple(targetPosition)
-        currentTime = formatTimeSimple(targetPosition)
-        
-        // Send seek command with throttle
-        performRealTimeSeek(targetPosition)
+        // Queue the position for frame-accurate seeking
+        queueSeekPosition(newPosition.toDouble())
     }
     
-    // handleDragFinished with restoration
     fun handleDragFinished() {
         isDragging = false
-        if (wasPlayingBeforeSeek) {
-            coroutineScope.launch {
+        coroutineScope.launch {
+            // Wait for queue to finish processing
+            while (isSeekProcessing || seekQueue.value.isNotEmpty()) {
+                delay(50)
+            }
+            
+            if (wasPlayingBeforeSeek) {
                 delay(100)
                 MPVLib.setPropertyBoolean("pause", false)
             }
         }
-        
-        // DISABLE SEEKING OPTIMIZATIONS
-        disableSeekingOptimizations()
         
         isSeeking = false
         showSeekTime = false
@@ -633,7 +642,6 @@ fun PlayerOverlay(
         else -> ""
     }
     
-    // Calculate transparency for text AND background during seeking
     val videoInfoTextAlpha = if (isSeeking || isDragging) 0.0f else 1.0f
     val videoInfoBackgroundAlpha = if (isSeeking || isDragging) 0.0f else 0.8f
     val timeDisplayTextAlpha = if (isSeeking || isDragging) 0.0f else 1.0f
@@ -642,7 +650,6 @@ fun PlayerOverlay(
     Box(modifier = modifier.fillMaxSize()) {
         // MAIN GESTURE AREA
         Box(modifier = Modifier.fillMaxSize()) {
-            // TOP 5% - Ignore area
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -650,14 +657,12 @@ fun PlayerOverlay(
                     .align(Alignment.TopStart)
             )
             
-            // CENTER AREA - 95% height
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .fillMaxHeight(0.95f)
                     .align(Alignment.BottomStart)
             ) {
-                // LEFT 5% - Ignore area
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.05f)
@@ -665,7 +670,6 @@ fun PlayerOverlay(
                         .align(Alignment.CenterStart)
                 )
                 
-                // CENTER 90% - All gestures
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.9f)
@@ -703,7 +707,6 @@ fun PlayerOverlay(
                         }
                 )
                 
-                // RIGHT 5% - Ignore area
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.05f)
@@ -753,7 +756,7 @@ fun PlayerOverlay(
             }
         }
         
-        // VIDEO INFO - Top Left
+        // VIDEO INFO
         if (showVideoInfo) {
             Text(
                 text = displayText,
@@ -800,19 +803,6 @@ fun PlayerOverlay(
                 )
             }
         }
-        
-        // SEEKING MODE INDICATOR (shows when optimizations are active)
-        if (seekingMode) {
-            Text(
-                text = "⚡ Smooth Seek",
-                style = TextStyle(color = Color.Green, fontSize = 12.sp, fontWeight = FontWeight.Medium),
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .offset(x = (-16).dp, y = 20.dp)
-                    .background(Color.Black.copy(alpha = 0.6f))
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-            )
-        }
     }
 }
 
@@ -833,14 +823,12 @@ fun SimpleDraggableProgressBar(
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
     Box(modifier = modifier.height(48.dp)) {
-        // Progress bar background
         Box(modifier = Modifier
             .fillMaxWidth()
             .height(4.dp)
             .align(Alignment.CenterStart)
             .background(Color.Gray.copy(alpha = 0.6f)))
         
-        // Progress bar fill
         Box(modifier = Modifier
             .fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f)
             .height(4.dp)
